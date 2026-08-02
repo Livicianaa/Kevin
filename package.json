@@ -1,0 +1,12 @@
+{
+  "name": "kevin-pc-version",
+  "version": "0.0.1",
+  "description": "Kevin - masaustunde yasayan AI karakter",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
