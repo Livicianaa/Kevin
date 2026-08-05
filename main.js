@@ -86,15 +86,15 @@ const COMPUTER_USE_BIN = path.join(
   'computer-use-linux.js',
 );
 
-// Tani/kurulum amacli araclar (gereksiz token) + gorsel donduren araclar
-// (simdiki sohbet modelleri vision degil, base64 goruntu = bosa token) disarida.
-// Vision modeli baglaninca screenshot/get_app_state ayri bir yoldan geri gelecek.
+// Tani/kurulum amacli araclar (gereksiz token) + salt-gorsel donduren arac disarida.
+// get_app_state accessibility-tree/metin de donduruyor (sanitizeToolResult goruntu
+// kismini zaten temizliyor), o yuzden acik birakildi - modelin sayfa/uygulama
+// icerigini "okuyabilmesi" icin sart.
 const EXCLUDED_TOOLS = new Set([
   'doctor',
   'setup_accessibility',
   'setup_window_targeting',
   'screenshot',
-  'get_app_state',
 ]);
 
 let mcpClient = null;
@@ -326,7 +326,7 @@ ipcMain.handle('chat', async (_event, history) => {
   const messages = [
     {
       role: 'system',
-      content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin. Kullanicinin ekranini gormek/bir seyi tiklamak/pencereleri yonetmek gibi bir istegi varsa elindeki araclari kullan.`,
+      content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin. Kullanicinin ekranini gormek/bir seyi tiklamak/pencereleri yonetmek gibi bir istegi varsa elindeki araclari kullan. Guncel/gercek zamanli bilgi (hava durumu, haber, fiyat vb.) gerektiren bir soru sorulursa ASLA tahmin/uydurma bir cevap verme - ya araclarla gercek veriyi bul (siteyi ac, get_app_state ile icerigini oku, sonra kullaniciya SOYLE) ya da bulamiyorsan bilmedigini soyle. Bir sey yapmaya basladiysan (site actiysan) sonucu MUTLAKA okuyup kullaniciya raporla, "bakiyorum" deyip birakma.`,
     },
     ...history,
   ];

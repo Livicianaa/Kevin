@@ -191,6 +191,14 @@ async function speak(text) {
   }
 }
 
+const MAX_HISTORY_MESSAGES = 16;
+
+function trimHistory() {
+  if (conversationHistory.length > MAX_HISTORY_MESSAGES) {
+    conversationHistory = conversationHistory.slice(-MAX_HISTORY_MESSAGES);
+  }
+}
+
 async function sendChat(text) {
   const message = (text ?? chatInput.value).trim();
   if (!message) return;
@@ -199,10 +207,12 @@ async function sendChat(text) {
   if (conversationActive) resetConversationTimeout();
 
   conversationHistory.push({ role: 'user', content: message });
+  trimHistory();
 
   try {
     const reply = await window.kevinAPI.chat(conversationHistory);
     conversationHistory.push({ role: 'assistant', content: reply });
+    trimHistory();
     addMessage(reply, 'kevin');
     speak(reply);
   } catch (err) {
