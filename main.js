@@ -216,6 +216,19 @@ function sanitizeToolResult(content) {
   return text;
 }
 
+// Araclarin sema tanimlari her istekte token yakiyor - sadece gercekten
+// ekran/pencere/uygulama ile ilgili bir istek varsa gonder.
+const AGENT_KEYWORDS = [
+  'ekran', 'pencere', 'tıkla', 'tikla', 'aç ', 'açsana', 'kapat', 'kapatsana',
+  'göster', 'gostersene', 'sekme', 'uygulama', 'program', 'yazı yaz', 'tuşa bas',
+  'screen', 'window', 'click', 'open ', 'close ', 'app ', 'application',
+];
+
+function messageNeedsAgent(text) {
+  const lower = text.toLowerCase();
+  return AGENT_KEYWORDS.some((k) => lower.includes(k));
+}
+
 ipcMain.handle('chat', async (_event, message) => {
   const cfg = loadConfig();
   if (!cfg.apiKey || !cfg.provider) {
@@ -235,7 +248,7 @@ ipcMain.handle('chat', async (_event, message) => {
     { role: 'user', content: message },
   ];
 
-  const tools = mcpClient && mcpTools.length ? mcpToolsAsOpenAI() : undefined;
+  const tools = mcpClient && mcpTools.length && messageNeedsAgent(message) ? mcpToolsAsOpenAI() : undefined;
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
@@ -256,7 +269,10 @@ ipcMain.handle('chat', async (_event, message) => {
     const choice = data.choices?.[0];
     const replyMsg = choice?.message;
 
-    if (!replyMsg) return '(bos cevap)';
+    if (!replyMsg) {
+      console.error('Bos cevap - ham data:', JSON.stringify(data).slice(0, 500));
+      return '(bos cevap)';
+    }
 
     if (replyMsg.tool_calls?.length) {
       messages.push(replyMsg);
