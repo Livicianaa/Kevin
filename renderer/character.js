@@ -14,6 +14,7 @@ const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send');
 const closePanelBtn = document.getElementById('close-panel');
 const micBtn = document.getElementById('mic-btn');
+const settingsBtn = document.getElementById('settings-btn');
 
 const DEFAULT_NICKNAMES = ['aga', 'ağa', 'kanka', 'usta', 'dayı', 'kral', 'bro', 'dude'];
 
@@ -61,6 +62,16 @@ function closePanel() {
 character.addEventListener('click', openPanel);
 hook.addEventListener('click', openPanel);
 closePanelBtn.addEventListener('click', closePanel);
+
+settingsBtn.addEventListener('click', async () => {
+  const cfg = await window.kevinAPI.getConfig();
+  providerSelect.value = cfg.provider || 'nvidia';
+  apikeyInput.value = cfg.apiKey || '';
+  nameInput.value = cfg.name || '';
+  nicknamesInput.value = (cfg.nicknames || []).join(', ');
+  chatView.classList.add('hidden');
+  configView.classList.remove('hidden');
+});
 
 saveConfigBtn.addEventListener('click', async () => {
   if (!apikeyInput.value.trim()) return;

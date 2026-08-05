@@ -72,6 +72,21 @@ html, body {
   display: none;
 }
 
+#settings-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  background: #444;
+  font-size: 12px;
+  line-height: 1;
+  z-index: 1;
+}
+
 #close-panel {
   position: absolute;
   top: 8px;
