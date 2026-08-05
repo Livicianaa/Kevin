@@ -134,6 +134,57 @@ const OPEN_URL_TOOL = {
   },
 };
 
+// computer-use-linux'un aciklamalari uzun, agentic dongude her adimda tekrar
+// gonderiliyor - kisa versiyonlarla token'dan tasarruf.
+const SHORT_TOOL_DESCRIPTIONS = {
+  activate_window: 'Bir pencereyi one getirir/odaklar.',
+  click: 'Bir elemana ya da koordinata tiklar.',
+  drag: 'Bir noktadan digerine surukler.',
+  focused_window: 'Su an odaklanmis pencereyi dondurur.',
+  list_apps: 'Acik uygulamalari listeler.',
+  list_windows: 'Acik pencereleri listeler.',
+  move_window: 'Bir pencereyi tasir.',
+  perform_action: 'Bir elemanda erisilebilirlik eylemi calistirir.',
+  press_key: 'Klavyeden tus/kombinasyon basar.',
+  resize_window: 'Bir pencereyi yeniden boyutlandirir.',
+  scroll: 'Bir elemani/pencereyi kaydirir.',
+  set_value: 'Bir elemanin degerini ayarlar.',
+  type_text: 'Klavyeden metin yazar.',
+};
+
+const LIST_DIR_TOOL = {
+  type: 'function',
+  function: {
+    name: 'list_directory',
+    description:
+      'Bir klasordeki dosyalari en yeniden en eskiye siralayarak listeler. ' +
+      'Kullanici "en son indirdigim", "su klasordeki" gibi bir sey sorunca once bunu kullan. ' +
+      'Turkce klasor adlari: Indirilenler=Downloads, Belgeler=Documents, Resimler=Pictures, Masaustu=Desktop, ev klasoru=/home/<kullanici>.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Klasor yolu, ornek: /home/kullanici/Indirilenler' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+async function listDirectoryTool(dirPath) {
+  const expanded = dirPath.replace(/^~/, os.homedir());
+  const entries = fs.readdirSync(expanded, { withFileTypes: true });
+  const files = entries
+    .filter((e) => e.isFile())
+    .map((e) => {
+      const full = path.join(expanded, e.name);
+      const stat = fs.statSync(full);
+      return { name: e.name, path: full, degistirilme: stat.mtime.toISOString() };
+    })
+    .sort((a, b) => new Date(b.degistirilme) - new Date(a.degistirilme))
+    .slice(0, 20);
+  return JSON.stringify(files);
+}
+
 async function openUrlOrApp(target) {
   return new Promise((resolve) => {
     const proc = spawn('xdg-open', [target]);
@@ -149,11 +200,11 @@ function mcpToolsAsOpenAI() {
     type: 'function',
     function: {
       name: t.name,
-      description: t.description || '',
+      description: SHORT_TOOL_DESCRIPTIONS[t.name] || t.description || '',
       parameters: t.inputSchema || { type: 'object', properties: {} },
     },
   }));
-  return [OPEN_URL_TOOL, ...remoteTools];
+  return [OPEN_URL_TOOL, LIST_DIR_TOOL, ...remoteTools];
 }
 
 function resizeAnchored(width, height) {
@@ -341,6 +392,8 @@ ipcMain.handle('chat', async (_event, history) => {
         try {
           if (call.function.name === 'open_url_or_app') {
             resultText = await openUrlOrApp(args.target);
+          } else if (call.function.name === 'list_directory') {
+            resultText = await listDirectoryTool(args.path);
           } else {
             const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
             resultText = JSON.stringify(result.content);

@@ -21,6 +21,7 @@ const refreshModelsBtn = document.getElementById('refresh-models');
 
 const AGENT_TOOL_LABELS = {
   open_url_or_app: 'açıyor...',
+  list_directory: 'klasöre bakıyor...',
   screenshot: 'ekrana bakıyor...',
   list_windows: 'pencereleri listeliyor...',
   list_apps: 'uygulamaları listeliyor...',
