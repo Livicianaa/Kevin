@@ -168,6 +168,15 @@ html, body {
   padding: 6px 10px;
 }
 
+#mic-btn {
+  background: #3a3a3e;
+  padding: 6px 8px;
+}
+
+#mic-btn.recording {
+  background: #ff3b3b;
+}
+
 body.panel-open #character,
 body.panel-open #hook,
 body.panel-open #bubble {

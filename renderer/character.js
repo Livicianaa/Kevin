@@ -12,6 +12,7 @@ const chatLog = document.getElementById('chat-log');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send');
 const closePanelBtn = document.getElementById('close-panel');
+const micBtn = document.getElementById('mic-btn');
 
 const IDLE_SIZE = { width: 140, height: 210 };
 const PANEL_SIZE = { width: 260, height: 340 };
@@ -64,6 +65,7 @@ saveConfigBtn.addEventListener('click', async () => {
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
   chatInput.focus();
+  initHandsFree();
 });
 
 function addMessage(text, who) {
@@ -74,22 +76,164 @@ function addMessage(text, who) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function sendChat() {
-  const text = chatInput.value.trim();
-  if (!text) return;
+async function speak(text) {
+  try {
+    const base64 = await window.kevinAPI.speak(text);
+    const audio = new Audio(`data:audio/wav;base64,${base64}`);
+    audio.play();
+  } catch (err) {
+    console.error('TTS hatasi:', err);
+  }
+}
+
+async function sendChat(text) {
+  const message = (text ?? chatInput.value).trim();
+  if (!message) return;
   chatInput.value = '';
-  addMessage(text, 'user');
+  addMessage(message, 'user');
 
   try {
-    const reply = await window.kevinAPI.chat(text);
+    const reply = await window.kevinAPI.chat(message);
     addMessage(reply, 'kevin');
+    speak(reply);
   } catch (err) {
     addMessage(`Hata: ${err.message}`, 'kevin');
   }
 }
 
-chatSendBtn.addEventListener('click', sendChat);
+chatSendBtn.addEventListener('click', () => sendChat());
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendChat();
   if (e.key === 'Escape') closePanel();
 });
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+
+async function startRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  recordedChunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  };
+  mediaRecorder.start();
+  isRecording = true;
+  micBtn.classList.add('recording');
+}
+
+function stopRecording() {
+  return new Promise((resolve) => {
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+      mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+      resolve(await blob.arrayBuffer());
+    };
+    mediaRecorder.stop();
+  });
+}
+
+micBtn.addEventListener('click', async () => {
+  if (!isRecording) {
+    try {
+      await startRecording();
+    } catch (err) {
+      addMessage(`Mikrofon hatasi: ${err.message}`, 'kevin');
+    }
+    return;
+  }
+
+  isRecording = false;
+  micBtn.classList.remove('recording');
+  micBtn.disabled = true;
+
+  try {
+    const arrayBuffer = await stopRecording();
+    const text = await window.kevinAPI.transcribe(arrayBuffer);
+    if (text) sendChat(text);
+  } catch (err) {
+    addMessage(`Transkripsiyon hatasi: ${err.message}`, 'kevin');
+  } finally {
+    micBtn.disabled = false;
+  }
+});
+
+// --- Eller serbest dinleme: "Kevin" (config'teki isim) deyince tetiklenir ---
+
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  return buffer;
+}
+
+function openPanelForChat() {
+  document.body.classList.add('panel-open');
+  panel.classList.remove('hidden');
+  window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
+  configView.classList.add('hidden');
+  chatView.classList.remove('hidden');
+}
+
+let vadInstance = null;
+
+async function initHandsFree() {
+  if (vadInstance) return;
+
+  const cfg = await window.kevinAPI.getConfig();
+  if (!cfg.apiKey) return;
+
+  try {
+    const assetsURL = new URL('vad-assets/', window.location.href).href;
+    vadInstance = await vad.MicVAD.new({
+      baseAssetPath: assetsURL,
+      onnxWASMBasePath: assetsURL,
+      onSpeechEnd: async (audio) => {
+        try {
+          const wavBuffer = encodeWAV(audio, 16000);
+          const text = await window.kevinAPI.transcribeWav(wavBuffer);
+          if (!text) return;
+
+          const freshCfg = await window.kevinAPI.getConfig();
+          const wakeName = (freshCfg.name || 'Kevin').toLowerCase();
+          if (text.toLowerCase().includes(wakeName)) {
+            openPanelForChat();
+            sendChat(text);
+          }
+        } catch (err) {
+          console.error('Eller serbest transkripsiyon hatasi:', err);
+        }
+      },
+    });
+    vadInstance.start();
+  } catch (err) {
+    console.error('[kevin] VAD baslatilamadi:', err.message);
+  }
+}
+
+initHandsFree();

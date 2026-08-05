@@ -1,12 +1,51 @@
-const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+const { pathToFileURL } = require('url');
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'kevin',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
+]);
 
 const WIN_WIDTH = 140;
 const WIN_HEIGHT = 210;
 const MARGIN = 20;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
+
+const PIPER_DIR = path.join(__dirname, 'bin', 'piper');
+const PIPER_BIN = path.join(PIPER_DIR, 'piper');
+const PIPER_VOICE = path.join(__dirname, 'bin', 'piper-voices', 'tr_TR-fahrettin-medium', 'tr_TR-fahrettin-medium.onnx');
+const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
+
+const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
+const WHISPER_BIN = path.join(WHISPER_DIR, 'whisper-cli');
+const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-base.bin');
+
+function runCommand(cmd, args, { env, input } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { env: { ...process.env, ...(env || {}) } });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => (stdout += d));
+    proc.stderr.on('data', (d) => (stderr += d));
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr || `exit code ${code}`));
+    });
+    proc.on('error', reject);
+    if (input !== undefined) {
+      proc.stdin.write(input);
+      proc.stdin.end();
+    }
+  });
+}
 
 const PROVIDERS = {
   nvidia: {
@@ -66,7 +105,11 @@ function createWindow() {
   });
 
   win.setAlwaysOnTop(true, 'screen-saver');
-  win.loadFile('renderer/index.html');
+  win.loadURL('kevin://app/renderer/index.html');
+
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media');
+  });
 }
 
 ipcMain.handle('get-config', () => loadConfig());
@@ -118,7 +161,79 @@ ipcMain.handle('chat', async (_event, message) => {
   return data.choices?.[0]?.message?.content?.trim() || '(bos cevap)';
 });
 
-app.whenReady().then(createWindow);
+ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
+  const id = crypto.randomUUID();
+  const rawPath = path.join(os.tmpdir(), `kevin-rec-${id}.webm`);
+  const wavPath = path.join(os.tmpdir(), `kevin-rec-${id}.wav`);
+  fs.writeFileSync(rawPath, Buffer.from(arrayBuffer));
+
+  try {
+    await runCommand('ffmpeg', ['-y', '-i', rawPath, '-ar', '16000', '-ac', '1', wavPath]);
+
+    const cfg = loadConfig();
+    const lang = (cfg.language || 'tr').slice(0, 2);
+
+    const { stdout } = await runCommand(
+      WHISPER_BIN,
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np'],
+      { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
+    );
+
+    return stdout.trim();
+  } finally {
+    fs.rmSync(rawPath, { force: true });
+    fs.rmSync(wavPath, { force: true });
+  }
+});
+
+ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
+  const id = crypto.randomUUID();
+  const wavPath = path.join(os.tmpdir(), `kevin-vad-${id}.wav`);
+  fs.writeFileSync(wavPath, Buffer.from(arrayBuffer));
+
+  try {
+    const cfg = loadConfig();
+    const lang = (cfg.language || 'tr').slice(0, 2);
+
+    const { stdout } = await runCommand(
+      WHISPER_BIN,
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np'],
+      { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
+    );
+
+    return stdout.trim();
+  } finally {
+    fs.rmSync(wavPath, { force: true });
+  }
+});
+
+ipcMain.handle('speak', async (_event, text) => {
+  const id = crypto.randomUUID();
+  const outPath = path.join(os.tmpdir(), `kevin-tts-${id}.wav`);
+
+  try {
+    await runCommand(
+      PIPER_BIN,
+      ['-m', PIPER_VOICE, '--espeak_data', PIPER_ESPEAK_DATA, '-f', outPath],
+      { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: text },
+    );
+
+    const audio = fs.readFileSync(outPath);
+    return audio.toString('base64');
+  } finally {
+    fs.rmSync(outPath, { force: true });
+  }
+});
+
+app.whenReady().then(() => {
+  protocol.handle('kevin', (request) => {
+    const url = new URL(request.url);
+    const filePath = path.join(__dirname, url.pathname);
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

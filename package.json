@@ -10,6 +10,10 @@
     "electron": "^33.0.0"
   },
   "allowScripts": {
-    "electron@33.4.11": true
+    "electron@33.4.11": true,
+    "protobufjs@7.6.5": true
+  },
+  "dependencies": {
+    "@ricky0123/vad-web": "^0.0.30"
   }
 }
