@@ -11,9 +11,12 @@
   },
   "allowScripts": {
     "electron@33.4.11": true,
-    "protobufjs@7.6.5": true
+    "protobufjs@7.6.5": true,
+    "@agent-sh/computer-use-linux@0.4.6": true
   },
   "dependencies": {
+    "@agent-sh/computer-use-linux": "^0.4.6",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@ricky0123/vad-web": "^0.0.30"
   }
 }

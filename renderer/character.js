@@ -16,6 +16,34 @@ const chatSendBtn = document.getElementById('chat-send');
 const closePanelBtn = document.getElementById('close-panel');
 const micBtn = document.getElementById('mic-btn');
 const settingsBtn = document.getElementById('settings-btn');
+const agentStatus = document.getElementById('agent-status');
+
+const AGENT_TOOL_LABELS = {
+  screenshot: 'ekrana bakıyor...',
+  list_windows: 'pencereleri listeliyor...',
+  list_apps: 'uygulamaları listeliyor...',
+  focused_window: 'aktif pencereyi kontrol ediyor...',
+  get_app_state: 'uygulamayı inceliyor...',
+  click: 'tıklıyor...',
+  drag: 'sürüklüyor...',
+  scroll: 'kaydırıyor...',
+  type_text: 'yazıyor...',
+  press_key: 'tuşa basıyor...',
+  activate_window: 'pencereyi öne getiriyor...',
+  move_window: 'pencereyi taşıyor...',
+  resize_window: 'pencereyi yeniden boyutlandırıyor...',
+  perform_action: 'bir işlem yapıyor...',
+  set_value: 'değer giriyor...',
+};
+
+window.kevinAPI.onAgentActivity((data) => {
+  if (!data) {
+    agentStatus.classList.add('hidden');
+    return;
+  }
+  agentStatus.textContent = `🖥️ ${AGENT_TOOL_LABELS[data.tool] || data.tool}`;
+  agentStatus.classList.remove('hidden');
+});
 
 const IDLE_SIZE = { width: 140, height: 210 };
 const PANEL_SIZE = { width: 260, height: 340 };

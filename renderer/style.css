@@ -144,6 +144,20 @@ html, body {
   height: 100%;
 }
 
+#agent-status {
+  font-size: 10px;
+  color: #9ad1ff;
+  background: rgba(154, 209, 255, 0.12);
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+#agent-status.hidden {
+  display: none;
+}
+
 #chat-log {
   flex: 1;
   overflow-y: auto;

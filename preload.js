@@ -9,4 +9,7 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   speak: (text) => ipcRenderer.invoke('speak', text),
   listModels: (provider, apiKey) => ipcRenderer.invoke('list-models', { provider, apiKey }),
   resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
+  onAgentActivity: (callback) => {
+    ipcRenderer.on('agent-activity', (_e, data) => callback(data));
+  },
 });

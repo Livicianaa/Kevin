@@ -5,6 +5,8 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+const { Client: McpClient } = require('@modelcontextprotocol/sdk/client/index.js');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -73,6 +75,45 @@ function saveConfig(cfg) {
 
 let win;
 
+// Agent modu: platforma gore uygun MCP sunucusu secilir. Simdilik sadece Linux.
+const COMPUTER_USE_BIN = path.join(
+  __dirname,
+  'node_modules',
+  '@agent-sh',
+  'computer-use-linux',
+  'npm',
+  'bin',
+  'computer-use-linux.js',
+);
+
+let mcpClient = null;
+let mcpTools = [];
+
+async function initAgentMCP() {
+  if (mcpClient || process.platform !== 'linux') return;
+  try {
+    const transport = new StdioClientTransport({ command: COMPUTER_USE_BIN, args: ['mcp'] });
+    const client = new McpClient({ name: 'kevin', version: '1.0.0' });
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    mcpClient = client;
+    mcpTools = tools;
+  } catch (err) {
+    console.error('Agent MCP baslatilamadi:', err.message);
+  }
+}
+
+function mcpToolsAsOpenAI() {
+  return mcpTools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description || '',
+      parameters: t.inputSchema || { type: 'object', properties: {} },
+    },
+  }));
+}
+
 function resizeAnchored(width, height) {
   const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
   win.setBounds({
@@ -140,6 +181,8 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
   }
 });
 
+const MAX_AGENT_STEPS = 6;
+
 ipcMain.handle('chat', async (_event, message) => {
   const cfg = loadConfig();
   if (!cfg.apiKey || !cfg.provider) {
@@ -151,31 +194,70 @@ ipcMain.handle('chat', async (_event, message) => {
   const language = cfg.language || 'Turkce';
   const name = cfg.name || 'Kevin';
 
-  const response = await fetch(`${provider.baseURL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
+  const messages = [
+    {
+      role: 'system',
+      content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin. Kullanicinin ekranini gormek/bir seyi tiklamak/pencereleri yonetmek gibi bir istegi varsa elindeki araclari kullan.`,
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin.`,
-        },
-        { role: 'user', content: message },
-      ],
-    }),
-  });
+    { role: 'user', content: message },
+  ];
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
+  const tools = mcpClient && mcpTools.length ? mcpToolsAsOpenAI() : undefined;
+
+  for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+    const response = await fetch(`${provider.baseURL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({ model, messages, ...(tools ? { tools } : {}) }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    const replyMsg = choice?.message;
+
+    if (!replyMsg) return '(bos cevap)';
+
+    if (replyMsg.tool_calls?.length) {
+      messages.push(replyMsg);
+
+      for (const call of replyMsg.tool_calls) {
+        let args = {};
+        try {
+          args = JSON.parse(call.function.arguments || '{}');
+        } catch {
+          // bos birak
+        }
+
+        win?.webContents.send('agent-activity', { tool: call.function.name, args });
+
+        let resultText;
+        try {
+          const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
+          resultText = JSON.stringify(result.content);
+        } catch (err) {
+          resultText = `hata: ${err.message}`;
+        }
+
+        messages.push({ role: 'tool', tool_call_id: call.id, content: resultText });
+      }
+
+      continue;
+    }
+
+    win?.webContents.send('agent-activity', null);
+    return replyMsg.content?.trim() || '(bos cevap)';
   }
 
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content?.trim() || '(bos cevap)';
+  win?.webContents.send('agent-activity', null);
+  throw new Error('Agent dongu limitine ulasildi');
 });
 
 ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
@@ -257,6 +339,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  initAgentMCP();
 });
 
 app.on('window-all-closed', () => {
