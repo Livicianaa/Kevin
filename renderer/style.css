@@ -107,6 +107,25 @@ html, body {
   opacity: 0.8;
 }
 
+#model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+#model-row label {
+  margin: 0;
+}
+
+#refresh-models {
+  margin: 0;
+  padding: 3px 8px;
+  font-size: 10px;
+  background: #444;
+  border-radius: 6px;
+}
+
 #panel input,
 #panel select {
   padding: 6px;

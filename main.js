@@ -86,8 +86,16 @@ const COMPUTER_USE_BIN = path.join(
   'computer-use-linux.js',
 );
 
-// Tani/kurulum amacli araclar - calisma zamaninda gereksiz, her istekte token yakiyorlar
-const EXCLUDED_TOOLS = new Set(['doctor', 'setup_accessibility', 'setup_window_targeting']);
+// Tani/kurulum amacli araclar (gereksiz token) + gorsel donduren araclar
+// (simdiki sohbet modelleri vision degil, base64 goruntu = bosa token) disarida.
+// Vision modeli baglaninca screenshot/get_app_state ayri bir yoldan geri gelecek.
+const EXCLUDED_TOOLS = new Set([
+  'doctor',
+  'setup_accessibility',
+  'setup_window_targeting',
+  'screenshot',
+  'get_app_state',
+]);
 
 let mcpClient = null;
 let mcpTools = [];
@@ -170,21 +178,43 @@ ipcMain.on('resize-window', (_event, width, height) => {
 
 ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
   const p = PROVIDERS[provider];
-  if (!p || !apiKey) return [];
+  if (!p) return { error: 'Sağlayıcı seçilmedi' };
+  if (!apiKey) return { error: 'API key gir' };
 
   try {
     const response = await fetch(`${p.baseURL}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const text = await response.text();
+      return { error: `HTTP ${response.status}: ${text.slice(0, 150)}` };
+    }
     const data = await response.json();
-    return (data.data || []).map((m) => m.id).sort();
-  } catch {
-    return [];
+    return { models: (data.data || []).map((m) => m.id).sort() };
+  } catch (err) {
+    return { error: err.message };
   }
 });
 
 const MAX_AGENT_STEPS = 6;
+const MAX_TOOL_RESULT_CHARS = 4000;
+
+// Gorsel icerikleri (base64) LLM'e gonderme - sohbet modelleri vision degil,
+// bosuna token yakar. Metni de asiri uzunsa kes.
+function sanitizeToolResult(content) {
+  const sanitized = (content || []).map((item) => {
+    if (item.type === 'image') {
+      return { type: 'text', text: '[gorsel icerik - metin modeline gonderilmedi]' };
+    }
+    return item;
+  });
+
+  let text = JSON.stringify(sanitized);
+  if (text.length > MAX_TOOL_RESULT_CHARS) {
+    text = `${text.slice(0, MAX_TOOL_RESULT_CHARS)}... [kesildi]`;
+  }
+  return text;
+}
 
 ipcMain.handle('chat', async (_event, message) => {
   const cfg = loadConfig();

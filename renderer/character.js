@@ -17,6 +17,7 @@ const closePanelBtn = document.getElementById('close-panel');
 const micBtn = document.getElementById('mic-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const agentStatus = document.getElementById('agent-status');
+const refreshModelsBtn = document.getElementById('refresh-models');
 
 const AGENT_TOOL_LABELS = {
   screenshot: 'ekrana bakıyor...',
@@ -98,10 +99,18 @@ async function refreshModelList(selectedModel) {
   if (!apiKey) return;
 
   modelSelect.disabled = true;
-  const models = await window.kevinAPI.listModels(providerSelect.value, apiKey);
+  const result = await window.kevinAPI.listModels(providerSelect.value, apiKey);
   modelSelect.disabled = false;
 
-  for (const id of models) {
+  if (result.error) {
+    const opt = document.createElement('option');
+    opt.textContent = `Yüklenemedi: ${result.error}`;
+    opt.disabled = true;
+    modelSelect.appendChild(opt);
+    return;
+  }
+
+  for (const id of result.models || []) {
     const opt = document.createElement('option');
     opt.value = id;
     opt.textContent = id;
@@ -112,6 +121,7 @@ async function refreshModelList(selectedModel) {
 }
 
 apikeyInput.addEventListener('blur', () => refreshModelList());
+refreshModelsBtn.addEventListener('click', () => refreshModelList());
 providerSelect.addEventListener('change', () => refreshModelList());
 
 settingsBtn.addEventListener('click', async () => {
