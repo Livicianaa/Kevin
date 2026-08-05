@@ -86,6 +86,9 @@ const COMPUTER_USE_BIN = path.join(
   'computer-use-linux.js',
 );
 
+// Tani/kurulum amacli araclar - calisma zamaninda gereksiz, her istekte token yakiyorlar
+const EXCLUDED_TOOLS = new Set(['doctor', 'setup_accessibility', 'setup_window_targeting']);
+
 let mcpClient = null;
 let mcpTools = [];
 
@@ -97,7 +100,7 @@ async function initAgentMCP() {
     await client.connect(transport);
     const { tools } = await client.listTools();
     mcpClient = client;
-    mcpTools = tools;
+    mcpTools = tools.filter((t) => !EXCLUDED_TOOLS.has(t.name));
   } catch (err) {
     console.error('Agent MCP baslatilamadi:', err.message);
   }
