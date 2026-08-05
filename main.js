@@ -258,7 +258,7 @@ ipcMain.handle('chat', async (_event, history) => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({ model, messages, ...(tools ? { tools } : {}) }),
+      body: JSON.stringify({ model, messages, ...(tools ? { tools, tool_choice: 'auto' } : {}) }),
     });
 
     if (!response.ok) {

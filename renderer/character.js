@@ -336,6 +336,8 @@ async function initHandsFree() {
       onnxWASMBasePath: assetsURL,
       redemptionMs: 1600,
       preSpeechPadMs: 800,
+      positiveSpeechThreshold: 0.6,
+      negativeSpeechThreshold: 0.45,
       onSpeechEnd: async (audio) => {
         try {
           const wavBuffer = encodeWAV(audio, 16000);
