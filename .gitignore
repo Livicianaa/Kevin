@@ -3,3 +3,4 @@ dist/
 .env
 bin/
 renderer/vad-assets/
+renderer/skin-viewer-bundle.js

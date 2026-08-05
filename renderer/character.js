@@ -46,13 +46,20 @@ window.kevinAPI.onAgentActivity((data) => {
   agentStatus.classList.remove('hidden');
 });
 
-const IDLE_SIZE = { width: 140, height: 210 };
-const PANEL_SIZE = { width: 260, height: 340 };
+const IDLE_SIZE = { width: 200, height: 300 };
+const PANEL_SIZE = { width: 340, height: 460 };
 
-const CHAR_WIDTH = 93;
-const CHAR_HEIGHT = 160;
-character.style.left = `${(IDLE_SIZE.width - CHAR_WIDTH) / 2}px`;
-character.style.top = `${IDLE_SIZE.height - CHAR_HEIGHT}px`;
+const CHAR_WIDTH = 130;
+const CHAR_HEIGHT = 224;
+
+function positionCharacter(size) {
+  character.style.left = `${(size.width - CHAR_WIDTH) / 2}px`;
+  character.style.top = `${size.height - CHAR_HEIGHT}px`;
+}
+
+window.KevinSkin.initSkinViewer(character, 'assets/skins/totem.png', CHAR_WIDTH, CHAR_HEIGHT);
+
+positionCharacter(IDLE_SIZE);
 
 function showBubble(text) {
   bubble.textContent = text;
@@ -62,30 +69,37 @@ function showBubble(text) {
 }
 
 let conversationActive = false;
+let conversationHistory = [];
 
 async function openPanel() {
   document.body.classList.add('panel-open');
   panel.classList.remove('hidden');
   window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
+  positionCharacter(PANEL_SIZE);
 
   const cfg = await window.kevinAPI.getConfig();
   if (cfg.apiKey) {
+    document.body.classList.remove('config-open');
     configView.classList.add('hidden');
     chatView.classList.remove('hidden');
     chatInput.focus();
     conversationActive = true;
     resetConversationTimeout();
   } else {
+    document.body.classList.add('config-open');
     chatView.classList.add('hidden');
     configView.classList.remove('hidden');
   }
 }
 
 function closePanel() {
-  document.body.classList.remove('panel-open');
+  document.body.classList.remove('panel-open', 'config-open');
   panel.classList.add('hidden');
   window.kevinAPI.resizeWindow(IDLE_SIZE.width, IDLE_SIZE.height);
+  positionCharacter(IDLE_SIZE);
   conversationActive = false;
+  conversationHistory = [];
+  chatLog.innerHTML = '';
   clearTimeout(conversationTimeoutId);
 }
 
@@ -131,6 +145,7 @@ settingsBtn.addEventListener('click', async () => {
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
   await refreshModelList(cfg.model);
+  document.body.classList.add('config-open');
   chatView.classList.add('hidden');
   configView.classList.remove('hidden');
 });
@@ -149,6 +164,7 @@ saveConfigBtn.addEventListener('click', async () => {
     name: nameInput.value.trim() || 'Kevin',
     nicknames,
   });
+  document.body.classList.remove('config-open');
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
   chatInput.focus();
@@ -180,11 +196,15 @@ async function sendChat(text) {
   addMessage(message, 'user');
   if (conversationActive) resetConversationTimeout();
 
+  conversationHistory.push({ role: 'user', content: message });
+
   try {
-    const reply = await window.kevinAPI.chat(message);
+    const reply = await window.kevinAPI.chat(conversationHistory);
+    conversationHistory.push({ role: 'assistant', content: reply });
     addMessage(reply, 'kevin');
     speak(reply);
   } catch (err) {
+    conversationHistory.pop();
     addMessage(`Hata: ${err.message}`, 'kevin');
   }
 }
@@ -294,6 +314,7 @@ function openPanelForChat() {
   document.body.classList.add('panel-open');
   panel.classList.remove('hidden');
   window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
+  positionCharacter(PANEL_SIZE);
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
   conversationActive = true;

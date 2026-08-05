@@ -15,8 +15,8 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const WIN_WIDTH = 140;
-const WIN_HEIGHT = 210;
+const WIN_WIDTH = 200;
+const WIN_HEIGHT = 300;
 const MARGIN = 20;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
@@ -229,7 +229,7 @@ function messageNeedsAgent(text) {
   return AGENT_KEYWORDS.some((k) => lower.includes(k));
 }
 
-ipcMain.handle('chat', async (_event, message) => {
+ipcMain.handle('chat', async (_event, history) => {
   const cfg = loadConfig();
   if (!cfg.apiKey || !cfg.provider) {
     throw new Error('API key ayarlanmamis');
@@ -245,10 +245,11 @@ ipcMain.handle('chat', async (_event, message) => {
       role: 'system',
       content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin. Kullanicinin ekranini gormek/bir seyi tiklamak/pencereleri yonetmek gibi bir istegi varsa elindeki araclari kullan.`,
     },
-    { role: 'user', content: message },
+    ...history,
   ];
 
-  const tools = mcpClient && mcpTools.length && messageNeedsAgent(message) ? mcpToolsAsOpenAI() : undefined;
+  const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+  const tools = mcpClient && mcpTools.length && messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     const response = await fetch(`${provider.baseURL}/chat/completions`, {

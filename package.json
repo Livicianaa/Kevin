@@ -4,19 +4,23 @@
   "description": "Kevin - masaustunde yasayan AI karakter",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:skin": "esbuild renderer/skin-viewer-src.js --bundle --format=iife --outfile=renderer/skin-viewer-bundle.js"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "esbuild": "^0.28.1"
   },
   "allowScripts": {
     "electron@33.4.11": true,
     "protobufjs@7.6.5": true,
-    "@agent-sh/computer-use-linux@0.4.6": true
+    "@agent-sh/computer-use-linux@0.4.6": true,
+    "esbuild@0.28.1": true
   },
   "dependencies": {
     "@agent-sh/computer-use-linux": "^0.4.6",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@ricky0123/vad-web": "^0.0.30"
+    "@ricky0123/vad-web": "^0.0.30",
+    "skinview3d": "^3.4.2"
   }
 }
