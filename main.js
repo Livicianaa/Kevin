@@ -26,7 +26,7 @@ const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 
 const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
 const WHISPER_BIN = path.join(WHISPER_DIR, 'whisper-cli');
-const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small.bin');
+const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small-q5_1.bin');
 const WHISPER_THREADS = '10';
 
 function runCommand(cmd, args, { env, input } = {}) {

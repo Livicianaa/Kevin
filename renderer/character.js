@@ -275,18 +275,13 @@ async function initHandsFree() {
     vadInstance = await vad.MicVAD.new({
       baseAssetPath: assetsURL,
       onnxWASMBasePath: assetsURL,
-      redemptionMs: 2200,
+      redemptionMs: 1600,
       preSpeechPadMs: 800,
       onSpeechEnd: async (audio) => {
         try {
           const wavBuffer = encodeWAV(audio, 16000);
           const text = await window.kevinAPI.transcribeWav(wavBuffer);
           if (!text) return;
-
-          if (conversationActive) {
-            sendChat(text);
-            return;
-          }
 
           const freshCfg = await window.kevinAPI.getConfig();
           const wakeName = (freshCfg.name || 'Kevin').toLowerCase();
