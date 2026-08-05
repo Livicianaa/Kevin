@@ -10,7 +10,31 @@
 
   <div id="bubble" class="hidden"></div>
 
-  <div id="character">K</div>
+  <img id="character" src="assets/kevin.png" alt="Kevin" />
+
+  <div id="panel" class="hidden">
+    <button id="close-panel">×</button>
+    <div id="config-view" class="hidden">
+      <label>Sağlayıcı</label>
+      <select id="provider">
+        <option value="nvidia">NVIDIA NIM</option>
+        <option value="groq">Groq</option>
+      </select>
+      <label>API key</label>
+      <input id="apikey" type="password" placeholder="API key yapıştır" />
+      <label>İsim (opsiyonel)</label>
+      <input id="name" type="text" placeholder="Kevin" />
+      <button id="save-config">Kaydet</button>
+    </div>
+
+    <div id="chat-view" class="hidden">
+      <div id="chat-log"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Yaz..." />
+        <button id="chat-send">Gönder</button>
+      </div>
+    </div>
+  </div>
 
   <script src="character.js"></script>
 </body>

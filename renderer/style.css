@@ -6,22 +6,14 @@ html, body {
   background: transparent;
   overflow: hidden;
   user-select: none;
+  font-family: sans-serif;
 }
 
 #character {
   position: absolute;
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: #ff6b6b;
-  color: white;
-  font-family: sans-serif;
-  font-size: 28px;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  width: 93px;
+  height: 160px;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
   cursor: pointer;
   transition: transform 0.15s ease;
 }
@@ -32,32 +24,152 @@ html, body {
 
 #hook {
   position: absolute;
-  top: 0;
-  right: 40px;
-  width: 36px;
+  top: 4px;
+  right: 4px;
+  width: 28px;
   height: 20px;
   background: #4a4a4a;
   color: white;
-  border-radius: 0 0 8px 8px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
 }
 
 #bubble {
   position: absolute;
-  max-width: 220px;
-  padding: 10px 14px;
+  top: 26px;
+  left: 4px;
+  right: 4px;
+  padding: 8px 10px;
   background: white;
   color: #222;
-  border-radius: 12px;
-  font-family: sans-serif;
-  font-size: 13px;
+  border-radius: 10px;
+  font-size: 11px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
 #bubble.hidden {
+  display: none;
+}
+
+#panel {
+  position: absolute;
+  inset: 0;
+  background: rgba(30, 30, 34, 0.95);
+  border-radius: 14px;
+  padding: 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  color: white;
+  font-size: 12px;
+}
+
+#panel.hidden {
+  display: none;
+}
+
+#close-panel {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  background: #444;
+  font-size: 14px;
+  line-height: 1;
+}
+
+#panel label {
+  margin-top: 8px;
+  margin-bottom: 3px;
+  opacity: 0.8;
+}
+
+#panel input,
+#panel select {
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #555;
+  background: #2a2a2e;
+  color: white;
+  font-size: 12px;
+}
+
+#panel button {
+  margin-top: 12px;
+  padding: 8px;
+  border-radius: 6px;
+  border: none;
+  background: #ff6b6b;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+#config-view.hidden,
+#chat-view.hidden {
+  display: none;
+}
+
+#config-view {
+  display: flex;
+  flex-direction: column;
+}
+
+#chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#chat-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+#chat-log .msg {
+  padding: 6px 8px;
+  border-radius: 8px;
+  max-width: 85%;
+}
+
+#chat-log .msg.user {
+  align-self: flex-end;
+  background: #ff6b6b;
+}
+
+#chat-log .msg.kevin {
+  align-self: flex-start;
+  background: #3a3a3e;
+}
+
+#chat-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+#chat-input-row input {
+  flex: 1;
+}
+
+#chat-input-row button {
+  margin-top: 0;
+  padding: 6px 10px;
+}
+
+body.panel-open #character,
+body.panel-open #hook,
+body.panel-open #bubble {
   display: none;
 }

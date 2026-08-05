@@ -1,78 +1,95 @@
 const character = document.getElementById('character');
 const hook = document.getElementById('hook');
 const bubble = document.getElementById('bubble');
+const panel = document.getElementById('panel');
+const configView = document.getElementById('config-view');
+const chatView = document.getElementById('chat-view');
+const providerSelect = document.getElementById('provider');
+const apikeyInput = document.getElementById('apikey');
+const nameInput = document.getElementById('name');
+const saveConfigBtn = document.getElementById('save-config');
+const chatLog = document.getElementById('chat-log');
+const chatInput = document.getElementById('chat-input');
+const chatSendBtn = document.getElementById('chat-send');
+const closePanelBtn = document.getElementById('close-panel');
 
-const CHAR_SIZE = 64;
-const SPEED = 1.2;
+const IDLE_SIZE = { width: 140, height: 210 };
+const PANEL_SIZE = { width: 260, height: 340 };
 
-let pos = { x: window.innerWidth / 2, y: window.innerHeight - 120 };
-let target = pickNewTarget();
-let sleeping = false;
+const CHAR_WIDTH = 93;
+const CHAR_HEIGHT = 160;
+character.style.left = `${(IDLE_SIZE.width - CHAR_WIDTH) / 2}px`;
+character.style.top = `${IDLE_SIZE.height - CHAR_HEIGHT}px`;
 
-function pickNewTarget() {
-  const margin = 60;
-  return {
-    x: margin + Math.random() * (window.innerWidth - margin * 2 - CHAR_SIZE),
-    y: window.innerHeight - 120 - Math.random() * 200,
-  };
-}
-
-function tick() {
-  if (!sleeping) {
-    const dx = target.x - pos.x;
-    const dy = target.y - pos.y;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist < 4) {
-      target = pickNewTarget();
-    } else {
-      pos.x += (dx / dist) * SPEED;
-      pos.y += (dy / dist) * SPEED;
-    }
-
-    character.style.left = `${pos.x}px`;
-    character.style.top = `${pos.y}px`;
-  }
-
-  requestAnimationFrame(tick);
-}
-
-// idle icin rastgele bekleme molalari
-setInterval(() => {
-  if (sleeping) return;
-  if (Math.random() < 0.3) {
-    const wasTarget = target;
-    target = pos;
-    setTimeout(() => {
-      target = wasTarget !== pos ? wasTarget : pickNewTarget();
-    }, 1500 + Math.random() * 2000);
-  }
-}, 4000);
-
-function setInteractive(el, interactive) {
-  el.addEventListener('mouseenter', () => window.kevinAPI.setIgnoreMouseEvents(false));
-  el.addEventListener('mouseleave', () => window.kevinAPI.setIgnoreMouseEvents(true, { forward: true }));
-}
-
-setInteractive(character);
-setInteractive(hook);
-
-function showBubble(text, x, y) {
+function showBubble(text) {
   bubble.textContent = text;
-  bubble.style.left = `${x}px`;
-  bubble.style.top = `${Math.max(0, y - 60)}px`;
   bubble.classList.remove('hidden');
   clearTimeout(showBubble._t);
   showBubble._t = setTimeout(() => bubble.classList.add('hidden'), 3000);
 }
 
-character.addEventListener('click', () => {
-  showBubble('Naber? (sohbet sistemi bir sonraki fazda gelecek)', pos.x, pos.y);
+async function openPanel() {
+  document.body.classList.add('panel-open');
+  panel.classList.remove('hidden');
+  window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
+
+  const cfg = await window.kevinAPI.getConfig();
+  if (cfg.apiKey) {
+    configView.classList.add('hidden');
+    chatView.classList.remove('hidden');
+    chatInput.focus();
+  } else {
+    chatView.classList.add('hidden');
+    configView.classList.remove('hidden');
+  }
+}
+
+function closePanel() {
+  document.body.classList.remove('panel-open');
+  panel.classList.add('hidden');
+  window.kevinAPI.resizeWindow(IDLE_SIZE.width, IDLE_SIZE.height);
+}
+
+character.addEventListener('click', openPanel);
+hook.addEventListener('click', openPanel);
+closePanelBtn.addEventListener('click', closePanel);
+
+saveConfigBtn.addEventListener('click', async () => {
+  if (!apikeyInput.value.trim()) return;
+  await window.kevinAPI.saveConfig({
+    provider: providerSelect.value,
+    apiKey: apikeyInput.value.trim(),
+    name: nameInput.value.trim() || 'Kevin',
+  });
+  configView.classList.add('hidden');
+  chatView.classList.remove('hidden');
+  chatInput.focus();
 });
 
-hook.addEventListener('click', () => {
-  sleeping = false;
-  showBubble('Kevin cagrildi!', pos.x, pos.y);
-});
+function addMessage(text, who) {
+  const div = document.createElement('div');
+  div.className = `msg ${who}`;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
 
-requestAnimationFrame(tick);
+async function sendChat() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  chatInput.value = '';
+  addMessage(text, 'user');
+
+  try {
+    const reply = await window.kevinAPI.chat(text);
+    addMessage(reply, 'kevin');
+  } catch (err) {
+    addMessage(`Hata: ${err.message}`, 'kevin');
+  }
+}
+
+chatSendBtn.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChat();
+  if (e.key === 'Escape') closePanel();
+});
