@@ -26,7 +26,8 @@ const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 
 const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
 const WHISPER_BIN = path.join(WHISPER_DIR, 'whisper-cli');
-const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-base.bin');
+const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small.bin');
+const WHISPER_THREADS = '10';
 
 function runCommand(cmd, args, { env, input } = {}) {
   return new Promise((resolve, reject) => {
@@ -175,7 +176,7 @@ ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np'],
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS],
       { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
     );
 
@@ -197,7 +198,7 @@ ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np'],
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS],
       { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
     );
 

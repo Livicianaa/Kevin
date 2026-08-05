@@ -16,8 +16,6 @@ const closePanelBtn = document.getElementById('close-panel');
 const micBtn = document.getElementById('mic-btn');
 const settingsBtn = document.getElementById('settings-btn');
 
-const DEFAULT_NICKNAMES = ['aga', 'ağa', 'kanka', 'usta', 'dayı', 'kral', 'bro', 'dude'];
-
 const IDLE_SIZE = { width: 140, height: 210 };
 const PANEL_SIZE = { width: 260, height: 340 };
 
@@ -238,6 +236,8 @@ async function initHandsFree() {
     vadInstance = await vad.MicVAD.new({
       baseAssetPath: assetsURL,
       onnxWASMBasePath: assetsURL,
+      redemptionMs: 2200,
+      preSpeechPadMs: 800,
       onSpeechEnd: async (audio) => {
         try {
           const wavBuffer = encodeWAV(audio, 16000);
@@ -251,8 +251,7 @@ async function initHandsFree() {
 
           const freshCfg = await window.kevinAPI.getConfig();
           const wakeName = (freshCfg.name || 'Kevin').toLowerCase();
-          const nicknames = freshCfg.nicknames?.length ? freshCfg.nicknames : DEFAULT_NICKNAMES;
-          const wakeWords = [wakeName, ...nicknames];
+          const wakeWords = [wakeName, ...(freshCfg.nicknames || [])];
           const lowerText = text.toLowerCase();
           if (wakeWords.some((w) => lowerText.includes(w))) {
             openPanelForChat();
