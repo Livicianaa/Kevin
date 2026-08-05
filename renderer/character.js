@@ -7,12 +7,15 @@ const chatView = document.getElementById('chat-view');
 const providerSelect = document.getElementById('provider');
 const apikeyInput = document.getElementById('apikey');
 const nameInput = document.getElementById('name');
+const nicknamesInput = document.getElementById('nicknames');
 const saveConfigBtn = document.getElementById('save-config');
 const chatLog = document.getElementById('chat-log');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send');
 const closePanelBtn = document.getElementById('close-panel');
 const micBtn = document.getElementById('mic-btn');
+
+const DEFAULT_NICKNAMES = ['aga', 'ağa', 'kanka', 'usta', 'dayı', 'kral', 'bro', 'dude'];
 
 const IDLE_SIZE = { width: 140, height: 210 };
 const PANEL_SIZE = { width: 260, height: 340 };
@@ -29,6 +32,8 @@ function showBubble(text) {
   showBubble._t = setTimeout(() => bubble.classList.add('hidden'), 3000);
 }
 
+let conversationActive = false;
+
 async function openPanel() {
   document.body.classList.add('panel-open');
   panel.classList.remove('hidden');
@@ -39,6 +44,7 @@ async function openPanel() {
     configView.classList.add('hidden');
     chatView.classList.remove('hidden');
     chatInput.focus();
+    conversationActive = true;
   } else {
     chatView.classList.add('hidden');
     configView.classList.remove('hidden');
@@ -49,6 +55,7 @@ function closePanel() {
   document.body.classList.remove('panel-open');
   panel.classList.add('hidden');
   window.kevinAPI.resizeWindow(IDLE_SIZE.width, IDLE_SIZE.height);
+  conversationActive = false;
 }
 
 character.addEventListener('click', openPanel);
@@ -57,10 +64,16 @@ closePanelBtn.addEventListener('click', closePanel);
 
 saveConfigBtn.addEventListener('click', async () => {
   if (!apikeyInput.value.trim()) return;
+  const nicknames = nicknamesInput.value
+    .split(',')
+    .map((n) => n.trim().toLowerCase())
+    .filter(Boolean);
+
   await window.kevinAPI.saveConfig({
     provider: providerSelect.value,
     apiKey: apikeyInput.value.trim(),
     name: nameInput.value.trim() || 'Kevin',
+    nicknames,
   });
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
@@ -198,6 +211,7 @@ function openPanelForChat() {
   window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
+  conversationActive = true;
 }
 
 let vadInstance = null;
@@ -219,9 +233,17 @@ async function initHandsFree() {
           const text = await window.kevinAPI.transcribeWav(wavBuffer);
           if (!text) return;
 
+          if (conversationActive) {
+            sendChat(text);
+            return;
+          }
+
           const freshCfg = await window.kevinAPI.getConfig();
           const wakeName = (freshCfg.name || 'Kevin').toLowerCase();
-          if (text.toLowerCase().includes(wakeName)) {
+          const nicknames = freshCfg.nicknames?.length ? freshCfg.nicknames : DEFAULT_NICKNAMES;
+          const wakeWords = [wakeName, ...nicknames];
+          const lowerText = text.toLowerCase();
+          if (wakeWords.some((w) => lowerText.includes(w))) {
             openPanelForChat();
             sendChat(text);
           }
