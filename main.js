@@ -341,7 +341,8 @@ ipcMain.handle('chat', async (_event, history) => {
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
 
-  async function callCompletions() {
+  async function callCompletions(forceNoTools) {
+    const activeTools = forceNoTools ? undefined : tools;
     const toolChoice = hasCalledTool ? 'auto' : 'required';
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
       method: 'POST',
@@ -349,7 +350,7 @@ ipcMain.handle('chat', async (_event, history) => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({ model, messages, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
+      body: JSON.stringify({ model, messages, ...(activeTools ? { tools: activeTools, tool_choice: toolChoice } : {}) }),
     });
 
     if (!response.ok) {
@@ -363,9 +364,10 @@ ipcMain.handle('chat', async (_event, history) => {
   }
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+    const isLastStep = step === MAX_AGENT_STEPS - 1;
     let data;
     try {
-      data = await callCompletions();
+      data = await callCompletions(isLastStep);
     } catch (err) {
       // Model uyumsuz/bilmedigi bir arac cagirmaya calisti - araclar olmadan tekrar dene
       if (tools && /tool/i.test(err.rawText || '')) {
