@@ -249,9 +249,9 @@ ipcMain.handle('chat', async (_event, history) => {
   ];
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-  const tools = mcpClient && mcpTools.length && messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
+  let tools = mcpClient && mcpTools.length && messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
 
-  for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+  async function callCompletions() {
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -263,10 +263,27 @@ ipcMain.handle('chat', async (_event, history) => {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
+      const err = new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
+      err.rawText = text;
+      throw err;
     }
 
-    const data = await response.json();
+    return response.json();
+  }
+
+  for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+    let data;
+    try {
+      data = await callCompletions();
+    } catch (err) {
+      // Model uyumsuz/bilmedigi bir arac cagirmaya calisti - araclar olmadan tekrar dene
+      if (tools && /tool/i.test(err.rawText || '')) {
+        tools = undefined;
+        data = await callCompletions();
+      } else {
+        throw err;
+      }
+    }
     const choice = data.choices?.[0];
     const replyMsg = choice?.message;
 
