@@ -6,7 +6,7 @@ const configView = document.getElementById('config-view');
 const chatView = document.getElementById('chat-view');
 const providerSelect = document.getElementById('provider');
 const apikeyInput = document.getElementById('apikey');
-const modelInput = document.getElementById('model');
+const modelSelect = document.getElementById('model');
 const nameInput = document.getElementById('name');
 const nicknamesInput = document.getElementById('nicknames');
 const saveConfigBtn = document.getElementById('save-config');
@@ -64,13 +64,35 @@ character.addEventListener('click', openPanel);
 hook.addEventListener('click', openPanel);
 closePanelBtn.addEventListener('click', closePanel);
 
+async function refreshModelList(selectedModel) {
+  modelSelect.innerHTML = '<option value="">Varsayılan</option>';
+  const apiKey = apikeyInput.value.trim();
+  if (!apiKey) return;
+
+  modelSelect.disabled = true;
+  const models = await window.kevinAPI.listModels(providerSelect.value, apiKey);
+  modelSelect.disabled = false;
+
+  for (const id of models) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = id;
+    modelSelect.appendChild(opt);
+  }
+
+  if (selectedModel) modelSelect.value = selectedModel;
+}
+
+apikeyInput.addEventListener('blur', () => refreshModelList());
+providerSelect.addEventListener('change', () => refreshModelList());
+
 settingsBtn.addEventListener('click', async () => {
   const cfg = await window.kevinAPI.getConfig();
   providerSelect.value = cfg.provider || 'nvidia';
   apikeyInput.value = cfg.apiKey || '';
-  modelInput.value = cfg.model || '';
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
+  await refreshModelList(cfg.model);
   chatView.classList.add('hidden');
   configView.classList.remove('hidden');
 });
@@ -85,7 +107,7 @@ saveConfigBtn.addEventListener('click', async () => {
   await window.kevinAPI.saveConfig({
     provider: providerSelect.value,
     apiKey: apikeyInput.value.trim(),
-    model: modelInput.value.trim(),
+    model: modelSelect.value,
     name: nameInput.value.trim() || 'Kevin',
     nicknames,
   });

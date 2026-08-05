@@ -124,6 +124,22 @@ ipcMain.on('resize-window', (_event, width, height) => {
   resizeAnchored(width, height);
 });
 
+ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
+  const p = PROVIDERS[provider];
+  if (!p || !apiKey) return [];
+
+  try {
+    const response = await fetch(`${p.baseURL}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.data || []).map((m) => m.id).sort();
+  } catch {
+    return [];
+  }
+});
+
 ipcMain.handle('chat', async (_event, message) => {
   const cfg = loadConfig();
   if (!cfg.apiKey || !cfg.provider) {
