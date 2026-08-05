@@ -114,8 +114,38 @@ async function initAgentMCP() {
   }
 }
 
+// computer-use-linux sadece ACIK pencereleri kontrol ediyor, yeni bir uygulama/URL
+// baslatamiyor. O bosluk icin kendi basit aracimiz - Linux'un standart xdg-open'i.
+const OPEN_URL_TOOL = {
+  type: 'function',
+  function: {
+    name: 'open_url_or_app',
+    description:
+      'Bir web adresini varsayilan tarayicida veya bir dosyayi varsayilan uygulamada acar. ' +
+      'Kullanici "X\'i ac", "tarayicidan X\'e git", "su dosyayi ac" dediginde bunu kullan. ' +
+      'Ornekler: "https://discord.com", "/home/user/belge.pdf"',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Acilacak URL ya da dosya yolu' },
+      },
+      required: ['target'],
+    },
+  },
+};
+
+async function openUrlOrApp(target) {
+  return new Promise((resolve) => {
+    const proc = spawn('xdg-open', [target]);
+    proc.on('error', (err) => resolve(`hata: ${err.message}`));
+    proc.on('close', (code) => {
+      resolve(code === 0 ? `acildi: ${target}` : `xdg-open ${code} koduyla basarisiz oldu`);
+    });
+  });
+}
+
 function mcpToolsAsOpenAI() {
-  return mcpTools.map((t) => ({
+  const remoteTools = mcpTools.map((t) => ({
     type: 'function',
     function: {
       name: t.name,
@@ -123,6 +153,7 @@ function mcpToolsAsOpenAI() {
       parameters: t.inputSchema || { type: 'object', properties: {} },
     },
   }));
+  return [OPEN_URL_TOOL, ...remoteTools];
 }
 
 function resizeAnchored(width, height) {
@@ -219,9 +250,10 @@ function sanitizeToolResult(content) {
 // Araclarin sema tanimlari her istekte token yakiyor - sadece gercekten
 // ekran/pencere/uygulama ile ilgili bir istek varsa gonder.
 const AGENT_KEYWORDS = [
-  'ekran', 'pencere', 'tıkla', 'tikla', 'aç ', 'açsana', 'kapat', 'kapatsana',
+  'ekran', 'pencere', 'tıkla', 'tikla', 'aç', 'kapat',
   'göster', 'gostersene', 'sekme', 'uygulama', 'program', 'yazı yaz', 'tuşa bas',
-  'screen', 'window', 'click', 'open ', 'close ', 'app ', 'application',
+  'discord', 'tarayıcı', 'tarayici', 'browser', 'dosya',
+  'screen', 'window', 'click', 'open', 'close', 'app', 'application',
 ];
 
 function messageNeedsAgent(text) {
@@ -307,8 +339,12 @@ ipcMain.handle('chat', async (_event, history) => {
 
         let resultText;
         try {
-          const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
-          resultText = JSON.stringify(result.content);
+          if (call.function.name === 'open_url_or_app') {
+            resultText = await openUrlOrApp(args.target);
+          } else {
+            const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
+            resultText = JSON.stringify(result.content);
+          }
         } catch (err) {
           resultText = `hata: ${err.message}`;
         }

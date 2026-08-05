@@ -20,6 +20,7 @@ const agentStatus = document.getElementById('agent-status');
 const refreshModelsBtn = document.getElementById('refresh-models');
 
 const AGENT_TOOL_LABELS = {
+  open_url_or_app: 'açıyor...',
   screenshot: 'ekrana bakıyor...',
   list_windows: 'pencereleri listeliyor...',
   list_apps: 'uygulamaları listeliyor...',
