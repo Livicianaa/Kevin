@@ -59,6 +59,10 @@ const PROVIDERS = {
     baseURL: 'https://api.groq.com/openai/v1',
     defaultModel: 'openai/gpt-oss-120b',
   },
+  gemini: {
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-2.5-flash',
+  },
 };
 
 function loadConfig() {
