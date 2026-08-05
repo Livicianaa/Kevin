@@ -146,7 +146,7 @@ ipcMain.handle('chat', async (_event, message) => {
       messages: [
         {
           role: 'system',
-          content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin.`,
+          content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin.`,
         },
         { role: 'user', content: message },
       ],
@@ -208,6 +208,13 @@ ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
   }
 });
 
+function stripEmoji(text) {
+  return text
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{2B00}-\u{2BFF}️]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 ipcMain.handle('speak', async (_event, text) => {
   const id = crypto.randomUUID();
   const outPath = path.join(os.tmpdir(), `kevin-tts-${id}.wav`);
@@ -216,7 +223,7 @@ ipcMain.handle('speak', async (_event, text) => {
     await runCommand(
       PIPER_BIN,
       ['-m', PIPER_VOICE, '--espeak_data', PIPER_ESPEAK_DATA, '-f', outPath],
-      { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: text },
+      { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: stripEmoji(text) },
     );
 
     const audio = fs.readFileSync(outPath);

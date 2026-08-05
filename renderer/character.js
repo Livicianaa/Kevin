@@ -6,6 +6,7 @@ const configView = document.getElementById('config-view');
 const chatView = document.getElementById('chat-view');
 const providerSelect = document.getElementById('provider');
 const apikeyInput = document.getElementById('apikey');
+const modelInput = document.getElementById('model');
 const nameInput = document.getElementById('name');
 const nicknamesInput = document.getElementById('nicknames');
 const saveConfigBtn = document.getElementById('save-config');
@@ -44,6 +45,7 @@ async function openPanel() {
     chatView.classList.remove('hidden');
     chatInput.focus();
     conversationActive = true;
+    resetConversationTimeout();
   } else {
     chatView.classList.add('hidden');
     configView.classList.remove('hidden');
@@ -55,6 +57,7 @@ function closePanel() {
   panel.classList.add('hidden');
   window.kevinAPI.resizeWindow(IDLE_SIZE.width, IDLE_SIZE.height);
   conversationActive = false;
+  clearTimeout(conversationTimeoutId);
 }
 
 character.addEventListener('click', openPanel);
@@ -65,6 +68,7 @@ settingsBtn.addEventListener('click', async () => {
   const cfg = await window.kevinAPI.getConfig();
   providerSelect.value = cfg.provider || 'nvidia';
   apikeyInput.value = cfg.apiKey || '';
+  modelInput.value = cfg.model || '';
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
   chatView.classList.add('hidden');
@@ -81,6 +85,7 @@ saveConfigBtn.addEventListener('click', async () => {
   await window.kevinAPI.saveConfig({
     provider: providerSelect.value,
     apiKey: apikeyInput.value.trim(),
+    model: modelInput.value.trim(),
     name: nameInput.value.trim() || 'Kevin',
     nicknames,
   });
@@ -113,6 +118,7 @@ async function sendChat(text) {
   if (!message) return;
   chatInput.value = '';
   addMessage(message, 'user');
+  if (conversationActive) resetConversationTimeout();
 
   try {
     const reply = await window.kevinAPI.chat(message);
@@ -214,6 +220,16 @@ function encodeWAV(samples, sampleRate) {
   return buffer;
 }
 
+const CONVERSATION_TIMEOUT_MS = 45000;
+let conversationTimeoutId = null;
+
+function resetConversationTimeout() {
+  clearTimeout(conversationTimeoutId);
+  conversationTimeoutId = setTimeout(() => {
+    if (conversationActive) closePanel();
+  }, CONVERSATION_TIMEOUT_MS);
+}
+
 function openPanelForChat() {
   document.body.classList.add('panel-open');
   panel.classList.remove('hidden');
@@ -221,6 +237,7 @@ function openPanelForChat() {
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
   conversationActive = true;
+  resetConversationTimeout();
 }
 
 let vadInstance = null;
