@@ -333,15 +333,19 @@ ipcMain.handle('chat', async (_event, history) => {
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
   let tools = mcpClient && mcpTools.length && messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
+  // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
+  // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
+  let hasCalledTool = false;
 
   async function callCompletions() {
+    const toolChoice = hasCalledTool ? 'auto' : 'required';
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({ model, messages, ...(tools ? { tools, tool_choice: 'auto' } : {}) }),
+      body: JSON.stringify({ model, messages, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
     });
 
     if (!response.ok) {
@@ -377,6 +381,7 @@ ipcMain.handle('chat', async (_event, history) => {
 
     if (replyMsg.tool_calls?.length) {
       messages.push(replyMsg);
+      hasCalledTool = true;
 
       for (const call of replyMsg.tool_calls) {
         let args = {};
