@@ -18,6 +18,7 @@ const micBtn = document.getElementById('mic-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const agentStatus = document.getElementById('agent-status');
 const refreshModelsBtn = document.getElementById('refresh-models');
+const handsFreeInput = document.getElementById('handsfree');
 
 const AGENT_TOOL_LABELS = {
   open_url_or_app: 'açıyor...',
@@ -340,6 +341,7 @@ settingsBtn.addEventListener('click', async () => {
   apikeyInput.value = cfg.apiKey || '';
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
+  handsFreeInput.checked = cfg.handsFree !== false;
   await refreshModelList(cfg.model);
   document.body.classList.add('config-open');
   chatView.classList.add('hidden');
@@ -374,6 +376,7 @@ saveConfigBtn.addEventListener('click', async () => {
     model: modelSelect.value,
     name: nameInput.value.trim() || 'Kevin',
     nicknames,
+    handsFree: handsFreeInput.checked,
   });
   document.body.classList.remove('config-open');
   configView.classList.add('hidden');
@@ -559,7 +562,8 @@ async function initHandsFree() {
   if (new URLSearchParams(window.location.search).get('novad')) return;
 
   const cfg = await window.kevinAPI.getConfig();
-  if (!cfg.apiKey) return;
+  if (cfg.handsFree === false) return;
+  if (!cfg.apiKey && cfg.provider !== 'ollama') return;
 
   try {
     const assetsURL = new URL('vad-assets/', window.location.href).href;

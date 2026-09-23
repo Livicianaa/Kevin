@@ -34,7 +34,27 @@ const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 
 const PIPER_DIR = path.join(__dirname, 'bin', 'piper');
 const PIPER_BIN = path.join(PIPER_DIR, 'piper');
-const PIPER_VOICE = path.join(__dirname, 'bin', 'piper-voices', 'tr_TR-fahrettin-medium', 'tr_TR-fahrettin-medium.onnx');
+const PIPER_VOICES_DIR = path.join(__dirname, 'bin', 'piper-voices');
+
+// Ses modeli sabit degil: bin/piper-voices altinda hangi ses kuruluysa o kullanilir.
+// (kurulum scripti tr_TR-dfki-medium indiriyor, elde baska bir ses varsa o calisir)
+function findPiperVoice() {
+  const preferred = process.env.KEVIN_VOICE;
+  try {
+    const dirs = fs.readdirSync(PIPER_VOICES_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    const chosen = preferred && dirs.includes(preferred) ? preferred : dirs[0];
+    if (!chosen) return null;
+    const onnx = fs.readdirSync(path.join(PIPER_VOICES_DIR, chosen)).find((f) => f.endsWith('.onnx'));
+    return onnx ? path.join(PIPER_VOICES_DIR, chosen, onnx) : null;
+  } catch {
+    return null;
+  }
+}
+
+const PIPER_VOICE = findPiperVoice();
 const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 
 const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
@@ -177,6 +197,75 @@ const SHORT_TOOL_DESCRIPTIONS = {
   type_text: 'Klavyeden metin yazar.',
 };
 
+const LOOK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'look_at_screen',
+    description:
+      'Ekrana bakar ve ne gordugunu anlatir. Kullanici "ekranima bak", "bu ne", ' +
+      '"ne yaziyor", "sayfada ne var" gibi ekrandaki bir seyi sordugunda kullan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Ekranda ozellikle neye bakilacagi' },
+      },
+      required: [],
+    },
+  },
+};
+
+const VISION_ENDPOINT = 'http://127.0.0.1:11434/v1/chat/completions';
+const VISION_MODEL = process.env.KEVIN_VISION_MODEL || PROVIDERS.ollama.visionModel;
+
+// Ekran goruntusunu sohbet modeline ham olarak gondermek yerine yerel vision
+// modeline sorup METIN aliyoruz: boylece vision'i olmayan modeller de ekrani
+// "gorebiliyor" ve token israfi olmuyor.
+async function lookAtScreen(question) {
+  const shot = path.join(os.tmpdir(), `kevin-vision-${crypto.randomUUID()}.png`);
+  try {
+    try {
+      await runCommand('grim', ['-s', '0.5', '-l', '0', shot]);
+    } catch (err) {
+      return `ekran goruntusu alinamadi: ${err.message}`;
+    }
+
+    const image = fs.readFileSync(shot).toString('base64');
+    const prompt = question && question.trim()
+      ? question.trim()
+      : 'Bu ekranda ne var? Kisa ve somut anlat.';
+
+    const response = await fetch(VISION_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        stream: false,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `${prompt}\nTurkce cevapla, en fazla 4 cumle.` },
+              { type: 'image_url', image_url: { url: `data:image/png;base64,${image}` } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return `vision modeli yanit vermedi (HTTP ${response.status}): ${text.slice(0, 200)}`;
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || 'ekrandan bir sey okunamadi';
+  } catch (err) {
+    return `ekrana bakilamadi: ${err.message}`;
+  } finally {
+    fs.rmSync(shot, { force: true });
+  }
+}
+
 const LIST_DIR_TOOL = {
   type: 'function',
   function: {
@@ -229,7 +318,7 @@ function mcpToolsAsOpenAI() {
       parameters: t.inputSchema || { type: 'object', properties: {} },
     },
   }));
-  return [OPEN_URL_TOOL, LIST_DIR_TOOL, ...remoteTools];
+  return [OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, ...remoteTools];
 }
 
 function resizeAnchored(width, height) {
@@ -389,6 +478,8 @@ const AGENT_KEYWORDS = [
   'göster', 'gostersene', 'sekme', 'uygulama', 'program', 'yazı yaz', 'tuşa bas',
   'discord', 'tarayıcı', 'tarayici', 'browser', 'dosya',
   'screen', 'window', 'click', 'open', 'close', 'app', 'application',
+  'baksana', 'bakar mısın', 'bakar misin', 'ne yazıyor', 'ne yaziyor',
+  'görüyor musun', 'goruyor musun', 'okusana', 'oku bakalım', 'oku bakalim',
 ];
 
 function messageNeedsAgent(text) {
@@ -419,7 +510,7 @@ ipcMain.handle('chat', async (_event, history) => {
   ];
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-  let tools = mcpClient && mcpTools.length && messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
+  let tools = messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
@@ -488,6 +579,8 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await openUrlOrApp(args.target);
           } else if (call.function.name === 'list_directory') {
             resultText = await listDirectoryTool(args.path);
+          } else if (call.function.name === 'look_at_screen') {
+            resultText = await lookAtScreen(args.question);
           } else {
             const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
             resultText = JSON.stringify(result.content);
