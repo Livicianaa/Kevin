@@ -4,6 +4,7 @@ function fakePlayer() {
   const part = () => ({ rotation: { x: 0, y: 0, z: 0 } });
   return {
     position: { y: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
     skin: { head: part(), body: part(), leftArm: part(), rightArm: part(), leftLeg: part(), rightLeg: part() },
   };
 }
@@ -23,6 +24,7 @@ function run(setup, steps, dt = 0.05) {
       lArmZ: +p.skin.leftArm.rotation.z.toFixed(2),
       legX: +p.skin.leftLeg.rotation.x.toFixed(2),
       headX: +p.skin.head.rotation.x.toFixed(2),
+      facing: +p.rotation.y.toFixed(2),
     });
   }
   return rows;
@@ -46,3 +48,13 @@ console.log('BLEND think ilk 6 kare sag kol z =', blend.map((r) => r.rArmZ).join
 
 const back = run((a) => { a.setState('talk'); a.play('jump'); }, 24);
 console.log('DONUS jump sonrasi durum =', back[back.length - 1].state, '(talk olmali)');
+
+const face = run((a) => { a.setState('walk'); a.setFacing(Math.PI / 2); }, 20);
+console.log('YON   hedef 1.57 -> ilk kare', face[0].facing, '| son kare', face[face.length - 1].facing);
+
+const climb = run((a) => a.setState('climb'), 10);
+console.log('CLIMB kol x araligi =', Math.min(...climb.map((r) => r.rArmZ)).toFixed(2), '| durum =', climb[9].state);
+
+const sitEdge = run((a) => a.setState('sit-edge'), 20);
+const legs = sitEdge.map((r) => r.legX);
+console.log('SIT-EDGE bacak sallanma araligi =', Math.min(...legs).toFixed(2), '..', Math.max(...legs).toFixed(2));

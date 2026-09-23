@@ -48,7 +48,7 @@ window.kevinAPI.onAgentActivity((data) => {
   agentStatus.classList.remove('hidden');
 });
 
-const IDLE_SIZE = { width: 200, height: 300 };
+const IDLE_SIZE = { width: 150, height: 250 };
 const PANEL_SIZE = { width: 340, height: 460 };
 
 const CHAR_WIDTH = 130;
@@ -65,7 +65,7 @@ positionCharacter(IDLE_SIZE);
 
 // --- Animasyon durum makinesi ---
 
-const SLEEP_AFTER_MS = 3 * 60 * 1000;
+const SLEEP_AFTER_MS = 10 * 60 * 1000;
 const MUSIC_POLL_MS = 6000;
 const NIGHT_START = 0;
 const NIGHT_END = 6;
@@ -78,16 +78,28 @@ let busyState = null;
 let listening = false;
 let musicPlaying = false;
 let lastInteraction = Date.now();
+let world = null;
+let sleeping = false;
 
 const forcedAnim = new URLSearchParams(window.location.search).get('anim');
+
+function worldFrozen() {
+  return Boolean(busyState || conversationActive || sleeping);
+}
 
 function refreshKevinState() {
   if (forcedAnim) return;
   if (busyState) return window.KevinSkin.setState(busyState);
+  if (conversationActive) return window.KevinSkin.setState('idle');
+
+  // Uyku sadece karakter zeminde bostayken; tirmanirken uyuyup dusmesin.
+  sleeping = Date.now() - lastInteraction > SLEEP_AFTER_MS && (!world || world.mode === 'idle');
+  if (sleeping) return window.KevinSkin.setState('sleep');
+
+  if (world && world.mode !== 'idle') return window.KevinSkin.setState(world.animation);
+
   if (listening) return window.KevinSkin.setState('listen');
   if (musicPlaying) return window.KevinSkin.setState('dance');
-  if (conversationActive) return window.KevinSkin.setState('idle');
-  if (Date.now() - lastInteraction > SLEEP_AFTER_MS) return window.KevinSkin.setState('sleep');
 
   const hour = new Date().getHours();
   if (hour >= NIGHT_START && hour < NIGHT_END) return window.KevinSkin.setState('night-sleepy');
@@ -139,6 +151,74 @@ if (forcedAnim) {
 
 pollMusic();
 setInterval(pollMusic, MUSIC_POLL_MS);
+
+// --- Dunya: zemin, yercekimi, gezinme ---
+
+const ANCHOR_EPSILON = 0.75;
+const ANCHOR_INTERVAL_MS = 1000 / 30;
+let lastAnchor = { x: -1, y: -1 };
+let lastAnchorAt = 0;
+
+function pushAnchor(now = performance.now()) {
+  if (!world) return;
+  if (now - lastAnchorAt < ANCHOR_INTERVAL_MS) return;
+  if (Math.abs(world.x - lastAnchor.x) < ANCHOR_EPSILON && Math.abs(world.y - lastAnchor.y) < ANCHOR_EPSILON) return;
+  lastAnchorAt = now;
+  lastAnchor = { x: world.x, y: world.y };
+  window.kevinAPI.setAnchor(world.x, world.y);
+}
+
+// Karakter hareketsizken tam hizda cizmenin anlami yok: bos masaustunde
+// surekli calisan bir uygulama icin kare hizi harekete gore ayarlaniyor.
+const ACTIVE_FPS = 30;
+const CALM_FPS = 12;
+
+function targetFrameMs() {
+  const moving = world && world.mode !== 'idle' && world.mode !== 'sit';
+  const busy = Boolean(busyState || listening || musicPlaying);
+  return 1000 / (moving || busy ? ACTIVE_FPS : CALM_FPS);
+}
+
+async function initWorld() {
+  if (forcedAnim) return;
+  const info = await window.kevinAPI.worldInfo();
+  if (!info) {
+    console.warn('[kevin] Hyprland yok - karakter sabit kalacak');
+    return;
+  }
+  world = new window.KevinWorld(info);
+  pushAnchor();
+}
+
+let previousFrame = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  const elapsed = now - previousFrame;
+  if (elapsed < targetFrameMs() - 1) return;
+  previousFrame = now;
+  const dt = Math.min(elapsed / 1000, 0.05);
+
+  if (world) {
+    world.setPaused(worldFrozen());
+    if (world.update(dt) === 'land') window.KevinSkin.play('land');
+
+    if (worldFrozen()) {
+      window.KevinSkin.setFacing(conversationActive ? 0 : world.facing);
+    } else {
+      window.KevinSkin.setFacing(world.facing);
+      pushAnchor(now);
+    }
+    refreshKevinState();
+  }
+
+  window.KevinSkin.tick(dt);
+}
+
+initWorld();
+requestAnimationFrame(frame);
+
 
 let pressTimer = null;
 let suppressClick = false;
@@ -225,7 +305,7 @@ closePanelBtn.addEventListener('click', closePanel);
 async function refreshModelList(selectedModel) {
   modelSelect.innerHTML = '<option value="">Varsayılan</option>';
   const apiKey = apikeyInput.value.trim();
-  if (!apiKey) return;
+  if (!apiKey && providerNeedsKey()) return;
 
   modelSelect.disabled = true;
   const result = await window.kevinAPI.listModels(providerSelect.value, apiKey);
@@ -256,6 +336,7 @@ providerSelect.addEventListener('change', () => refreshModelList());
 settingsBtn.addEventListener('click', async () => {
   const cfg = await window.kevinAPI.getConfig();
   providerSelect.value = cfg.provider || 'nvidia';
+  syncKeyField();
   apikeyInput.value = cfg.apiKey || '';
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
@@ -265,8 +346,23 @@ settingsBtn.addEventListener('click', async () => {
   configView.classList.remove('hidden');
 });
 
+const LOCAL_PROVIDERS = ['ollama'];
+
+function providerNeedsKey() {
+  return !LOCAL_PROVIDERS.includes(providerSelect.value);
+}
+
+function syncKeyField() {
+  const needed = providerNeedsKey();
+  apikeyInput.disabled = !needed;
+  apikeyInput.placeholder = needed ? 'API key yapıştır' : 'Gerekmiyor - model bu bilgisayarda çalışıyor';
+}
+
+providerSelect.addEventListener('change', syncKeyField);
+syncKeyField();
+
 saveConfigBtn.addEventListener('click', async () => {
-  if (!apikeyInput.value.trim()) return;
+  if (providerNeedsKey() && !apikeyInput.value.trim()) return;
   const nicknames = nicknamesInput.value
     .split(',')
     .map((n) => n.trim().toLowerCase())
@@ -460,6 +556,7 @@ let vadInstance = null;
 
 async function initHandsFree() {
   if (vadInstance) return;
+  if (new URLSearchParams(window.location.search).get('novad')) return;
 
   const cfg = await window.kevinAPI.getConfig();
   if (!cfg.apiKey) return;

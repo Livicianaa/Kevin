@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   listModels: (provider, apiKey) => ipcRenderer.invoke('list-models', { provider, apiKey }),
   musicStatus: () => ipcRenderer.invoke('music-status'),
   resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
+  setAnchor: (x, y) => ipcRenderer.send('set-anchor', x, y),
+  worldInfo: () => ipcRenderer.invoke('world-info'),
   onAgentActivity: (callback) => {
     ipcRenderer.on('agent-activity', (_e, data) => callback(data));
   },

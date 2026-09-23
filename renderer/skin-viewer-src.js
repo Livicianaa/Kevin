@@ -1,5 +1,6 @@
 import { SkinViewer } from 'skinview3d';
 import { KevinAnimator, ANIMATION_STATES } from './animations.js';
+import { KevinWorld } from './world.js';
 
 let viewer = null;
 let animator = null;
@@ -24,7 +25,17 @@ function initSkinViewer(canvas, skinUrl, width, height) {
   animator = new KevinAnimator();
   viewer.animation = animator;
 
+  // skinview3d kendi rAF dongusunde monitorun hizinda (180 Hz) render ediyordu.
+  // Kapatip tek bir 60 FPS dongusunden surduruyoruz.
+  viewer.renderPaused = true;
+
   return viewer;
+}
+
+function tick(dt) {
+  if (!viewer || !animator) return;
+  animator.update(viewer.playerObject, dt);
+  viewer.render();
 }
 
 function setState(name) {
@@ -39,6 +50,10 @@ function setSitting(value) {
   if (animator) animator.setSitting(value);
 }
 
+function setFacing(radians) {
+  if (animator) animator.setFacing(radians);
+}
+
 function setSpeed(value) {
   if (animator) animator.speed = value;
 }
@@ -47,4 +62,5 @@ function currentState() {
   return animator ? animator.state : null;
 }
 
-window.KevinSkin = { initSkinViewer, setState, play, setSitting, setSpeed, currentState, ANIMATION_STATES };
+window.KevinWorld = KevinWorld;
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setSpeed, currentState, ANIMATION_STATES };

@@ -5,6 +5,14 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+const hypr = require('./hypr.js');
+
+// Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
+// karakterin yuruyus hizi buna kurban gidiyordu.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 const { Client: McpClient } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 
@@ -15,9 +23,12 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const WIN_WIDTH = 200;
-const WIN_HEIGHT = 300;
+const WIN_WIDTH = 150;
+const WIN_HEIGHT = 250;
 const MARGIN = 20;
+
+let characterAnchor = null;
+let windowSize = { width: WIN_WIDTH, height: WIN_HEIGHT };
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 
@@ -63,7 +74,17 @@ const PROVIDERS = {
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     defaultModel: 'gemini-2.5-flash',
   },
+  ollama: {
+    baseURL: 'http://127.0.0.1:11434/v1',
+    defaultModel: 'qwen3:8b',
+    visionModel: 'qwen2.5vl:7b',
+    local: true,
+  },
 };
+
+function isLocal(provider) {
+  return Boolean(PROVIDERS[provider] && PROVIDERS[provider].local);
+}
 
 function loadConfig() {
   try {
@@ -221,6 +242,33 @@ function resizeAnchored(width, height) {
   });
 }
 
+// Wayland'de pencere kendi konumunu belirleyemez; Hyprland'e IPC ile soyluyoruz.
+// characterAnchor karakterin AYAK noktasi (dunya koordinati), pencere onun etrafina oturur.
+let placing = false;
+let placeAgain = false;
+
+async function placeWindow() {
+  if (!characterAnchor || !hypr.available()) return;
+  if (placing) {
+    placeAgain = true;
+    return;
+  }
+  placing = true;
+  try {
+    const x = characterAnchor.x - windowSize.width / 2;
+    const y = characterAnchor.y - windowSize.height;
+    await hypr.moveTo(x, y);
+  } catch {
+    // Hyprland yoksa sessizce gec
+  } finally {
+    placing = false;
+    if (placeAgain) {
+      placeAgain = false;
+      placeWindow();
+    }
+  }
+}
+
 function createWindow() {
   const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -240,13 +288,23 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Pencere odakta olmadiginda Chromium rAF'i 1 FPS'e kisiyor,
+      // karakter de o hizda yuruyor. Kapatiyoruz.
+      backgroundThrottling: false,
     },
   });
 
   win.setAlwaysOnTop(true, 'screen-saver');
   const animArg = process.argv.find((a) => a.startsWith('--anim='));
-  const query = animArg ? `?anim=${encodeURIComponent(animArg.slice(7))}` : '';
+  const params = new URLSearchParams();
+  if (animArg) params.set('anim', animArg.slice(7));
+  if (process.argv.includes('--no-vad')) params.set('novad', '1');
+  const query = params.toString() ? `?${params}` : '';
   win.loadURL(`kevin://app/renderer/index.html${query}`);
+
+  if (process.env.KEVIN_DEBUG) {
+    win.webContents.on('console-message', (_e, _level, message) => console.log('[renderer]', message));
+  }
 
   win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media');
@@ -261,17 +319,37 @@ ipcMain.handle('save-config', (_event, cfg) => {
 });
 
 ipcMain.on('resize-window', (_event, width, height) => {
-  resizeAnchored(width, height);
+  windowSize = { width, height };
+  if (characterAnchor && hypr.available()) {
+    win.setBounds({ width, height });
+    hypr.resizeTo(width, height).then(placeWindow).catch(() => {});
+  } else {
+    resizeAnchored(width, height);
+  }
+});
+
+ipcMain.on('set-anchor', (_event, x, y) => {
+  characterAnchor = { x, y };
+  placeWindow();
+});
+
+ipcMain.handle('world-info', async () => {
+  if (!hypr.available()) return null;
+  try {
+    return await hypr.world();
+  } catch {
+    return null;
+  }
 });
 
 ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
   const p = PROVIDERS[provider];
   if (!p) return { error: 'Sağlayıcı seçilmedi' };
-  if (!apiKey) return { error: 'API key gir' };
+  if (!apiKey && !p.local) return { error: 'API key gir' };
 
   try {
     const response = await fetch(`${p.baseURL}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: p.local ? {} : { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {
       const text = await response.text();
@@ -320,7 +398,10 @@ function messageNeedsAgent(text) {
 
 ipcMain.handle('chat', async (_event, history) => {
   const cfg = loadConfig();
-  if (!cfg.apiKey || !cfg.provider) {
+  if (!cfg.provider) {
+    throw new Error('Saglayici secilmemis');
+  }
+  if (!cfg.apiKey && !isLocal(cfg.provider)) {
     throw new Error('API key ayarlanmamis');
   }
 
@@ -350,7 +431,7 @@ ipcMain.handle('chat', async (_event, history) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
+        ...(provider.local ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
       },
       body: JSON.stringify({ model, messages, ...(activeTools ? { tools: activeTools, tool_choice: toolChoice } : {}) }),
     });
@@ -528,12 +609,21 @@ ipcMain.handle('music-status', async () => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   protocol.handle('kevin', (request) => {
     const url = new URL(request.url);
     const filePath = path.join(__dirname, url.pathname);
     return net.fetch(pathToFileURL(filePath).toString());
   });
+
+  // Kurallar pencereden ONCE gitmeli: windowrule sadece pencere acilirken uygulaniyor.
+  if (hypr.available()) {
+    try {
+      await hypr.applyWindowRules();
+    } catch (err) {
+      console.error('[kevin] windowrule:', err.message);
+    }
+  }
 
   createWindow();
   initAgentMCP();

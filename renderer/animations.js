@@ -195,6 +195,86 @@ const POSES = {
     pose.rightLeg.x = Math.sin(b) * 0.25;
   },
 
+  climb(t, pose) {
+    const c = t * 5;
+    pose.leftArm.x = -2.6 + Math.sin(c) * 0.55;
+    pose.rightArm.x = -2.6 + Math.sin(c + Math.PI) * 0.55;
+    pose.leftArm.z = ARM_REST + 0.12;
+    pose.rightArm.z = -ARM_REST - 0.12;
+    pose.leftLeg.x = -0.55 + Math.sin(c + Math.PI) * 0.4;
+    pose.rightLeg.x = -0.55 + Math.sin(c) * 0.4;
+    pose.body.x = -0.12;
+    pose.head.x = -0.2;
+  },
+
+  'climb-hold'(t, pose) {
+    pose.leftArm.x = -2.7;
+    pose.rightArm.x = -2.7;
+    pose.leftArm.z = ARM_REST + 0.12;
+    pose.rightArm.z = -ARM_REST - 0.12;
+    pose.leftLeg.x = -0.5 + Math.sin(t * 1.5) * 0.06;
+    pose.rightLeg.x = -0.6 + Math.sin(t * 1.5 + 1) * 0.06;
+    pose.body.x = -0.1;
+    pose.head.x = -0.15 + Math.sin(t * 0.9) * 0.05;
+  },
+
+  peek(t, pose) {
+    pose.leftArm.x = -2.7;
+    pose.rightArm.x = -2.7;
+    pose.leftArm.z = ARM_REST + 0.12;
+    pose.rightArm.z = -ARM_REST - 0.12;
+    pose.leftLeg.x = -0.5;
+    pose.rightLeg.x = -0.6;
+    pose.body.x = -0.1;
+    pose.head.x = Math.sin(t * 1.1) * 0.35;
+    pose.head.y = Math.sin(t * 0.6) * 0.15;
+  },
+
+  'sit-edge'(t, pose) {
+    pose.leftLeg.x = -1.35 + Math.sin(t * 3) * 0.45;
+    pose.rightLeg.x = -1.35 + Math.sin(t * 3 + Math.PI) * 0.45;
+    pose.leftArm.x = 0.35;
+    pose.rightArm.x = 0.35;
+    pose.leftArm.z = ARM_REST + 0.2;
+    pose.rightArm.z = -ARM_REST - 0.2;
+    pose.body.x = breathe(t, 0.01);
+    pose.head.y = Math.sin(t * 0.5) * 0.18;
+    pose.head.x = 0.08;
+  },
+
+  fall(t, pose) {
+    pose.leftArm.z = ARM_REST + 2.6 + Math.sin(t * 12) * 0.25;
+    pose.rightArm.z = -ARM_REST - 2.6 - Math.sin(t * 12 + 1) * 0.25;
+    pose.leftLeg.x = -0.35 + Math.sin(t * 9) * 0.25;
+    pose.rightLeg.x = -0.2 + Math.sin(t * 9 + Math.PI) * 0.25;
+    pose.body.x = -0.15;
+    pose.head.x = -0.3;
+  },
+
+  land(t, pose, dur) {
+    const e = envelope(t / dur);
+    pose.leftLeg.x = -e * 0.55;
+    pose.rightLeg.x = -e * 0.55;
+    pose.body.x = e * 0.35;
+    pose.head.x = e * 0.2;
+    pose.leftArm.x = -e * 0.7;
+    pose.rightArm.x = -e * 0.7;
+    pose.leftArm.z = ARM_REST + e * 0.5;
+    pose.rightArm.z = -ARM_REST - e * 0.5;
+  },
+
+  'scroll-gesture'(t, pose, dur) {
+    const e = envelope(t / dur);
+    pose.leftArm.x = -2.7;
+    pose.leftArm.z = ARM_REST + 0.12;
+    pose.leftLeg.x = -0.5;
+    pose.rightLeg.x = -0.6;
+    pose.body.x = -0.1;
+    pose.rightArm.x = -1.5 - e * (0.5 + Math.sin(t * 7) * 0.5);
+    pose.rightArm.z = -ARM_REST - 0.3;
+    pose.head.x = 0.12;
+  },
+
   held(t, pose) {
     pose.leftArm.z = ARM_REST + 2.5 + Math.sin(t * 4) * 0.15;
     pose.rightArm.z = -ARM_REST - 2.5 - Math.sin(t * 4 + 0.5) * 0.15;
@@ -216,6 +296,8 @@ const POSES = {
 };
 
 const ONE_SHOT = {
+  land: { duration: 0.5 },
+  'scroll-gesture': { duration: 2.2 },
   'idle-bakinma': { duration: 3.5 },
   'idle-gerinme': { duration: 3.0 },
   'idle-esneme': { duration: 2.8 },
@@ -247,6 +329,8 @@ export class KevinAnimator extends PlayerAnimation {
     this.returnTo = 'idle';
     this.sitting = false;
     this.sitBlend = 0;
+    this.facing = 0;
+    this.facingCurrent = 0;
     this.idleVariantIn = this.randomIdleDelay();
     this.baseY = null;
     this.poseA = emptyPose();
@@ -275,6 +359,10 @@ export class KevinAnimator extends PlayerAnimation {
 
   setSitting(value) {
     this.sitting = !!value;
+  }
+
+  setFacing(radians) {
+    this.facing = radians;
   }
 
   switchTo(name) {
@@ -336,6 +424,9 @@ export class KevinAnimator extends PlayerAnimation {
     const sitTarget = this.sitting ? 1 : 0;
     this.sitBlend += clamp(sitTarget - this.sitBlend, -delta / 0.4, delta / 0.4);
 
+    const turn = delta / 0.35;
+    this.facingCurrent += clamp(this.facing - this.facingCurrent, -turn * Math.PI, turn * Math.PI);
+
     this.apply(player, pose);
   }
 
@@ -370,6 +461,7 @@ export class KevinAnimator extends PlayerAnimation {
     }
 
     player.position.y = this.baseY + pose.rootY + SIT_ROOT_Y * s;
+    player.rotation.y = this.facingCurrent;
   }
 }
 
