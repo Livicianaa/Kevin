@@ -16,13 +16,15 @@ const PART_SPEC = {
   rightLeg: { half: [2, 6, 2], center: [-1.9, -18, 0], meshOffset: [0, -6, 0], mass: 3 },
 };
 
-// Eklem noktalari (yerel uzay): hangi iki parca nerede birlesiyor
+// Eklem noktalari (yerel uzay) ve acisal serbestlik (koni yari acisi, radyan).
+// Acisal sinir tork ile uygulanmaya calisilinca eklem kisiti onu eziyordu;
+// ConeTwistConstraint bunu motorun icinde gercek bir sinir olarak cozuyor.
 const JOINTS = [
-  ['body', 'head', [0, 0, 0]],
-  ['body', 'leftArm', [5, -2, 0]],
-  ['body', 'rightArm', [-5, -2, 0]],
-  ['body', 'leftLeg', [1.9, -12, 0]],
-  ['body', 'rightLeg', [-1.9, -12, 0]],
+  ['body', 'head', [0, 0, 0], 0.5],
+  ['body', 'leftArm', [5, -2, 0], 1.5],
+  ['body', 'rightArm', [-5, -2, 0], 1.5],
+  ['body', 'leftLeg', [1.9, -12, 0], 0.7],
+  ['body', 'rightLeg', [-1.9, -12, 0], 0.7],
 ];
 
 const GRAVITY = -220;
@@ -30,48 +32,75 @@ const GROUND_Y = -34;
 
 // PointToPoint eklemleri acisal sinir koymuyor; uzuvlar serbestce 180 derece
 // donebiliyordu. Her uzvu kendi dinlenme acisina ceken bir yay + sinir ekliyoruz.
+// "Aktif ragdoll": govde ve kafa kendilerini dik tutmaya calisiyor (kas kuvveti),
+// kollar serbest sarkiyor. Tamamen pasif birakilinca karakter yercekimiyle
+// omuz ekleminde yatay yayiliyordu - fiziksel olarak dogru ama cirkin.
 const JOINT_STIFFNESS = {
-  head: 70,
-  body: 14,
-  leftArm: 16,
-  rightArm: 16,
-  leftLeg: 34,
-  rightLeg: 34,
+  head: 420,
+  body: 520,
+  leftArm: 26,
+  rightArm: 26,
+  leftLeg: 190,
+  rightLeg: 190,
 };
 
+const UPRIGHT_DAMPING = {
+  head: 26,
+  body: 30,
+  leftArm: 3,
+  rightArm: 3,
+  leftLeg: 16,
+  rightLeg: 16,
+};
+
+// Insan eklemi gibi dar sinirlar. Genis birakilinca govde omuz ekleminde
+// 87 dereceye kadar donup karakter yatay yayiliyordu.
 const JOINT_LIMIT = {
-  head: 0.7,
-  body: 1.6,
-  leftArm: 2.4,
-  rightArm: 2.4,
-  leftLeg: 1.1,
-  rightLeg: 1.1,
+  head: 0.45,
+  body: 0.4,
+  leftArm: 2.6,
+  rightArm: 2.6,
+  leftLeg: 0.75,
+  rightLeg: 0.75,
 };
 
 export class Ragdoll {
   constructor() {
     this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, GRAVITY, 0) });
     this.world.allowSleep = false;
-    this.world.solver.iterations = 12;
+    this.world.solver.iterations = 40;
+    this.world.solver.tolerance = 0.0005;
 
     this.bodies = {};
     this.constraints = [];
     this.grabbed = null;
-    this.grabTarget = new CANNON.Vec3();
+    this.grabConstraint = null;
+    // Kas gucu: 1 = direniyor/debeleniyor, dusuk = gevsemis sarkiyor
+    this.muscle = 1;
+
+    // Farenin kendisi kutlesiz bir govde: tutulan uzuv buna bir noktadan bagli,
+    // boylece uzuv serbestce donuyor ama tutulan nokta farede kaliyor.
+    this.pointer = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
+    this.world.addBody(this.pointer);
 
     for (const [name, spec] of Object.entries(PART_SPEC)) {
       const body = new CANNON.Body({
         mass: spec.mass,
         shape: new CANNON.Box(new CANNON.Vec3(...spec.half)),
         position: new CANNON.Vec3(...spec.center),
-        linearDamping: 0.22,
-        angularDamping: 0.35,
+        linearDamping: 0.35,
+        angularDamping: 0.55,
       });
+      // Karakter tek duzlemde kalsin: z'de otelenme ve x/y'de donme kapali.
+      // Bunu motorun kendi mekanizmasiyla yapiyoruz; pozisyon/quaternion'a elle
+      // mudahale etmek eklem cozumunu bozuyor ve uzuvlar govdeden kopuyordu.
+      body.linearFactor.set(1, 1, 0);
+      body.angularFactor.set(0, 0, 1);
       this.bodies[name] = body;
       this.world.addBody(body);
     }
 
-    for (const [parent, child, point] of JOINTS) {
+    for (const [parent, child, point, angle] of JOINTS) {
       const a = this.bodies[parent];
       const b = this.bodies[child];
       const pivotA = new CANNON.Vec3(
@@ -84,7 +113,15 @@ export class Ragdoll {
         point[1] - b.position.y,
         point[2] - b.position.z,
       );
-      const joint = new CANNON.PointToPointConstraint(a, pivotA, b, pivotB);
+      const joint = new CANNON.ConeTwistConstraint(a, b, {
+        pivotA,
+        pivotB,
+        axisA: new CANNON.Vec3(0, 1, 0),
+        axisB: new CANNON.Vec3(0, 1, 0),
+        angle,
+        twistAngle: 0.05,
+        maxForce: 1e8,
+      });
       this.constraints.push(joint);
       this.world.addConstraint(joint);
     }
@@ -108,38 +145,55 @@ export class Ragdoll {
       body.quaternion.set(0, 0, 0, 1);
       body.velocity.setZero();
       body.angularVelocity.setZero();
-      body.type = CANNON.Body.DYNAMIC;
-      body.updateMassProperties();
+    }
+    if (this.grabConstraint) {
+      this.world.removeConstraint(this.grabConstraint);
+      this.grabConstraint = null;
     }
     this.grabbed = null;
   }
 
-  // Bir uzvu fareye baglar: o uzuv kinematik olur, gerisi ondan sarkar.
+  // Bir uzvun UST UCUNDAN tutar: uzuv o noktadan asili kalir, serbestce doner,
+  // govdenin geri kalani ondan sarkar.
   grab(partName) {
     const name = this.bodies[partName] ? partName : 'body';
     this.rest();
     this.grabbed = name;
+
     const body = this.bodies[name];
-    body.type = CANNON.Body.KINEMATIC;
-    body.velocity.setZero();
-    body.angularVelocity.setZero();
-    this.grabTarget.copy(body.position);
+    const spec = PART_SPEC[name];
+    // Kol ELDEN, bacak AYAKTAN, kafa/govde ust ucundan tutuluyor.
+    const fromBottom = name.endsWith('Arm') || name.endsWith('Leg');
+    const localPoint = new CANNON.Vec3(0, spec.half[1] * (fromBottom ? -0.85 : 0.85), 0);
+
+    const worldPoint = body.pointToWorldFrame(localPoint, new CANNON.Vec3());
+    this.pointer.position.copy(worldPoint);
+
+    this.grabConstraint = new CANNON.PointToPointConstraint(
+      body,
+      localPoint,
+      this.pointer,
+      new CANNON.Vec3(),
+      1e6,
+    );
+    this.world.addConstraint(this.grabConstraint);
   }
 
   release() {
-    if (!this.grabbed) return;
-    this.bodies[this.grabbed].type = CANNON.Body.DYNAMIC;
-    this.bodies[this.grabbed].updateMassProperties();
+    if (this.grabConstraint) {
+      this.world.removeConstraint(this.grabConstraint);
+      this.grabConstraint = null;
+    }
     this.grabbed = null;
   }
 
-  // Tutulan uzvun hedef noktasi. Hiz constraint'lere ivme olarak geciyor.
-  setGrabPoint(x, y, dt) {
-    if (!this.grabbed) return;
-    const body = this.bodies[this.grabbed];
-    const step = Math.max(dt, 1 / 120);
-    body.velocity.set((x - body.position.x) / step, (y - body.position.y) / step, 0);
-    this.grabTarget.set(x, y, 0);
+  setMuscle(value) {
+    this.muscle = Math.max(0.05, Math.min(1, value));
+  }
+
+  // Tutma noktasi (ragdoll yerel uzayinda).
+  setGrabPoint(x, y) {
+    this.pointer.position.set(x, y, 0);
   }
 
   applyJointForces(dt) {
@@ -149,17 +203,10 @@ export class Ragdoll {
       const q = body.quaternion;
       const angle = 2 * Math.atan2(q.z, q.w);
       const stiffness = JOINT_STIFFNESS[name] || 0;
-      const limit = JOINT_LIMIT[name] ?? Math.PI;
 
-      body.angularVelocity.z -= angle * stiffness * dt;
-
-      if (Math.abs(angle) > limit) {
-        const clamped = Math.sign(angle) * limit;
-        const half = clamped / 2;
-        q.z = Math.sin(half);
-        q.w = Math.cos(half);
-        body.angularVelocity.z *= 0.25;
-      }
+      const damping = UPRIGHT_DAMPING[name] || 0;
+      const m = this.muscle;
+      body.angularVelocity.z -= (angle * stiffness * m + body.angularVelocity.z * damping * m) * dt;
     }
   }
 
@@ -173,27 +220,7 @@ export class Ragdoll {
 
   step(dt) {
     this.applyJointForces(dt);
-    this.world.step(1 / 60, dt, 3);
-    if (this.grabbed) {
-      const body = this.bodies[this.grabbed];
-      body.position.x = this.grabTarget.x;
-      body.position.y = this.grabTarget.y;
-      body.position.z = 0;
-    }
-    // Duzlemde kal: z ekseninde savrulma karakteri ekrandan cikariyor
-    for (const name of Object.keys(PART_SPEC)) {
-      const body = this.bodies[name];
-      body.position.z = 0;
-      body.velocity.z = 0;
-      body.angularVelocity.x = 0;
-      body.angularVelocity.y = 0;
-      const q = body.quaternion;
-      q.x = 0;
-      q.y = 0;
-      const len = Math.hypot(q.z, q.w) || 1;
-      q.z /= len;
-      q.w /= len;
-    }
+    this.world.step(1 / 120, dt, 6);
   }
 
   // Fizik sonucunu skinview3d parcalarina yaz.

@@ -50,6 +50,14 @@ function ragdollGrab(part) {
   animator.setRagdollActive(true);
 }
 
+function ragdollGrabPoint(x, y) {
+  if (ragdoll) ragdoll.setGrabPoint(x, y);
+}
+
+function ragdollMuscle(value) {
+  if (ragdoll) ragdoll.setMuscle(value);
+}
+
 function ragdollRelease() {
   if (!ragdoll) return;
   ragdoll.release();
@@ -117,4 +125,4 @@ function currentState() {
 }
 
 window.KevinWorld = KevinWorld;
-window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, ragdollGrab, ragdollRelease, ragdollStop, ragdollInertia, ragdollSettled, useCemPack, setCemContext, currentState, ANIMATION_STATES };
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, ragdollGrab, ragdollGrabPoint, ragdollMuscle, ragdollRelease, ragdollStop, ragdollInertia, ragdollSettled, useCemPack, setCemContext, currentState, ANIMATION_STATES };

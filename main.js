@@ -389,6 +389,8 @@ function createWindow() {
   if (animArg) params.set('anim', animArg.slice(7));
   if (process.argv.includes('--no-vad')) params.set('novad', '1');
   if (process.argv.includes('--no-cem')) params.set('cem', '0');
+  const ragdollArg = process.argv.find((a) => a.startsWith('--ragdoll='));
+  if (ragdollArg) params.set('ragdoll', ragdollArg.slice(10));
   const query = params.toString() ? `?${params}` : '';
   win.loadURL(`kevin://app/renderer/index.html${query}`);
 

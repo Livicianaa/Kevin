@@ -206,7 +206,16 @@ function frame(now) {
 
     if (world.mode === 'held' && lastCursor) {
       world.dragTo(lastCursor.x, lastCursor.y + dragOffsetY);
+      // Farenin ragdoll yerel uzayindaki karsiligi: karakterin ayagi yerel -24'te.
+      window.KevinSkin.ragdollGrabPoint(
+        (lastCursor.x - world.x) / RAGDOLL_SCALE,
+        (world.y - lastCursor.y) / RAGDOLL_SCALE - 24,
+      );
+      // Debelenirken kaslari kasiyor, arada gevsiyip sarkiyor
+      window.KevinSkin.ragdollMuscle(world.struggling ? 1 : 0.22);
     }
+
+    if (world.mode === 'fall') window.KevinSkin.ragdollMuscle(0.12);
 
     if (world.mode === 'held' || world.mode === 'fall') {
       const vx = (world.x - lastWorldPos.x) / dt;
@@ -346,6 +355,16 @@ async function initCemPack() {
 
 initCemPack();
 
+// Gelistirme: --ragdoll=<uzuv> ile karakter o uzvundan asili baslatiliyor
+const ragdollTest = new URLSearchParams(window.location.search).get('ragdoll');
+if (ragdollTest) {
+  setTimeout(() => {
+    window.KevinSkin.ragdollGrab(ragdollTest);
+    window.KevinSkin.ragdollGrabPoint(2, 14);
+    if (world) world.grab('arm');
+  }, 1200);
+}
+
 initWorld();
 requestAnimationFrame(frame);
 
@@ -357,6 +376,7 @@ const CLICK_MAX_MS = 260;
 
 let pressInfo = null;
 let dragOffsetY = 0;
+const RAGDOLL_SCALE = 6;
 let lastWorldPos = { x: 0, y: 0 };
 let lastWorldVel = { x: 0, y: 0 };
 
