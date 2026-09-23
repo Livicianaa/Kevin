@@ -1,257 +1,203 @@
-import * as CANNON from 'cannon-es';
-
-// Minecraft rig'i icin gercek bir ragdoll: 6 rijit govde, eklemlerle bagli.
-// Karakter bir uzvundan tutuldugunda o uzuv fareye kinematik olarak bagli,
-// geri kalan govde yercekimiyle sarkiyor ve fare hareketinden ivme aliyor.
+// Kevin'in ragdoll'u: acisal zincir cozucusu.
+//
+// Neden fizik motoru degil: cannon-es ile kurulan kisit tabanli ragdoll bu
+// olcekte (kucuk kutle, sert yay, 60 Hz) kararli calismadi - uzuvlar govdeden
+// kopuyor ya da titriyordu. Burada uzuvlar TANIM GEREGI bagli: her uzvun tek
+// bir acisi var, konumlar ileri kinematikle hesaplaniyor. Kopma imkansiz,
+// aci sinirlari dogrudan uygulanabiliyor.
 //
 // Olcu birimi skinview3d ile ayni (1 birim = 1 Minecraft pikseli).
-// Konumlar skin grubunun yerel uzayinda.
 
-const PART_SPEC = {
-  head: { half: [4, 4, 4], center: [0, 4, 0], meshOffset: [0, 4, 0], mass: 3 },
-  body: { half: [4, 6, 2], center: [0, -6, 0], meshOffset: [0, 0, 0], mass: 8 },
-  leftArm: { half: [2, 6, 2], center: [5, -6, 0], meshOffset: [0, -4, 0], mass: 2 },
-  rightArm: { half: [2, 6, 2], center: [-5, -6, 0], meshOffset: [0, -4, 0], mass: 2 },
-  leftLeg: { half: [2, 6, 2], center: [1.9, -18, 0], meshOffset: [0, -6, 0], mass: 3 },
-  rightLeg: { half: [2, 6, 2], center: [-1.9, -18, 0], meshOffset: [0, -6, 0], mass: 3 },
+const LIMBS = {
+  head: { joint: [0, 0], length: 4, rest: 0, limit: 0.5, inertia: 1.0, meshOffset: [0, 4] },
+  leftArm: { joint: [5, -2], length: 6, rest: 0, limit: 2.7, inertia: 0.55, meshOffset: [0, -4] },
+  rightArm: { joint: [-5, -2], length: 6, rest: 0, limit: 2.7, inertia: 0.55, meshOffset: [0, -4] },
+  leftLeg: { joint: [1.9, -12], length: 6, rest: 0, limit: 1.0, inertia: 0.8, meshOffset: [0, -6] },
+  rightLeg: { joint: [-1.9, -12], length: 6, rest: 0, limit: 1.0, inertia: 0.8, meshOffset: [0, -6] },
 };
 
-// Eklem noktalari (yerel uzay) ve acisal serbestlik (koni yari acisi, radyan).
-// Acisal sinir tork ile uygulanmaya calisilinca eklem kisiti onu eziyordu;
-// ConeTwistConstraint bunu motorun icinde gercek bir sinir olarak cozuyor.
-const JOINTS = [
-  ['body', 'head', [0, 0, 0], 0.5],
-  ['body', 'leftArm', [5, -2, 0], 1.5],
-  ['body', 'rightArm', [-5, -2, 0], 1.5],
-  ['body', 'leftLeg', [1.9, -12, 0], 0.7],
-  ['body', 'rightLeg', [-1.9, -12, 0], 0.7],
-];
-
-const GRAVITY = -220;
-const GROUND_Y = -34;
-
-// PointToPoint eklemleri acisal sinir koymuyor; uzuvlar serbestce 180 derece
-// donebiliyordu. Her uzvu kendi dinlenme acisina ceken bir yay + sinir ekliyoruz.
-// "Aktif ragdoll": govde ve kafa kendilerini dik tutmaya calisiyor (kas kuvveti),
-// kollar serbest sarkiyor. Tamamen pasif birakilinca karakter yercekimiyle
-// omuz ekleminde yatay yayiliyordu - fiziksel olarak dogru ama cirkin.
-const JOINT_STIFFNESS = {
-  head: 420,
-  body: 520,
-  leftArm: 26,
-  rightArm: 26,
-  leftLeg: 190,
-  rightLeg: 190,
+// Uzvun tutuldugu nokta (kendi ekseninde): kol ELDEN, bacak AYAKTAN,
+// kafa ve govde ust ucundan.
+const GRAB_POINT = {
+  head: [0, 4],
+  body: [0, 6],
+  leftArm: [0, -11],
+  rightArm: [0, -11],
+  leftLeg: [0, -12],
+  rightLeg: [0, -12],
 };
 
-const UPRIGHT_DAMPING = {
-  head: 26,
-  body: 30,
-  leftArm: 3,
-  rightArm: 3,
-  leftLeg: 16,
-  rightLeg: 16,
-};
+const BODY_CENTER = [0, -6];
+const GRAVITY = 16;
+const GROUND_Y = -24;
 
-// Insan eklemi gibi dar sinirlar. Genis birakilinca govde omuz ekleminde
-// 87 dereceye kadar donup karakter yatay yayiliyordu.
-const JOINT_LIMIT = {
-  head: 0.45,
-  body: 0.4,
-  leftArm: 2.6,
-  rightArm: 2.6,
-  leftLeg: 0.75,
-  rightLeg: 0.75,
-};
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function rotate(x, y, angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [x * c - y * s, x * s + y * c];
+}
 
 export class Ragdoll {
   constructor() {
-    this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, GRAVITY, 0) });
-    this.world.allowSleep = false;
-    this.world.solver.iterations = 40;
-    this.world.solver.tolerance = 0.0005;
-
-    this.bodies = {};
-    this.constraints = [];
+    this.bodyAngle = 0;
+    this.bodyVel = 0;
+    this.bodyPos = [0, BODY_CENTER[1]];
+    this.bodyDrop = 0;
+    this.limbs = {};
+    for (const name of Object.keys(LIMBS)) {
+      this.limbs[name] = { angle: 0, vel: 0 };
+    }
     this.grabbed = null;
-    this.grabConstraint = null;
-    // Kas gucu: 1 = direniyor/debeleniyor, dusuk = gevsemis sarkiyor
+    this.target = [0, 0];
     this.muscle = 1;
-
-    // Farenin kendisi kutlesiz bir govde: tutulan uzuv buna bir noktadan bagli,
-    // boylece uzuv serbestce donuyor ama tutulan nokta farede kaliyor.
-    this.pointer = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-    this.world.addBody(this.pointer);
-
-    for (const [name, spec] of Object.entries(PART_SPEC)) {
-      const body = new CANNON.Body({
-        mass: spec.mass,
-        shape: new CANNON.Box(new CANNON.Vec3(...spec.half)),
-        position: new CANNON.Vec3(...spec.center),
-        linearDamping: 0.35,
-        angularDamping: 0.55,
-      });
-      // Karakter tek duzlemde kalsin: z'de otelenme ve x/y'de donme kapali.
-      // Bunu motorun kendi mekanizmasiyla yapiyoruz; pozisyon/quaternion'a elle
-      // mudahale etmek eklem cozumunu bozuyor ve uzuvlar govdeden kopuyordu.
-      body.linearFactor.set(1, 1, 0);
-      body.angularFactor.set(0, 0, 1);
-      this.bodies[name] = body;
-      this.world.addBody(body);
-    }
-
-    for (const [parent, child, point, angle] of JOINTS) {
-      const a = this.bodies[parent];
-      const b = this.bodies[child];
-      const pivotA = new CANNON.Vec3(
-        point[0] - a.position.x,
-        point[1] - a.position.y,
-        point[2] - a.position.z,
-      );
-      const pivotB = new CANNON.Vec3(
-        point[0] - b.position.x,
-        point[1] - b.position.y,
-        point[2] - b.position.z,
-      );
-      const joint = new CANNON.ConeTwistConstraint(a, b, {
-        pivotA,
-        pivotB,
-        axisA: new CANNON.Vec3(0, 1, 0),
-        axisB: new CANNON.Vec3(0, 1, 0),
-        angle,
-        twistAngle: 0.05,
-        maxForce: 1e8,
-      });
-      this.constraints.push(joint);
-      this.world.addConstraint(joint);
-    }
-
-    const ground = new CANNON.Body({
-      mass: 0,
-      shape: new CANNON.Plane(),
-      position: new CANNON.Vec3(0, GROUND_Y, 0),
-    });
-    ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-    this.world.addBody(ground);
-
-    this.rest();
   }
 
-  // Ragdoll'u dik durusa sifirla
   rest() {
-    for (const [name, spec] of Object.entries(PART_SPEC)) {
-      const body = this.bodies[name];
-      body.position.set(...spec.center);
-      body.quaternion.set(0, 0, 0, 1);
-      body.velocity.setZero();
-      body.angularVelocity.setZero();
+    this.bodyAngle = 0;
+    this.bodyVel = 0;
+    this.bodyPos = [0, BODY_CENTER[1]];
+    this.bodyDrop = 0;
+    for (const limb of Object.values(this.limbs)) {
+      limb.angle = 0;
+      limb.vel = 0;
     }
-    if (this.grabConstraint) {
-      this.world.removeConstraint(this.grabConstraint);
-      this.grabConstraint = null;
-    }
-    this.grabbed = null;
   }
 
-  // Bir uzvun UST UCUNDAN tutar: uzuv o noktadan asili kalir, serbestce doner,
-  // govdenin geri kalani ondan sarkar.
   grab(partName) {
-    const name = this.bodies[partName] ? partName : 'body';
     this.rest();
-    this.grabbed = name;
+    this.grabbed = GRAB_POINT[partName] ? partName : 'body';
+    // Bacaktan tutulmak kararsiz denge: kucuk bir sapma olmadan ters donmez.
+    this.bodyAngle = 0.12;
+  }
 
-    const body = this.bodies[name];
-    const spec = PART_SPEC[name];
-    // Kol ELDEN, bacak AYAKTAN, kafa/govde ust ucundan tutuluyor.
-    const fromBottom = name.endsWith('Arm') || name.endsWith('Leg');
-    const localPoint = new CANNON.Vec3(0, spec.half[1] * (fromBottom ? -0.85 : 0.85), 0);
-
-    const worldPoint = body.pointToWorldFrame(localPoint, new CANNON.Vec3());
-    this.pointer.position.copy(worldPoint);
-
-    this.grabConstraint = new CANNON.PointToPointConstraint(
-      body,
-      localPoint,
-      this.pointer,
-      new CANNON.Vec3(),
-      1e6,
-    );
-    this.world.addConstraint(this.grabConstraint);
+  // Govdenin asildigi eklem (govde merkezine gore kaldirac kolu).
+  hangPivot() {
+    if (this.grabbed === 'body' || !LIMBS[this.grabbed]) return [0, 6];
+    const j = LIMBS[this.grabbed].joint;
+    return [j[0] - BODY_CENTER[0], j[1] - BODY_CENTER[1]];
   }
 
   release() {
-    if (this.grabConstraint) {
-      this.world.removeConstraint(this.grabConstraint);
-      this.grabConstraint = null;
-    }
     this.grabbed = null;
   }
 
   setMuscle(value) {
-    this.muscle = Math.max(0.05, Math.min(1, value));
+    this.muscle = clamp(value, 0.05, 1);
   }
 
-  // Tutma noktasi (ragdoll yerel uzayinda).
   setGrabPoint(x, y) {
-    this.pointer.position.set(x, y, 0);
+    this.target = [x, y];
   }
 
-  applyJointForces(dt) {
-    for (const name of Object.keys(PART_SPEC)) {
-      if (name === this.grabbed) continue;
-      const body = this.bodies[name];
-      const q = body.quaternion;
-      const angle = 2 * Math.atan2(q.z, q.w);
-      const stiffness = JOINT_STIFFNESS[name] || 0;
+  // Tutulan noktanin govde merkezine gore konumu (govde acisi dahil).
+  grabOffset() {
+    const name = this.grabbed;
+    const point = GRAB_POINT[name];
+    if (name === 'body') return rotate(point[0], point[1], this.bodyAngle);
 
-      const damping = UPRIGHT_DAMPING[name] || 0;
-      const m = this.muscle;
-      body.angularVelocity.z -= (angle * stiffness * m + body.angularVelocity.z * damping * m) * dt;
-    }
-  }
-
-  // Fare hizlandiginda govde geride kalir: tasima ataleti.
-  setInertia(ax, ay) {
-    const limit = 600;
-    const cx = Math.max(-limit, Math.min(limit, -ax));
-    const cy = Math.max(-limit, Math.min(limit, -ay));
-    this.world.gravity.set(cx, GRAVITY + cy, 0);
+    const spec = LIMBS[name];
+    const limbAngle = this.bodyAngle + this.limbs[name].angle;
+    const jointLocal = rotate(spec.joint[0], spec.joint[1] - BODY_CENTER[1], this.bodyAngle);
+    const alongLimb = rotate(0, point[1] + spec.length, limbAngle);
+    return [jointLocal[0] + alongLimb[0], jointLocal[1] + alongLimb[1]];
   }
 
   step(dt) {
-    this.applyJointForces(dt);
-    this.world.step(1 / 120, dt, 6);
+    const h = Math.min(dt, 1 / 30);
+    const m = this.muscle;
+
+    if (this.grabbed) {
+      // Govde asildigi eklemin altina donmeye calisiyor: agirlik merkezinden
+      // eklem noktasina olan kaldiracin yatay bileseni tork uretiyor.
+      const pivot = this.hangPivot();
+      const lever = rotate(-pivot[0], -pivot[1], this.bodyAngle);
+      const hangTorque = -lever[0] * GRAVITY * 0.32;
+      const spring = -this.bodyAngle * (0.6 + 7 * m);
+      const damp = -this.bodyVel * (3.2 + 2.5 * m);
+      this.bodyVel = clamp(this.bodyVel + (hangTorque + spring + damp) * h, -9, 9);
+      this.bodyAngle = clamp(this.bodyAngle + this.bodyVel * h, -2.4, 2.4);
+      this.bodyDrop = 0;
+    } else {
+      // Serbest dusus sirasinda govde gevsek sallaniyor.
+      const spring = -this.bodyAngle * 12;
+      const damp = -this.bodyVel * 5;
+      this.bodyVel = clamp(this.bodyVel + (spring + damp) * h, -9, 9);
+      this.bodyAngle = clamp(this.bodyAngle + this.bodyVel * h, -2.4, 2.4);
+    }
+
+    for (const [name, spec] of Object.entries(LIMBS)) {
+      if (name === this.grabbed) {
+        // Tutulan uzuv: govdenin agirligi onu duzeltiyor
+        const limb = this.limbs[name];
+        const spring = -limb.angle * 22;
+        const damp = -limb.vel * 6;
+        limb.vel = clamp(limb.vel + (spring + damp) * h, -10, 10);
+        limb.angle = clamp(limb.angle + limb.vel * h, -spec.limit, spec.limit);
+        continue;
+      }
+
+      const limb = this.limbs[name];
+      const worldAngle = this.bodyAngle + limb.angle;
+      // Uzvun kutle merkezi eklemin altinda: yercekimi onu dikey yapmaya calisiyor
+      const gravityTorque = -Math.sin(worldAngle) * GRAVITY * spec.inertia;
+      const spring = -limb.angle * (2 + 26 * m) * spec.inertia;
+      const damp = -limb.vel * (4 + 3 * m);
+
+      limb.vel = clamp(limb.vel + (gravityTorque + spring + damp) * h, -12, 12);
+      limb.angle = clamp(limb.angle + limb.vel * h, -spec.limit, spec.limit);
+    }
+
+    // Tutulan nokta tam farede olsun: govde konumunu ona gore yerlestiriyoruz.
+    if (this.grabbed) {
+      const offset = this.grabOffset();
+      this.bodyPos = [this.target[0] - offset[0], this.target[1] - offset[1]];
+    } else {
+      this.bodyPos = [0, BODY_CENTER[1]];
+    }
   }
 
-  // Fizik sonucunu skinview3d parcalarina yaz.
   applyTo(skin) {
-    for (const [name, spec] of Object.entries(PART_SPEC)) {
-      const body = this.bodies[name];
+    const [bx, by] = this.bodyPos;
+
+    if (skin.body) {
+      skin.body.position.set(bx, by, 0);
+      skin.body.rotation.set(0, 0, this.bodyAngle);
+    }
+
+    for (const [name, spec] of Object.entries(LIMBS)) {
       const part = skin[name];
       if (!part) continue;
 
-      part.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+      const limbAngle = this.bodyAngle + this.limbs[name].angle;
+      const jointOffset = rotate(spec.joint[0], spec.joint[1] - BODY_CENTER[1], this.bodyAngle);
+      const jointX = bx + jointOffset[0];
+      const jointY = by + jointOffset[1];
 
-      // Parca gruplarinin origin'i eklem noktasinda, mesh ise offsetli duruyor.
-      // group.position = ragdollMerkezi - q * meshOffset
-      const o = spec.meshOffset;
-      const rotated = new CANNON.Vec3(o[0], o[1], o[2]);
-      body.quaternion.vmult(rotated, rotated);
-      part.position.set(
-        body.position.x - rotated.x,
-        body.position.y - rotated.y,
-        body.position.z - rotated.z,
-      );
+      // Parca gruplarinin origin'i eklemde; mesh offset'i aci ile birlikte doner.
+      part.position.set(jointX, jointY, 0);
+      part.rotation.set(0, 0, limbAngle);
     }
   }
 
   get settled() {
-    let energy = 0;
-    for (const name of Object.keys(PART_SPEC)) {
-      energy += this.bodies[name].velocity.lengthSquared();
+    let energy = this.bodyVel * this.bodyVel;
+    for (const limb of Object.values(this.limbs)) energy += limb.vel * limb.vel;
+    return energy < 0.05;
+  }
+
+  // Tasima ataleti: fare hizlandiginda uzuvlar geride kaliyor.
+  setInertia(ax, ay) {
+    const push = clamp(-ax / 900, -1.2, 1.2);
+    for (const [name, spec] of Object.entries(LIMBS)) {
+      if (name === this.grabbed) continue;
+      this.limbs[name].vel += push * spec.inertia;
     }
-    return energy < 4;
+    this.bodyVel += push * 0.5;
   }
 }
 
-export const RAGDOLL_PARTS = Object.keys(PART_SPEC);
+export const RAGDOLL_PARTS = ['body', ...Object.keys(LIMBS)];

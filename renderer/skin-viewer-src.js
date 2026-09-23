@@ -50,8 +50,8 @@ function ragdollGrab(part) {
   animator.setRagdollActive(true);
 }
 
-function ragdollGrabPoint(x, y) {
-  if (ragdoll) ragdoll.setGrabPoint(x, y);
+function ragdollGrabPoint(x, y, dt) {
+  if (ragdoll) ragdoll.setGrabPoint(x, y, dt);
 }
 
 function ragdollMuscle(value) {

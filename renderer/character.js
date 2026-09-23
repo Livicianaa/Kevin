@@ -210,6 +210,7 @@ function frame(now) {
       window.KevinSkin.ragdollGrabPoint(
         (lastCursor.x - world.x) / RAGDOLL_SCALE,
         (world.y - lastCursor.y) / RAGDOLL_SCALE - 24,
+        dt,
       );
       // Debelenirken kaslari kasiyor, arada gevsiyip sarkiyor
       window.KevinSkin.ragdollMuscle(world.struggling ? 1 : 0.22);

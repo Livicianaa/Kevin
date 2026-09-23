@@ -68,25 +68,37 @@ console.log('SIT-EDGE bacak sallanma araligi =', Math.min(...legs).toFixed(2), '
 const { Ragdoll } = await import('../renderer/ragdoll.js');
 
 const rag = new Ragdoll();
-rag.grab('leftArm');
-for (let i = 0; i < 150; i++) {
-  rag.setGrabPoint(5, 18, 1 / 60);
-  rag.step(1 / 60);
+const degOf = (a) => Number(((a * 180) / Math.PI).toFixed(0));
+
+function hang(part, muscle) {
+  rag.grab(part);
+  rag.setMuscle(muscle);
+  for (let i = 0; i < 400; i++) {
+    rag.setGrabPoint(0, 16);
+    rag.step(1 / 60);
+  }
+  const samples = [];
+  for (let i = 0; i < 120; i++) {
+    rag.setGrabPoint(0, 16);
+    rag.step(1 / 60);
+    samples.push((rag.bodyAngle * 180) / Math.PI);
+  }
+  return { angle: degOf(rag.bodyAngle), jitter: Math.max(...samples) - Math.min(...samples) };
 }
-const deg = (b) => (2 * Math.atan2(b.quaternion.z, b.quaternion.w) * 180) / Math.PI;
-console.log(
-  'RAGDOLL koldan asili: govde y =', rag.bodies.body.position.y.toFixed(1),
-  '| kafa y =', rag.bodies.head.position.y.toFixed(1),
-  '| bacak y =', rag.bodies.leftLeg.position.y.toFixed(1),
-);
-const angles = ['body', 'head', 'leftLeg', 'rightArm'].map((n) => Math.abs(deg(rag.bodies[n])));
-console.log('RAGDOLL eklem acilari sinirda mi (hepsi < 140):', angles.every((a) => a < 140), angles.map((a) => a.toFixed(0)).join(', '));
+
+const fromHead = hang('head', 0.22);
+const fromArm = hang('leftArm', 0.22);
+const fromRightArm = hang('rightArm', 0.22);
+const fromLeg = hang('leftLeg', 0.22);
+
+console.log('RAGDOLL kafadan tutunca dik mi:', Math.abs(fromHead.angle) < 10, `(${fromHead.angle} derece)`);
+console.log('RAGDOLL koldan tutunca sarkiyor mu:', Math.abs(fromArm.angle) > 25, `(${fromArm.angle} derece)`);
+console.log('RAGDOLL sag/sol kol simetrik mi:', Math.abs(fromArm.angle + fromRightArm.angle) < 5);
+console.log('RAGDOLL bacaktan tutunca bas asagi mi:', Math.abs(fromLeg.angle) > 100, `(${fromLeg.angle} derece)`);
+const worstJitter = Math.max(fromHead.jitter, fromArm.jitter, fromLeg.jitter);
+console.log('RAGDOLL titreme yok mu:', worstJitter < 0.5, `(en kotu ${worstJitter.toFixed(3)} derece)`);
 
 rag.grab('leftArm');
-const before = deg(rag.bodies.leftLeg);
-for (let i = 0; i < 50; i++) { rag.setGrabPoint(5 + i * 2, 18, 1 / 60); rag.step(1 / 60); }
-console.log('RAGDOLL hizli sallaninca bacak savruldu mu:', Math.abs(deg(rag.bodies.leftLeg) - before) > 3);
-
-rag.release();
-for (let i = 0; i < 300; i++) rag.step(1 / 60);
-console.log('RAGDOLL birakildi, zemine indi mi:', rag.bodies.body.position.y < 0);
+const beforeSwing = rag.limbs.leftLeg.vel;
+rag.setInertia(-900, 0);
+console.log('RAGDOLL ani hareket uzuvlara ivme veriyor mu:', rag.limbs.leftLeg.vel !== beforeSwing);
