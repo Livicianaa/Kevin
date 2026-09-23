@@ -63,6 +63,108 @@ window.KevinSkin.initSkinViewer(character, 'assets/skins/totem.png', CHAR_WIDTH,
 
 positionCharacter(IDLE_SIZE);
 
+// --- Animasyon durum makinesi ---
+
+const SLEEP_AFTER_MS = 3 * 60 * 1000;
+const MUSIC_POLL_MS = 6000;
+const NIGHT_START = 0;
+const NIGHT_END = 6;
+const LONG_PRESS_MS = 600;
+
+const YES_PREFIXES = ['evet', 'tabii', 'olur', 'tamam', 'aynen', 'kesinlikle', 'elbette'];
+const NO_PREFIXES = ['hayir', 'hayır', 'olmaz', 'maalesef', 'uzgunum', 'üzgünüm', 'yok,'];
+
+let busyState = null;
+let listening = false;
+let musicPlaying = false;
+let lastInteraction = Date.now();
+
+const forcedAnim = new URLSearchParams(window.location.search).get('anim');
+
+function refreshKevinState() {
+  if (forcedAnim) return;
+  if (busyState) return window.KevinSkin.setState(busyState);
+  if (listening) return window.KevinSkin.setState('listen');
+  if (musicPlaying) return window.KevinSkin.setState('dance');
+  if (conversationActive) return window.KevinSkin.setState('idle');
+  if (Date.now() - lastInteraction > SLEEP_AFTER_MS) return window.KevinSkin.setState('sleep');
+
+  const hour = new Date().getHours();
+  if (hour >= NIGHT_START && hour < NIGHT_END) return window.KevinSkin.setState('night-sleepy');
+  window.KevinSkin.setState('idle');
+}
+
+function setBusy(state) {
+  busyState = state;
+  refreshKevinState();
+}
+
+function markInteraction() {
+  const wasAsleep = window.KevinSkin.currentState() === 'sleep';
+  lastInteraction = Date.now();
+  if (wasAsleep) window.KevinSkin.play('wake');
+  refreshKevinState();
+}
+
+function playAnswerGesture(reply) {
+  const head = reply.trim().toLowerCase();
+  if (YES_PREFIXES.some((w) => head.startsWith(w))) window.KevinSkin.play('nod-yes');
+  else if (NO_PREFIXES.some((w) => head.startsWith(w))) window.KevinSkin.play('nod-no');
+}
+
+async function pollMusic() {
+  try {
+    const status = await window.kevinAPI.musicStatus();
+    musicPlaying = !!(status && status.playing);
+  } catch {
+    musicPlaying = false;
+  }
+  refreshKevinState();
+}
+
+setInterval(refreshKevinState, 1000);
+
+if (forcedAnim) {
+  const [state, sit] = forcedAnim.split(':');
+  window.KevinSkin.setSitting(sit === 'sit');
+  if (window.KevinSkin.ANIMATION_STATES.includes(state)) {
+    window.KevinSkin.setState(state);
+    window.KevinSkin.play(state);
+    window.KevinSkin.setSpeed(0.35);
+    setInterval(() => {
+      if (window.KevinSkin.currentState() !== state) window.KevinSkin.play(state);
+    }, 250);
+  }
+}
+
+pollMusic();
+setInterval(pollMusic, MUSIC_POLL_MS);
+
+let pressTimer = null;
+let suppressClick = false;
+
+character.addEventListener('mousedown', () => {
+  pressTimer = setTimeout(() => {
+    pressTimer = null;
+    suppressClick = true;
+    markInteraction();
+    window.KevinSkin.play('tickle');
+  }, LONG_PRESS_MS);
+});
+
+function cancelLongPress() {
+  clearTimeout(pressTimer);
+  pressTimer = null;
+}
+
+character.addEventListener('mouseup', cancelLongPress);
+character.addEventListener('mouseleave', cancelLongPress);
+
+character.addEventListener('dblclick', () => {
+  markInteraction();
+  window.KevinSkin.play('jump');
+});
+
 function showBubble(text) {
   bubble.textContent = text;
   bubble.classList.remove('hidden');
@@ -74,6 +176,8 @@ let conversationActive = false;
 let conversationHistory = [];
 
 async function openPanel() {
+  markInteraction();
+  window.KevinSkin.setSitting(true);
   document.body.classList.add('panel-open');
   panel.classList.remove('hidden');
   window.kevinAPI.resizeWindow(PANEL_SIZE.width, PANEL_SIZE.height);
@@ -87,6 +191,7 @@ async function openPanel() {
     chatInput.focus();
     conversationActive = true;
     resetConversationTimeout();
+    window.KevinSkin.play('wave');
   } else {
     document.body.classList.add('config-open');
     chatView.classList.add('hidden');
@@ -103,9 +208,17 @@ function closePanel() {
   conversationHistory = [];
   chatLog.innerHTML = '';
   clearTimeout(conversationTimeoutId);
+  window.KevinSkin.setSitting(false);
+  setBusy(null);
 }
 
-character.addEventListener('click', openPanel);
+character.addEventListener('click', () => {
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
+  openPanel();
+});
 hook.addEventListener('click', openPanel);
 closePanelBtn.addEventListener('click', closePanel);
 
@@ -185,8 +298,12 @@ async function speak(text) {
   try {
     const base64 = await window.kevinAPI.speak(text);
     const audio = new Audio(`data:audio/wav;base64,${base64}`);
+    audio.onended = () => setBusy(null);
+    audio.onerror = () => setBusy(null);
+    setBusy('talk');
     audio.play();
   } catch (err) {
+    setBusy(null);
     console.error('TTS hatasi:', err);
   }
 }
@@ -208,15 +325,19 @@ async function sendChat(text) {
 
   conversationHistory.push({ role: 'user', content: message });
   trimHistory();
+  markInteraction();
+  setBusy('think');
 
   try {
     const reply = await window.kevinAPI.chat(conversationHistory);
     conversationHistory.push({ role: 'assistant', content: reply });
     trimHistory();
     addMessage(reply, 'kevin');
+    playAnswerGesture(reply);
     speak(reply);
   } catch (err) {
     conversationHistory.pop();
+    setBusy(null);
     addMessage(`Hata: ${err.message}`, 'kevin');
   }
 }
@@ -330,6 +451,8 @@ function openPanelForChat() {
   configView.classList.add('hidden');
   chatView.classList.remove('hidden');
   conversationActive = true;
+  window.KevinSkin.setSitting(true);
+  markInteraction();
   resetConversationTimeout();
 }
 
@@ -346,11 +469,21 @@ async function initHandsFree() {
     vadInstance = await vad.MicVAD.new({
       baseAssetPath: assetsURL,
       onnxWASMBasePath: assetsURL,
+      onSpeechStart: () => {
+        listening = true;
+        refreshKevinState();
+      },
+      onVADMisfire: () => {
+        listening = false;
+        refreshKevinState();
+      },
       redemptionMs: 1600,
       preSpeechPadMs: 800,
       positiveSpeechThreshold: 0.6,
       negativeSpeechThreshold: 0.45,
       onSpeechEnd: async (audio) => {
+        listening = false;
+        refreshKevinState();
         try {
           const wavBuffer = encodeWAV(audio, 16000);
           const text = await window.kevinAPI.transcribeWav(wavBuffer);

@@ -244,7 +244,9 @@ function createWindow() {
   });
 
   win.setAlwaysOnTop(true, 'screen-saver');
-  win.loadURL('kevin://app/renderer/index.html');
+  const animArg = process.argv.find((a) => a.startsWith('--anim='));
+  const query = animArg ? `?anim=${encodeURIComponent(animArg.slice(7))}` : '';
+  win.loadURL(`kevin://app/renderer/index.html${query}`);
 
   win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media');
@@ -495,6 +497,34 @@ ipcMain.handle('speak', async (_event, text) => {
     return audio.toString('base64');
   } finally {
     fs.rmSync(outPath, { force: true });
+  }
+});
+
+const MUSIC_PLAYER_HINTS = [
+  'spotify', 'vlc', 'audacious', 'rhythmbox', 'mpd', 'strawberry', 'elisa',
+  'amberol', 'tauon', 'clementine', 'lollypop', 'cmus', 'deadbeef', 'quodlibet',
+];
+
+ipcMain.handle('music-status', async () => {
+  if (process.platform !== 'linux') return { playing: false };
+
+  try {
+    const { stdout } = await runCommand('playerctl', [
+      'metadata',
+      '--format',
+      '{{playerName}}|{{status}}|{{xesam:artist}}|{{xesam:title}}',
+    ]);
+
+    const [player = '', status = '', artist = '', title = ''] = stdout.trim().split('|');
+    if (status !== 'Playing') return { playing: false };
+
+    const name = player.toLowerCase();
+    const isMusicPlayer = MUSIC_PLAYER_HINTS.some((hint) => name.includes(hint));
+    const looksLikeSong = artist.trim().length > 0;
+
+    return { playing: isMusicPlayer || looksLikeSong, player, title };
+  } catch {
+    return { playing: false };
   }
 });
 

@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:skin": "esbuild renderer/skin-viewer-src.js --bundle --format=iife --outfile=renderer/skin-viewer-bundle.js"
+    "build:skin": "esbuild renderer/skin-viewer-src.js --bundle --format=iife --outfile=renderer/skin-viewer-bundle.js",
+    "test": "node test/animations.test.mjs"
   },
   "devDependencies": {
     "electron": "^33.0.0",

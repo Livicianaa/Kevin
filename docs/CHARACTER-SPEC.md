@@ -1,72 +1,82 @@
 # Kevin - Karakter Animasyon Spec
 
-Bu dosya sanat/animasyon uretimi icin referans. Stil henuz karara baglanmadi (pixel art / chibi-anime / vektor-flat) - ilk asamada stil secilip birkaç ornek uretildikten sonra bu dosya guncellenecek.
+Karakter **3D Minecraft rig'i** (skinview3d + Three.js). 5 Agustos 2026'da alinan bu karar
+onceki "2D sprite / pixel art" planini gecersiz kilar - PNG frame, sprite sheet ya da
+govde+yuz katman ayrimi YOK. Yuz ifadesi skin dokusuna gomulu oldugu icin duygu, govde
+duruslariyla ve (ileride) HUD rozetiyle anlatilir.
 
-Tasarim komple bitirilip sonra kodlamaya gecilecek - fazlama yok, asagidaki liste tam kapsam.
+## Nasil calisiyor
 
-## Teknik gereksinimler
+- `renderer/animations.js` - her animasyon `(t, pose, duration)` alip bir **poz** dolduruyor:
+  6 uzvun (`head`, `body`, `leftArm`, `rightArm`, `leftLeg`, `rightLeg`) rotasyonu + `rootY`.
+- `KevinAnimator` (ayni dosya) poz uretir, durum degisiminde iki pozu **0.25 sn boyunca
+  harmanlar** (sert gecis yok), tek seferlik animasyonlari sureleri bitince onceki duruma dondurur.
+- `renderer/skin-viewer-src.js` animatoru viewer'a baglar ve `window.KevinSkin` uzerinden
+  `setState` / `play` / `setSitting` / `currentState` sunar. Kaynak degisince `npm run build:skin`.
+- `renderer/character.js` hangi durumun ne zaman gectigine karar verir (asagidaki tablo).
 
-- **Format:** PNG, seffaf arka plan (alpha kanali sart)
+Aci isaretleri: `+x` uzvu geriye, `-x` one dondurur; kollarda `+z` sol kolu, `-z` sag kolu
+govdeden uzaklastirir. `rootY` Minecraft birimi (karakter boyu 32 birim).
 
-- **Boyut:** referans 128x128px karakter alani (v1 iskeletinde placeholder 64x64 kullanildi, gercek boyut buyutulebilir)
+## Durumlar
 
-- **Katman ayrimi:** govde (aktivite) ve yuz ifadesi (duygu) AYRI dosyalar/katmanlar olmali, birlesik degil. Render sirasinda yuz, govde uzerine bindirilecek. Bu sayede N aktivite x M duygu icin N+M asset yeterli olur, N\*M degil.
+### Surekli (loop)
 
-- **Sprite sheet ya da ayri dosyalar:** her aktivite icin kisa bir dongu (2-6 frame) yeterli.
-
-## Govde / Aktivite durumlari (komple liste)
-
-| Durum | Aciklama | Tahmini frame |
+| Durum | Ne zaman | Nasil gorunuyor |
 | - | - | - |
-| idle | Bosta durma, hafif nefes/durus hareketi | 2-4 |
-| idle-esneme | Esneme (idle varyasyonu) | 3-5 |
-| idle-bakinma | Etrafa bakinma/merak (idle varyasyonu) | 3-4 |
-| idle-oturma | Ekran kenarina oturup sallanma (idle varyasyonu) | 2-4 |
-| idle-gerinme | Gerinme (idle varyasyonu) | 3-4 |
-| idle-kasima | Kafa kasima (idle varyasyonu) | 2-3 |
-| walk | Yurume dongusu (tek yon, kod tarafinda aynalanir) | 4-6 |
-| talk | Konusurken govde/agiz hareketi | 2-4 |
-| listen | Mikrofon acikken dikkat kesilmis poz | 1-2 |
-| think | LLM cevap uretirken bekleme/dusunme poz | 2-3 |
-| sleep | Gozler kapali, "Z" efekti ayri eklenebilir | 1-2 |
-| wake | Uyanma/cagrilma gecis animasyonu (dongu degil, tek seferlik) | 2-3 |
-| held | Mouse ile tutulup suruklenirken sarkma pozu | 1-2 |
-| held-wheee | Suruklenirken keyifli tepki (held'in enerjik versiyonu) | 2-3 |
-| jump | Cift tiklaninca zipla/heyecan tepkisi | 2-3 |
-| tickle | Uzun basili tutunca saskin/gidiklanmis tepki | 2-3 |
-| nod-yes | Onaylama - bas sallama | 2-3 |
-| nod-no | Reddetme - bas sallama | 2-3 |
-| dance | Rastgele dusuk ihtimalle tetiklenen kisa dans (easter egg) | 4-6 |
-| night-sleepy | Gece gec saatte uykulu duruş, saat bazli (easter egg) | 2-3 |
+| idle | Varsayilan | Hafif nefes + kol salinimi; 9-22 sn'de bir rastgele idle varyasyonu oynar |
+| walk | Henuz tetiklenmiyor (ekranda gezinme yok) | Klasik yurume dongusu, kafa sallanmasi |
+| talk | TTS sesi calarken | Kafa/govde ritmi + kucuk kol jestleri |
+| listen | VAD konusma algiladiginda | Kafa yana egik, dikkat kesilmis, sakin nefes |
+| think | LLM cevabi beklenirken | Kafa one-yana egik, sag kol yuze dogru |
+| sleep | 3 dk etkilesimsizlik | Kafa one dusmus, yavas nefes |
+| night-sleepy | 00:00-06:00 arasi, bosta | Uykulu idle, periyodik kafa dusmesi |
+| dance | Sistemde muzik calarken (MPRIS/playerctl) | Ritmik zipla + kol/kalca hareketi |
+| held | Bagli degil (pencere suruklemesi yok) | Yercekimiyle kollar yukari, bacaklar sarkik |
+| held-wheee | Bagli degil | held'in enerjik hali |
 
+### Tek seferlik (oneShot, bitince onceki duruma doner)
 
-## Yuz ifadesi / Duygu durumlari (komple liste)
+| Durum | Sure | Ne zaman |
+| - | - | - |
+| wake | 1.6 sn | Uykudayken etkilesim olunca |
+| jump | 0.75 sn | Karaktere cift tiklayinca |
+| tickle | 1.8 sn | Karaktere 600 ms basili tutunca (panel acilmaz) |
+| wave | 2.4 sn | Sohbet paneli acildiginda selam |
+| nod-yes | 1.2 sn | Cevap "evet / tabii / olur / tamam..." ile basliyorsa |
+| nod-no | 1.2 sn | Cevap "hayir / olmaz / maalesef..." ile basliyorsa |
+| idle-bakinma / idle-gerinme / idle-esneme / idle-kasima | 2.4-3.5 sn | idle'dayken rastgele |
 
-| Durum | Ne zaman kullanilir |
-| - | - |
-| notr | Varsayilan |
-| mutlu | Iyi haber, basarili yanit, kullanici olumlu tepki verince |
-| uzgun | Hata, kotu haber, basarisiz istek |
-| saskin | Beklenmedik girdi/olay |
-| meraklı | Vision ("bak" komutu) kullanilirken |
-| kizgin | Tetikleme mantigi kod tarafinda ayrica netlesecek (ne zaman kullanilacagi acik, art onceden hazirlanabilir) |
+### Oturma
 
+Ayri bir animasyon degil, **bacaklara uygulanan katman**: `setSitting(true)` bacaklari one
+uzatir ve govdeyi 4 birim indirir, ustune hangi durum oynuyorsa o devam eder. Sohbet paneli
+acikken acik, kapaninca 0.4 sn'de kalkar.
 
-## v2 sonrasi / henuz eklenmeyen fikirler
+## Test modu
 
-- Isaret etme / gosterme (bir seye dikkat cekerken)
+```bash
+npm start -- --anim=dance        # tek bir durumu sabitler
+npm start -- --anim=idle:sit     # ":sit" oturmus halde gosterir
+```
+Tek seferlik animasyonlar test modunda 2 sn'de bir tekrar oynar. Bu modda durum makinesi
+devre disi - karakter baska hicbir sebeple durum degistirmez.
 
-- Alkislama
+## Kamera
 
-- OS bildirimine tepki verme (ozel entegrasyon gerektirir)
+`skin-viewer-src.js`: `fov 30`, `zoom 0.68`, `playerWrapper.position.y = 1`. zoom buyurse
+zipla (rootY +7) ust kenardan, oturma alt kenardan tasar.
 
-## Notlar
+## Muzik algilama
 
-- Renk paleti ve genel stil henuz secilmedi.
+`main.js` -> `music-status` IPC, `playerctl metadata` ile `{{playerName}}|{{status}}|
+{{xesam:artist}}|{{xesam:title}}`. Calan sey **bilinen bir muzik oynaticidan** geliyorsa ya da
+**artist alani doluysa** sarki sayilir (Firefox'ta video izlerken dans etmesin diye).
+Renderer 6 saniyede bir soruyor. **Sadece Linux** - Windows'ta ayri bir yol gerekecek.
 
-- Idle durumunda karakter ekranda rastgele geziniyor (bkz. `renderer/character.js`) - walk animasyonu bu hareketle senkron oynatilacak.
+## Yapilmayanlar
 
-- Gel sohbet edelim tarzı birşey deyicne eleman otursun sohbet edelim onunla
-
-- şarkı açınca ekranda dans etsin
-
+- `walk` kodlandi ama tetikleyicisi yok: karakter ekranda gezinmiyor (pencere kose-ankorlu).
+- `held` / `held-wheee` kodlandi ama pencere suruklemesi olmadigi icin bagli degil.
+- Isaret etme / gosterme, alkislama, OS bildirimine tepki - v2.
+- "Kizgin" gibi duygu durumlari: 3D rig'de yuz degismedigi icin HUD rozet katmani gerekiyor.
