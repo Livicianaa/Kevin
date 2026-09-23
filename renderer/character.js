@@ -383,6 +383,8 @@ if (new URLSearchParams(window.location.search).get('selftest')) {
       const audio = await window.kevinAPI.speak(reply);
       console.log('SELFTEST TTS uretildi:', audio.length, 'bayt base64');
       console.log('SELFTEST VAD hazir mi:', typeof vad !== 'undefined');
+      const seen = await window.kevinAPI.chat([{ role: 'user', content: 'Ekranima baksana, ne goruyorsun?' }]);
+      console.log('SELFTEST ekrana bakma:', JSON.stringify(seen).slice(0, 300));
     } catch (err) {
       console.error('SELFTEST HATA:', err.message);
     }

@@ -87,8 +87,10 @@ const PROVIDERS = {
     defaultModel: 'meta/llama-3.3-70b-instruct',
   },
   groq: {
+    // gpt-oss kendi "harmony" arac kavramini uydurup (repo_browser.open_file gibi)
+    // istegi 400'e dusuruyordu; qwen arac cagrisinda uyumlu davraniyor.
     baseURL: 'https://api.groq.com/openai/v1',
-    defaultModel: 'openai/gpt-oss-120b',
+    defaultModel: 'qwen/qwen3.8-27b',
   },
   gemini: {
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -577,10 +579,16 @@ ipcMain.handle('chat', async (_event, history) => {
     try {
       data = await callCompletions(isLastStep);
     } catch (err) {
-      // Model uyumsuz/bilmedigi bir arac cagirmaya calisti - araclar olmadan tekrar dene
-      if (tools && /tool/i.test(err.rawText || '')) {
+      // Model uyumsuz/bilmedigi bir arac cagirmaya calisti - araclar olmadan tekrar dene.
+      // `tools` zaten kapali olsa bile olabiliyor (son adimda gpt-oss arac uyduruyordu),
+      // o yuzden kosul tools'a bagli degil.
+      if (/tool/i.test(err.rawText || '')) {
         tools = undefined;
-        data = await callCompletions();
+        messages.push({
+          role: 'system',
+          content: 'Arac cagirma. Elindeki bilgiyle dogrudan, kisa bir cevap yaz.',
+        });
+        data = await callCompletions(true);
       } else {
         throw err;
       }
@@ -630,7 +638,9 @@ ipcMain.handle('chat', async (_event, history) => {
     }
 
     win?.webContents.send('agent-activity', null);
-    return replyMsg.content?.trim() || '(bos cevap)';
+    // Sistem promptu emojiyi yasakliyor ama modeller ara sira yine koyuyor;
+    // metinden de temizliyoruz (TTS'te zaten temizleniyordu).
+    return stripEmoji(replyMsg.content || '').trim() || '(bos cevap)';
   }
 
   win?.webContents.send('agent-activity', null);
