@@ -434,6 +434,15 @@ ipcMain.handle('cem-pack', () => {
   }
 });
 
+ipcMain.handle('cursor-pos', async () => {
+  if (!hypr.available()) return null;
+  try {
+    return await hypr.cursorPos();
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle('world-info', async () => {
   if (!hypr.available()) return null;
   try {

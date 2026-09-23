@@ -204,6 +204,11 @@ function frame(now) {
     world.setPaused(worldFrozen());
     if (world.update(dt) === 'land') window.KevinSkin.play('land');
 
+    if (world.mode === 'held' && lastCursor) {
+      world.dragTo(lastCursor.x, lastCursor.y + dragOffsetY);
+    }
+    window.KevinSkin.setRootRotation(world.rootRotation);
+
     if (worldFrozen()) {
       window.KevinSkin.setFacing(conversationActive ? 0 : world.facing);
     } else {
@@ -213,10 +218,45 @@ function frame(now) {
     refreshKevinState();
   }
 
+  updateLook();
   window.KevinSkin.setCemContext(buildCemContext(dt));
   window.KevinSkin.tick(dt);
 }
 
+
+
+// --- Fareyi takip etme: karakter imlece bakiyor ---
+
+const CURSOR_POLL_MS = 90;
+let lastCursor = null;
+
+async function pollCursor() {
+  try {
+    const cursor = await window.kevinAPI.cursorPos();
+    if (cursor && world) {
+      lastCursor = { x: cursor.x - world.info.originX, y: cursor.y - world.info.originY };
+    }
+  } catch {
+    lastCursor = null;
+  }
+}
+
+setInterval(pollCursor, CURSOR_POLL_MS);
+
+function updateLook() {
+  if (!world || !lastCursor) {
+    window.KevinSkin.setLook(0, 0);
+    return;
+  }
+  const headX = world.x;
+  const headY = world.y - CHAR_HEIGHT * 0.62;
+  const dx = lastCursor.x - headX;
+  const dy = lastCursor.y - headY;
+
+  const yaw = Math.max(-0.95, Math.min(0.95, Math.atan2(dx, Math.abs(dy) + 220)));
+  const pitch = Math.max(-0.5, Math.min(0.55, dy / 520));
+  window.KevinSkin.setLook(yaw, pitch);
+}
 
 // --- CEM paketi (Fresh Moves gibi): Kevin'in durumu Minecraft degiskenlerine cevriliyor ---
 
@@ -298,27 +338,62 @@ initWorld();
 requestAnimationFrame(frame);
 
 
-let pressTimer = null;
-let suppressClick = false;
+// --- Fare ile tutma: hangi uzuvdan tutuldugu onemli ---
 
-character.addEventListener('mousedown', () => {
-  pressTimer = setTimeout(() => {
-    pressTimer = null;
-    suppressClick = true;
-    markInteraction();
-    window.KevinSkin.play('tickle');
-  }, LONG_PRESS_MS);
-});
+const GRAB_MOVE_THRESHOLD = 7;
+const CLICK_MAX_MS = 260;
 
-function cancelLongPress() {
-  clearTimeout(pressTimer);
-  pressTimer = null;
+let pressInfo = null;
+let dragOffsetY = 0;
+
+function limbAt(offsetY, height) {
+  const ratio = offsetY / height;
+  if (ratio < 0.34) return 'head';
+  if (ratio < 0.62) return 'arm';
+  return 'leg';
 }
 
-character.addEventListener('mouseup', cancelLongPress);
-character.addEventListener('mouseleave', cancelLongPress);
+character.addEventListener('mousedown', async (event) => {
+  if (event.button !== 0) return;
+  markInteraction();
+
+  const limb = limbAt(event.offsetY, character.clientHeight || CHAR_HEIGHT);
+  pressInfo = { at: performance.now(), x: event.screenX, y: event.screenY, limb, moved: false };
+
+  if (!world) return;
+  const cursor = await window.kevinAPI.cursorPos();
+  if (!cursor || !pressInfo) return;
+  dragOffsetY = world.y - cursor.y;
+});
+
+window.addEventListener('mousemove', (event) => {
+  if (!pressInfo) return;
+  const dx = event.screenX - pressInfo.x;
+  const dy = event.screenY - pressInfo.y;
+  if (!pressInfo.moved && Math.hypot(dx, dy) > GRAB_MOVE_THRESHOLD) {
+    pressInfo.moved = true;
+    if (world) world.grab(pressInfo.limb);
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (!pressInfo) return;
+  const quick = performance.now() - pressInfo.at < CLICK_MAX_MS;
+
+  if (pressInfo.moved && world) {
+    world.drop();
+  } else if (quick) {
+    openPanel();
+  } else if (world) {
+    // Basili tutup birakti ama surukleMEDI: gidiklandi
+    window.KevinSkin.play('tickle');
+  }
+
+  pressInfo = null;
+});
 
 character.addEventListener('dblclick', () => {
+  if (pressInfo && pressInfo.moved) return;
   markInteraction();
   window.KevinSkin.play('jump');
 });
@@ -370,13 +445,7 @@ function closePanel() {
   setBusy(null);
 }
 
-character.addEventListener('click', () => {
-  if (suppressClick) {
-    suppressClick = false;
-    return;
-  }
-  openPanel();
-});
+
 closePanelBtn.addEventListener('click', closePanel);
 
 async function refreshModelList(selectedModel) {

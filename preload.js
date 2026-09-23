@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   setAnchor: (x, y) => ipcRenderer.send('set-anchor', x, y),
   worldInfo: () => ipcRenderer.invoke('world-info'),
   cemPack: () => ipcRenderer.invoke('cem-pack'),
+  cursorPos: () => ipcRenderer.invoke('cursor-pos'),
   onAgentActivity: (callback) => {
     ipcRenderer.on('agent-activity', (_e, data) => callback(data));
   },

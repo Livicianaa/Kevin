@@ -76,6 +76,12 @@ async function resizeTo(width, height) {
   return send(`/dispatch resizewindowpixel exact ${Math.round(width)} ${Math.round(height)},${MATCH}`);
 }
 
+async function cursorPos() {
+  const out = await send('/cursorpos');
+  const [x, y] = out.split(',').map((v) => parseInt(v.trim(), 10));
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
 async function ownWindow() {
   const clients = await json('clients');
   return clients.find((c) => c.class === WINDOW_CLASS) || null;
@@ -157,4 +163,4 @@ async function world() {
   };
 }
 
-module.exports = { available, send, json, applyWindowRules, loadRules, moveTo, resizeTo, ownWindow, world, WINDOW_CLASS };
+module.exports = { available, send, json, applyWindowRules, loadRules, cursorPos, moveTo, resizeTo, ownWindow, world, WINDOW_CLASS };

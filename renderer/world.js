@@ -37,6 +37,39 @@ export class KevinWorld {
     this.climbGoal = null;
     this.sitAtGoal = false;
     this.paused = false;
+    this.heldPart = null;
+    this.struggling = false;
+    this.struggleIn = 0;
+  }
+
+  // Fareyle bir uzvundan tutuldu: o uzuvdan sarkiyor, arada kurtulmaya calisiyor.
+  grab(part) {
+    this.mode = 'held';
+    this.heldPart = part;
+    this.struggling = false;
+    this.struggleIn = rand(1.2, 2.5);
+    this.vy = 0;
+    this.wall = null;
+  }
+
+  dragTo(x, y) {
+    if (this.mode !== 'held') return;
+    this.x = Math.min(Math.max(x, this.left), this.right);
+    this.y = Math.min(Math.max(y, this.ceiling), this.ground);
+  }
+
+  drop() {
+    if (this.mode !== 'held') return;
+    this.heldPart = null;
+    this.struggling = false;
+    this.mode = 'fall';
+    this.vy = 0;
+  }
+
+  // Bacagindan tutulunca bas asagi sarkiyor.
+  get rootRotation() {
+    if (this.mode !== 'held') return 0;
+    return this.heldPart === 'leg' ? Math.PI : 0;
   }
 
   get animation() {
@@ -48,6 +81,7 @@ export class KevinWorld {
       case 'scroll': return 'scroll-gesture';
       case 'sit': return 'sit-edge';
       case 'fall': return 'fall';
+      case 'held': return this.struggling ? 'held-wheee' : 'held';
       default: return 'idle';
     }
   }
@@ -60,13 +94,15 @@ export class KevinWorld {
       case 'scroll': return this.dir * FACE_WALL;
       case 'sit': return -this.dir * 0.55;
       case 'peek':
-      case 'fall': return FACE_FRONT;
+      case 'fall':
+      case 'held': return FACE_FRONT;
       default: return FACE_FRONT;
     }
   }
 
   // Sohbet / konusma sirasinda dunya donuyor ama karakter yerinde kaliyor.
   setPaused(value) {
+    if (this.mode === 'held') return;
     this.paused = !!value;
     if (this.paused && (this.mode === 'climb' || this.mode === 'hold' || this.mode === 'peek' || this.mode === 'scroll')) {
       this.release();
@@ -208,6 +244,14 @@ export class KevinWorld {
       case 'sit':
         this.timer -= dt;
         if (this.timer <= 0) this.release();
+        break;
+
+      case 'held':
+        this.struggleIn -= dt;
+        if (this.struggleIn <= 0) {
+          this.struggling = !this.struggling;
+          this.struggleIn = this.struggling ? rand(0.7, 1.5) : rand(1.5, 3.5);
+        }
         break;
 
       case 'fall':

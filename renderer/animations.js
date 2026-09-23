@@ -345,6 +345,10 @@ export class KevinAnimator extends PlayerAnimation {
     this.facingCurrent = 0;
     this.cem = null;
     this.cemContext = null;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    this.rootRotation = 0;
+    this.rootRotationCurrent = 0;
     this.idleVariantIn = this.randomIdleDelay();
     this.baseY = null;
     this.poseA = emptyPose();
@@ -387,6 +391,17 @@ export class KevinAnimator extends PlayerAnimation {
 
   setCemContext(context) {
     this.cemContext = context;
+  }
+
+  // Karakterin fareye bakmasi: poza eklenen kafa acisi.
+  // CEM paketi head.rx/ry'yi okuyup uzerine yazdigi icin bu deger korunuyor.
+  setLook(yaw, pitch) {
+    this.lookYaw = yaw;
+    this.lookPitch = pitch;
+  }
+
+  setRootRotation(z) {
+    this.rootRotation = z;
   }
 
   cemPose(pose) {
@@ -444,6 +459,8 @@ export class KevinAnimator extends PlayerAnimation {
     }
 
     this.fillPose(this.state, this.t, this.poseA, this.durationOf(this.state));
+    this.poseA.head.y += this.lookYaw;
+    this.poseA.head.x += this.lookPitch;
 
     let pose = this.poseA;
     if (this.blend < 1 && this.prevState) {
@@ -459,6 +476,13 @@ export class KevinAnimator extends PlayerAnimation {
 
     const turn = delta / 0.35;
     this.facingCurrent += clamp(this.facing - this.facingCurrent, -turn * Math.PI, turn * Math.PI);
+
+    const flip = delta / 0.45;
+    this.rootRotationCurrent += clamp(
+      this.rootRotation - this.rootRotationCurrent,
+      -flip * Math.PI,
+      flip * Math.PI,
+    );
 
     this.apply(player, pose);
   }
@@ -512,6 +536,7 @@ export class KevinAnimator extends PlayerAnimation {
 
     player.position.y = this.baseY + pose.rootY + SIT_ROOT_Y * s;
     player.rotation.y = this.facingCurrent;
+    player.rotation.z = this.rootRotationCurrent;
   }
 }
 

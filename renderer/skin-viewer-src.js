@@ -66,6 +66,14 @@ function setCemContext(context) {
   if (animator) animator.setCemContext(context);
 }
 
+function setLook(yaw, pitch) {
+  if (animator) animator.setLook(yaw, pitch);
+}
+
+function setRootRotation(z) {
+  if (animator) animator.setRootRotation(z);
+}
+
 function setFacing(radians) {
   if (animator) animator.setFacing(radians);
 }
@@ -79,4 +87,4 @@ function currentState() {
 }
 
 window.KevinWorld = KevinWorld;
-window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setSpeed, useCemPack, setCemContext, currentState, ANIMATION_STATES };
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, useCemPack, setCemContext, currentState, ANIMATION_STATES };
