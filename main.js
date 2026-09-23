@@ -388,6 +388,7 @@ function createWindow() {
   const params = new URLSearchParams();
   if (animArg) params.set('anim', animArg.slice(7));
   if (process.argv.includes('--no-vad')) params.set('novad', '1');
+  if (process.argv.includes('--no-cem')) params.set('cem', '0');
   const query = params.toString() ? `?${params}` : '';
   win.loadURL(`kevin://app/renderer/index.html${query}`);
 
@@ -420,6 +421,17 @@ ipcMain.on('resize-window', (_event, width, height) => {
 ipcMain.on('set-anchor', (_event, x, y) => {
   characterAnchor = { x, y };
   placeWindow();
+});
+
+// CEM animasyon paketi (Fresh Moves gibi). Paket repoda DEGIL: kullanici kendi
+// .jem dosyasini bin/cem/ altina koyuyor (telif nedeniyle dagitilmiyor).
+ipcMain.handle('cem-pack', () => {
+  const packPath = process.env.KEVIN_CEM || path.join(__dirname, 'bin', 'cem', 'player.jem');
+  try {
+    return fs.readFileSync(packPath, 'utf8');
+  } catch {
+    return null;
+  }
 });
 
 ipcMain.handle('world-info', async () => {

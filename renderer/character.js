@@ -213,8 +213,86 @@ function frame(now) {
     refreshKevinState();
   }
 
+  window.KevinSkin.setCemContext(buildCemContext(dt));
   window.KevinSkin.tick(dt);
 }
+
+
+// --- CEM paketi (Fresh Moves gibi): Kevin'in durumu Minecraft degiskenlerine cevriliyor ---
+
+let limbSwing = 0;
+const startedAt = performance.now();
+
+function buildCemContext(dt) {
+  const mode = world ? world.mode : 'idle';
+  const walking = mode === 'walk';
+  const climbing = mode === 'climb';
+  const sitting = mode === 'sit';
+  const falling = mode === 'fall';
+  const amount = walking ? 1 : climbing ? 0.6 : 0;
+
+  if (walking) limbSwing += dt * 7;
+  else if (climbing) limbSwing += dt * 4;
+
+  const seconds = (performance.now() - startedAt) / 1000;
+
+  return {
+    limb_swing: limbSwing,
+    limb_speed: amount,
+    limb_swing_amount: amount,
+    limb_speed_attenuation: amount,
+    move_forward: walking ? 1 : 0,
+    move_strafing: 0,
+    age: seconds * 20,
+    time: seconds,
+    frame_time: dt,
+    pi: Math.PI,
+    is_on_ground: falling || climbing ? 0 : 1,
+    is_climbing: climbing ? 1 : 0,
+    is_riding: sitting ? 1 : 0,
+    is_sitting: sitting ? 1 : 0,
+    is_sneaking: 0,
+    is_sprinting: 0,
+    is_swimming: 0,
+    is_crawling: 0,
+    is_gliding: 0,
+    is_in_water: 0,
+    is_hurt: 0,
+    hurt_time: 0,
+    is_first_person_hand: 0,
+    is_aiming_crossbow: 0,
+    has_raised_hands: 0,
+    is_parcooling: 0,
+    is_parcool_diving: 0,
+    is_parcool_skydiving: 0,
+    is_parcool_sliding: 0,
+    health: 20,
+    max_health: 20,
+  };
+}
+
+// Fresh Moves gibi CEM paketleri varsayilan ACIK (bin/cem/player.jem varsa).
+// `--no-cem` ile kapatilabilir.
+const cemEnabled = new URLSearchParams(window.location.search).get('cem') !== '0';
+
+async function initCemPack() {
+  if (!cemEnabled) return;
+  try {
+    const jem = await window.kevinAPI.cemPack();
+    if (!jem) return;
+    const result = window.KevinSkin.useCemPack(jem);
+    if (result.ok) {
+      console.log(`[kevin] CEM paketi yuklendi: ${result.assignments} ifade` +
+        (result.warnings.length ? `, ${result.warnings.length} uyari: ${result.warnings.slice(0, 3).join(' | ')}` : ''));
+    } else {
+      console.warn('[kevin] CEM paketi yuklenemedi:', result.reason);
+    }
+  } catch (err) {
+    console.warn('[kevin] CEM:', err.message);
+  }
+}
+
+initCemPack();
 
 initWorld();
 requestAnimationFrame(frame);

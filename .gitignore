@@ -5,3 +5,4 @@ bin/
 renderer/vad-assets/
 renderer/skin-viewer-bundle.js
 .directory
+bin/cem/

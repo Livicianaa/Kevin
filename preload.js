@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
   setAnchor: (x, y) => ipcRenderer.send('set-anchor', x, y),
   worldInfo: () => ipcRenderer.invoke('world-info'),
+  cemPack: () => ipcRenderer.invoke('cem-pack'),
   onAgentActivity: (callback) => {
     ipcRenderer.on('agent-activity', (_e, data) => callback(data));
   },

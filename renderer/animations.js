@@ -1,4 +1,16 @@
 import { PlayerAnimation } from 'skinview3d';
+import { CEM_PARTS } from './cem.js';
+
+// Bizim uzuv adlarimiz <-> CEM (Minecraft) adlari
+const CEM_NAME = {
+  head: 'head',
+  body: 'body',
+  leftArm: 'left_arm',
+  rightArm: 'right_arm',
+  leftLeg: 'left_leg',
+  rightLeg: 'right_leg',
+};
+const CEM_TO_OURS = Object.fromEntries(Object.entries(CEM_NAME).map(([k, v]) => [v, k]));
 
 const PARTS = ['head', 'body', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
 const ARM_REST = Math.PI * 0.02;
@@ -331,6 +343,8 @@ export class KevinAnimator extends PlayerAnimation {
     this.sitBlend = 0;
     this.facing = 0;
     this.facingCurrent = 0;
+    this.cem = null;
+    this.cemContext = null;
     this.idleVariantIn = this.randomIdleDelay();
     this.baseY = null;
     this.poseA = emptyPose();
@@ -363,6 +377,25 @@ export class KevinAnimator extends PlayerAnimation {
 
   setFacing(radians) {
     this.facing = radians;
+  }
+
+  // Fresh Moves gibi bir CEM paketi yuklendiginde, bizim urettigimiz poz
+  // "vanilla" katman oluyor; paket onun uzerine kendi animasyonunu yaziyor.
+  setCemAnimator(cem) {
+    this.cem = cem;
+  }
+
+  setCemContext(context) {
+    this.cemContext = context;
+  }
+
+  cemPose(pose) {
+    const input = {};
+    for (const [ours, cemName] of Object.entries(CEM_NAME)) {
+      const p = pose[ours] || { x: 0, y: 0, z: 0 };
+      input[cemName] = { rx: p.x, ry: p.y, rz: p.z, tx: 0, ty: 0, tz: 0 };
+    }
+    return this.cem.apply(input, this.cemContext || {});
   }
 
   switchTo(name) {
@@ -445,13 +478,30 @@ export class KevinAnimator extends PlayerAnimation {
     const s = this.sitBlend;
     if (this.baseY === null) this.baseY = player.position.y;
 
+    let resolved = pose;
+    if (this.cem) {
+      try {
+        const cemResult = this.cemPose(pose);
+        // .jem'deki parcalar "invertAxis": "xy" ile tanimli: x ve y eksenleri ters.
+        resolved = { rootY: pose.rootY };
+        for (const name of CEM_PARTS) {
+          const ours = CEM_TO_OURS[name];
+          const r = cemResult[name];
+          resolved[ours] = { x: -r.rx, y: -r.ry, z: r.rz };
+        }
+      } catch {
+        resolved = pose;
+      }
+    }
+
     for (const part of PARTS) {
       const target = player.skin[part];
-      const value = pose[part];
+      const value = resolved[part];
       target.rotation.x = value.x;
       target.rotation.y = value.y;
       target.rotation.z = value.z;
     }
+    pose = resolved;
 
     if (s > 0) {
       player.skin.leftLeg.rotation.x = pose.leftLeg.x * (1 - s) + SIT_LEG_X * s;

@@ -1,6 +1,7 @@
 import { SkinViewer } from 'skinview3d';
 import { KevinAnimator, ANIMATION_STATES } from './animations.js';
 import { KevinWorld } from './world.js';
+import { loadCem } from './cem.js';
 
 let viewer = null;
 let animator = null;
@@ -50,6 +51,21 @@ function setSitting(value) {
   if (animator) animator.setSitting(value);
 }
 
+function useCemPack(jemText) {
+  if (!animator) return { ok: false, reason: 'animator hazir degil' };
+  try {
+    const cem = loadCem(jemText);
+    animator.setCemAnimator(cem);
+    return { ok: true, assignments: cem.assignments.length, warnings: cem.warnings };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+function setCemContext(context) {
+  if (animator) animator.setCemContext(context);
+}
+
 function setFacing(radians) {
   if (animator) animator.setFacing(radians);
 }
@@ -63,4 +79,4 @@ function currentState() {
 }
 
 window.KevinWorld = KevinWorld;
-window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setSpeed, currentState, ANIMATION_STATES };
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setSpeed, useCemPack, setCemContext, currentState, ANIMATION_STATES };
