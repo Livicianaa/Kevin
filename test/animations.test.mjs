@@ -1,7 +1,11 @@
 import { KevinAnimator } from '../renderer/animations.js';
 
 function fakePlayer() {
-  const part = () => ({ rotation: { x: 0, y: 0, z: 0 } });
+  const part = () => ({
+    rotation: { x: 0, y: 0, z: 0 },
+    position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    quaternion: { x: 0, y: 0, z: 0, w: 1, set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; } },
+  });
   return {
     position: { y: 0 },
     rotation: { x: 0, y: 0, z: 0 },
@@ -58,3 +62,31 @@ console.log('CLIMB kol x araligi =', Math.min(...climb.map((r) => r.rArmZ)).toFi
 const sitEdge = run((a) => a.setState('sit-edge'), 20);
 const legs = sitEdge.map((r) => r.legX);
 console.log('SIT-EDGE bacak sallanma araligi =', Math.min(...legs).toFixed(2), '..', Math.max(...legs).toFixed(2));
+
+
+// --- Ragdoll ---
+const { Ragdoll } = await import('../renderer/ragdoll.js');
+
+const rag = new Ragdoll();
+rag.grab('leftArm');
+for (let i = 0; i < 150; i++) {
+  rag.setGrabPoint(5, 18, 1 / 60);
+  rag.step(1 / 60);
+}
+const deg = (b) => (2 * Math.atan2(b.quaternion.z, b.quaternion.w) * 180) / Math.PI;
+console.log(
+  'RAGDOLL koldan asili: govde y =', rag.bodies.body.position.y.toFixed(1),
+  '| kafa y =', rag.bodies.head.position.y.toFixed(1),
+  '| bacak y =', rag.bodies.leftLeg.position.y.toFixed(1),
+);
+const angles = ['body', 'head', 'leftLeg', 'rightArm'].map((n) => Math.abs(deg(rag.bodies[n])));
+console.log('RAGDOLL eklem acilari sinirda mi (hepsi < 140):', angles.every((a) => a < 140), angles.map((a) => a.toFixed(0)).join(', '));
+
+rag.grab('leftArm');
+const before = deg(rag.bodies.leftLeg);
+for (let i = 0; i < 50; i++) { rag.setGrabPoint(5 + i * 2, 18, 1 / 60); rag.step(1 / 60); }
+console.log('RAGDOLL hizli sallaninca bacak savruldu mu:', Math.abs(deg(rag.bodies.leftLeg) - before) > 3);
+
+rag.release();
+for (let i = 0; i < 300; i++) rag.step(1 / 60);
+console.log('RAGDOLL birakildi, zemine indi mi:', rag.bodies.body.position.y < 0);

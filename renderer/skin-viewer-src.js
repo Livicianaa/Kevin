@@ -2,9 +2,11 @@ import { SkinViewer } from 'skinview3d';
 import { KevinAnimator, ANIMATION_STATES } from './animations.js';
 import { KevinWorld } from './world.js';
 import { loadCem } from './cem.js';
+import { Ragdoll } from './ragdoll.js';
 
 let viewer = null;
 let animator = null;
+let ragdoll = null;
 
 function initSkinViewer(canvas, skinUrl, width, height) {
   if (viewer) {
@@ -24,6 +26,8 @@ function initSkinViewer(canvas, skinUrl, width, height) {
   viewer.playerWrapper.position.y = 1;
 
   animator = new KevinAnimator();
+  ragdoll = new Ragdoll();
+  animator.setRagdoll(ragdoll);
   viewer.animation = animator;
 
   // skinview3d kendi rAF dongusunde monitorun hizinda (180 Hz) render ediyordu.
@@ -35,8 +39,34 @@ function initSkinViewer(canvas, skinUrl, width, height) {
 
 function tick(dt) {
   if (!viewer || !animator) return;
+  if (ragdoll && animator.ragdollActive) ragdoll.step(dt);
   animator.update(viewer.playerObject, dt);
   viewer.render();
+}
+
+function ragdollGrab(part) {
+  if (!ragdoll || !animator) return;
+  ragdoll.grab(part);
+  animator.setRagdollActive(true);
+}
+
+function ragdollRelease() {
+  if (!ragdoll) return;
+  ragdoll.release();
+}
+
+function ragdollStop() {
+  if (!animator) return;
+  animator.setRagdollActive(false);
+}
+
+function ragdollInertia(ax, ay) {
+  if (!ragdoll) return;
+  ragdoll.setInertia(ax, ay);
+}
+
+function ragdollSettled() {
+  return ragdoll ? ragdoll.settled : true;
 }
 
 function setState(name) {
@@ -87,4 +117,4 @@ function currentState() {
 }
 
 window.KevinWorld = KevinWorld;
-window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, useCemPack, setCemContext, currentState, ANIMATION_STATES };
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, ragdollGrab, ragdollRelease, ragdollStop, ragdollInertia, ragdollSettled, useCemPack, setCemContext, currentState, ANIMATION_STATES };

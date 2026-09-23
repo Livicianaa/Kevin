@@ -207,6 +207,18 @@ function frame(now) {
     if (world.mode === 'held' && lastCursor) {
       world.dragTo(lastCursor.x, lastCursor.y + dragOffsetY);
     }
+
+    if (world.mode === 'held' || world.mode === 'fall') {
+      const vx = (world.x - lastWorldPos.x) / dt;
+      const vy = (world.y - lastWorldPos.y) / dt;
+      window.KevinSkin.ragdollInertia((vx - lastWorldVel.x) / dt, (vy - lastWorldVel.y) / dt);
+      lastWorldVel = { x: vx, y: vy };
+    } else {
+      window.KevinSkin.ragdollStop();
+      lastWorldVel = { x: 0, y: 0 };
+    }
+    lastWorldPos = { x: world.x, y: world.y };
+
     window.KevinSkin.setRootRotation(world.rootRotation);
 
     if (worldFrozen()) {
@@ -288,7 +300,7 @@ function buildCemContext(dt) {
     frame_time: dt,
     pi: Math.PI,
     is_on_ground: falling || climbing ? 0 : 1,
-    is_climbing: climbing ? 1 : 0,
+    is_climbing: 0,
     is_riding: sitting ? 1 : 0,
     is_sitting: sitting ? 1 : 0,
     is_sneaking: 0,
@@ -345,19 +357,27 @@ const CLICK_MAX_MS = 260;
 
 let pressInfo = null;
 let dragOffsetY = 0;
+let lastWorldPos = { x: 0, y: 0 };
+let lastWorldVel = { x: 0, y: 0 };
 
-function limbAt(offsetY, height) {
-  const ratio = offsetY / height;
-  if (ratio < 0.34) return 'head';
-  if (ratio < 0.62) return 'arm';
-  return 'leg';
+function limbAt(offsetX, offsetY, width, height) {
+  const ratioY = offsetY / height;
+  const leftHalf = offsetX < width / 2;
+  if (ratioY < 0.34) return { kind: 'head', body: 'head' };
+  if (ratioY < 0.62) return { kind: 'arm', body: leftHalf ? 'rightArm' : 'leftArm' };
+  return { kind: 'leg', body: leftHalf ? 'rightLeg' : 'leftLeg' };
 }
 
 character.addEventListener('mousedown', async (event) => {
   if (event.button !== 0) return;
   markInteraction();
 
-  const limb = limbAt(event.offsetY, character.clientHeight || CHAR_HEIGHT);
+  const limb = limbAt(
+    event.offsetX,
+    event.offsetY,
+    character.clientWidth || CHAR_WIDTH,
+    character.clientHeight || CHAR_HEIGHT,
+  );
   pressInfo = { at: performance.now(), x: event.screenX, y: event.screenY, limb, moved: false };
 
   if (!world) return;
@@ -372,7 +392,8 @@ window.addEventListener('mousemove', (event) => {
   const dy = event.screenY - pressInfo.y;
   if (!pressInfo.moved && Math.hypot(dx, dy) > GRAB_MOVE_THRESHOLD) {
     pressInfo.moved = true;
-    if (world) world.grab(pressInfo.limb);
+    if (world) world.grab(pressInfo.limb.kind);
+    window.KevinSkin.ragdollGrab(pressInfo.limb.body);
   }
 });
 
@@ -382,6 +403,7 @@ window.addEventListener('mouseup', () => {
 
   if (pressInfo.moved && world) {
     world.drop();
+    window.KevinSkin.ragdollRelease();
   } else if (quick) {
     openPanel();
   } else if (world) {

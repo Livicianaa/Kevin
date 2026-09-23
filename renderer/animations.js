@@ -347,6 +347,9 @@ export class KevinAnimator extends PlayerAnimation {
     this.cemContext = null;
     this.lookYaw = 0;
     this.lookPitch = 0;
+    this.ragdoll = null;
+    this.ragdollActive = false;
+    this.restPose = null;
     this.rootRotation = 0;
     this.rootRotationCurrent = 0;
     this.idleVariantIn = this.randomIdleDelay();
@@ -402,6 +405,34 @@ export class KevinAnimator extends PlayerAnimation {
 
   setRootRotation(z) {
     this.rootRotation = z;
+  }
+
+  setRagdoll(ragdoll) {
+    this.ragdoll = ragdoll;
+  }
+
+  setRagdollActive(active) {
+    this.ragdollActive = Boolean(active && this.ragdoll);
+  }
+
+  // Ragdoll parcalarin konumunu da degistiriyor; normal moda donerken
+  // skinview3d'nin kendi duruşuna geri donmemiz lazim.
+  rememberRestPose(skin) {
+    if (this.restPose) return;
+    this.restPose = {};
+    for (const part of PARTS) {
+      const p = skin[part];
+      this.restPose[part] = { x: p.position.x, y: p.position.y, z: p.position.z };
+    }
+  }
+
+  restoreRestPose(skin) {
+    if (!this.restPose) return;
+    for (const part of PARTS) {
+      const rest = this.restPose[part];
+      skin[part].position.set(rest.x, rest.y, rest.z);
+      skin[part].quaternion.set(0, 0, 0, 1);
+    }
   }
 
   cemPose(pose) {
@@ -501,6 +532,21 @@ export class KevinAnimator extends PlayerAnimation {
   apply(player, pose) {
     const s = this.sitBlend;
     if (this.baseY === null) this.baseY = player.position.y;
+    this.rememberRestPose(player.skin);
+
+    if (this.ragdollActive) {
+      this.ragdoll.applyTo(player.skin);
+      player.position.y = this.baseY;
+      player.rotation.y = 0;
+      player.rotation.z = 0;
+      this.wasRagdoll = true;
+      return;
+    }
+
+    if (this.wasRagdoll) {
+      this.restoreRestPose(player.skin);
+      this.wasRagdoll = false;
+    }
 
     let resolved = pose;
     if (this.cem) {
