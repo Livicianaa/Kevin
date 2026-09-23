@@ -68,4 +68,5 @@ Tasarim komple bitirilip sonra kodlamaya gecilecek - fazlama yok, asagidaki list
 
 - Gel sohbet edelim tarzı birşey deyicne eleman otursun sohbet edelim onunla
 
+- şarkı açınca ekranda dans etsin
 
