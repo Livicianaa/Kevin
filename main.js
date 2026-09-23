@@ -389,6 +389,7 @@ function createWindow() {
   if (animArg) params.set('anim', animArg.slice(7));
   if (process.argv.includes('--no-vad')) params.set('novad', '1');
   if (process.argv.includes('--no-cem')) params.set('cem', '0');
+  if (process.argv.includes('--selftest')) params.set('selftest', '1');
   const ragdollArg = process.argv.find((a) => a.startsWith('--ragdoll='));
   if (ragdollArg) params.set('ragdoll', ragdollArg.slice(10));
   const query = params.toString() ? `?${params}` : '';
@@ -520,7 +521,7 @@ ipcMain.handle('chat', async (_event, history) => {
   }
 
   const provider = PROVIDERS[cfg.provider];
-  const model = cfg.model || provider.defaultModel;
+  let model = cfg.model || provider.defaultModel;
   const language = cfg.language || 'Turkce';
   const name = cfg.name || 'Kevin';
 
@@ -552,6 +553,16 @@ ipcMain.handle('chat', async (_event, history) => {
 
     if (!response.ok) {
       const text = await response.text();
+
+      // Saglayici modeli kaldirmis olabilir (Groq llama-3.3-70b'yi kaldirdi ve
+      // kayitli model 404 veriyordu). Gecersiz modelde varsayilana dusup devam et.
+      if (response.status === 404 && text.includes('model_not_found') && model !== provider.defaultModel) {
+        console.warn(`[kevin] "${model}" artik yok, varsayilana geciliyor: ${provider.defaultModel}`);
+        model = provider.defaultModel;
+        saveConfig({ ...loadConfig(), model: '' });
+        return callCompletions(forceNoTools);
+      }
+
       const err = new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
       err.rawText = text;
       throw err;

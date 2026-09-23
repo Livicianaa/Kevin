@@ -366,6 +366,29 @@ if (ragdollTest) {
   }, 1200);
 }
 
+// Gelistirme: --selftest sesli sohbet zincirini uctan uca deniyor
+if (new URLSearchParams(window.location.search).get('selftest')) {
+  setTimeout(async () => {
+    try {
+      const cfg = await window.kevinAPI.getConfig();
+      console.log(`SELFTEST saglayici=${cfg.provider} model=${cfg.model || '(varsayilan)'} eller-serbest=${cfg.handsFree !== false}`);
+      const list = await window.kevinAPI.listModels(cfg.provider, cfg.apiKey);
+      if (list.error) {
+        console.log('SELFTEST model listesi alinamadi:', list.error);
+      } else {
+        console.log('SELFTEST kullanilabilir modeller:', (list.models || []).join(', ').slice(0, 400));
+      }
+      const reply = await window.kevinAPI.chat([{ role: 'user', content: 'Tek kelimeyle selam ver.' }]);
+      console.log('SELFTEST LLM cevabi:', JSON.stringify(reply).slice(0, 160));
+      const audio = await window.kevinAPI.speak(reply);
+      console.log('SELFTEST TTS uretildi:', audio.length, 'bayt base64');
+      console.log('SELFTEST VAD hazir mi:', typeof vad !== 'undefined');
+    } catch (err) {
+      console.error('SELFTEST HATA:', err.message);
+    }
+  }, 2500);
+}
+
 initWorld();
 requestAnimationFrame(frame);
 
