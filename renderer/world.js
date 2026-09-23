@@ -17,11 +17,12 @@ function pick(list) {
 }
 
 export class KevinWorld {
-  constructor(info) {
+  constructor(info, halfWidth = 0) {
     this.info = info;
-    this.left = info.reserved.left + EDGE_PADDING;
-    this.right = info.width - info.reserved.right - EDGE_PADDING;
-    this.ceiling = info.reserved.top;
+    this.halfWidth = halfWidth;
+    this.left = info.reserved.left + EDGE_PADDING + halfWidth;
+    this.right = info.width - info.reserved.right - EDGE_PADDING - halfWidth;
+    this.ceiling = info.reserved.top + EDGE_PADDING;
     this.ground = info.ground;
 
     this.x = (this.left + this.right) / 2;
@@ -34,6 +35,7 @@ export class KevinWorld {
     this.target = null;
     this.wall = null;
     this.climbGoal = null;
+    this.sitAtGoal = false;
     this.paused = false;
   }
 
@@ -56,7 +58,7 @@ export class KevinWorld {
       case 'climb':
       case 'hold':
       case 'scroll': return this.dir * FACE_WALL;
-      case 'sit': return this.dir * 0.45;
+      case 'sit': return -this.dir * 0.55;
       case 'peek':
       case 'fall': return FACE_FRONT;
       default: return FACE_FRONT;
@@ -112,9 +114,20 @@ export class KevinWorld {
     this.target = wall === 'left' ? this.left : this.right;
     this.dir = wall === 'left' ? -1 : 1;
     this.mode = 'walk';
-    this.climbGoal = choice === 'shell'
-      ? this.ceiling + 34
-      : rand(this.ground - (this.ground - this.ceiling) * 0.7, this.ground - (this.ground - this.ceiling) * 0.35);
+
+    if (choice === 'shell') {
+      // Yan panelde belirli bir yuksekseklige, ust panelde panelin hemen altina otur
+      this.climbGoal = shell.edge === 'left' || shell.edge === 'right'
+        ? rand(this.ceiling + 80, this.ground - 260)
+        : this.ceiling + 34;
+      this.sitAtGoal = true;
+    } else {
+      this.climbGoal = rand(
+        this.ground - (this.ground - this.ceiling) * 0.7,
+        this.ground - (this.ground - this.ceiling) * 0.35,
+      );
+      this.sitAtGoal = false;
+    }
   }
 
   update(dt) {
@@ -148,7 +161,7 @@ export class KevinWorld {
         this.y -= CLIMB_SPEED * dt;
         if (this.y <= this.climbGoal) {
           this.y = this.climbGoal;
-          if (this.climbGoal <= this.ceiling + 40) {
+          if (this.sitAtGoal) {
             this.mode = 'sit';
             this.timer = rand(8, 20);
           } else {

@@ -23,8 +23,8 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const WIN_WIDTH = 150;
-const WIN_HEIGHT = 250;
+const WIN_WIDTH = 200;
+const WIN_HEIGHT = 330;
 const MARGIN = 20;
 
 let characterAnchor = null;
@@ -709,17 +709,34 @@ app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(filePath).toString());
   });
 
-  // Kurallar pencereden ONCE gitmeli: windowrule sadece pencere acilirken uygulaniyor.
+  // Kurallar pencereden ONCE yuklenmeli: windowrule pencere acilirken uygulaniyor.
   if (hypr.available()) {
     try {
-      await hypr.applyWindowRules();
+      await hypr.loadRules(path.join(app.getPath('userData'), 'hypr-rules.conf'));
     } catch (err) {
-      console.error('[kevin] windowrule:', err.message);
+      console.error('[kevin] kural dosyasi:', err.message);
     }
   }
 
   createWindow();
   initAgentMCP();
+
+  // setprop acik pencereye uygulaniyor, o yuzden pencere gorunur olduktan sonra.
+  if (hypr.available()) {
+    win.once('ready-to-show', () => {
+      setTimeout(async () => {
+        try {
+          const results = await hypr.applyWindowRules();
+          // Olcegi 1 olmayan ekranda Electron'un istedigi boyut kuculuyor;
+          // gercek boyutu compositor'a IPC ile soyluyoruz.
+          await hypr.resizeTo(windowSize.width, windowSize.height);
+          if (process.env.KEVIN_DEBUG) console.log('[kevin] pencere ozellikleri:', results.join(' | '));
+        } catch (err) {
+          console.error('[kevin] setprop:', err.message);
+        }
+      }, 300);
+    });
+  }
 });
 
 app.on('window-all-closed', () => {

@@ -1,5 +1,4 @@
 const character = document.getElementById('character');
-const hook = document.getElementById('hook');
 const bubble = document.getElementById('bubble');
 const panel = document.getElementById('panel');
 const configView = document.getElementById('config-view');
@@ -49,11 +48,11 @@ window.kevinAPI.onAgentActivity((data) => {
   agentStatus.classList.remove('hidden');
 });
 
-const IDLE_SIZE = { width: 150, height: 250 };
-const PANEL_SIZE = { width: 340, height: 460 };
+const IDLE_SIZE = { width: 200, height: 330 };
+const PANEL_SIZE = { width: 360, height: 500 };
 
-const CHAR_WIDTH = 130;
-const CHAR_HEIGHT = 224;
+const CHAR_WIDTH = 190;
+const CHAR_HEIGHT = 320;
 
 function positionCharacter(size) {
   character.style.left = `${(size.width - CHAR_WIDTH) / 2}px`;
@@ -187,7 +186,7 @@ async function initWorld() {
     console.warn('[kevin] Hyprland yok - karakter sabit kalacak');
     return;
   }
-  world = new window.KevinWorld(info);
+  world = new window.KevinWorld(info, IDLE_SIZE.width / 2);
   pushAnchor();
 }
 
@@ -300,7 +299,6 @@ character.addEventListener('click', () => {
   }
   openPanel();
 });
-hook.addEventListener('click', openPanel);
 closePanelBtn.addEventListener('click', closePanel);
 
 async function refreshModelList(selectedModel) {
