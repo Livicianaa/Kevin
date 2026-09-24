@@ -97,6 +97,9 @@ const DEFAULT_PERSONA = [
   'Guncel bilgi (hava, haber, fiyat) gerekiyorsa ya araclarla gercek veriyi al',
   'ya da bilmedigini soyle; ASLA tahmin uydurma.',
   'Bir sey yapmaya basladiysan sonucunu mutlaka soyle, "bakiyorum" deyip birakma.',
+  'ARACLARIN VAR: dosya okuma/yazma, internette arama, sayfa okuma, ekrana bakma,',
+  'uygulama/site acma, klasor listeleme. Kullanici bunlardan birini isterse ARACI CAGIR,',
+  'tahmin etme ve "yapamam" deme. Arac sonucunu aldiktan sonra kisa bir cumleyle anlat.',
 ].join(' ');
 
 function buildPersona(cfg) {
@@ -293,6 +296,253 @@ async function lookAtScreen(question) {
   }
 }
 
+// --- Dosya ve internet araclari ---
+//
+// Kevin'i bir LLM suruyor; yanlislikla gizli dosyalari okumasin ya da sistem
+// dosyalarinin uzerine yazmasin diye sinirlar burada.
+
+const HOME = os.homedir();
+const READ_DENY = [
+  '.ssh', '.gnupg', '.git-credentials', '.netrc', 'shadow', 'id_rsa', 'id_ed25519',
+  'kevin-pc-version/config.json', '.aws', '.kube', 'wallet', 'keyring',
+];
+const MAX_READ_BYTES = 120 * 1024;
+
+function resolveUserPath(input) {
+  if (!input) throw new Error('yol verilmedi');
+  let target = input.trim();
+  if (target.startsWith('~')) target = path.join(HOME, target.slice(1));
+  target = path.resolve(target);
+  const lower = target.toLowerCase();
+  if (READ_DENY.some((deny) => lower.includes(deny))) {
+    throw new Error('bu dosya gizli, acmiyorum');
+  }
+  return target;
+}
+
+function assertWritable(target) {
+  if (!target.startsWith(HOME + path.sep)) {
+    throw new Error('sadece ev dizini altina yazabilirim');
+  }
+  const lower = target.toLowerCase();
+  if (lower.includes('/.config/') && lower.includes('kevin')) {
+    throw new Error('kendi ayar dosyama yazmam');
+  }
+}
+
+const READ_FILE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'read_file',
+    description: 'Bir dosyanin icerigini okur. Kullanici bir dosyada ne yazdigini sordugunda kullan.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Dosya yolu (~ kullanilabilir)' } },
+      required: ['path'],
+    },
+  },
+};
+
+async function readFileTool(input) {
+  const target = resolveUserPath(input);
+  const stat = fs.statSync(target);
+  if (stat.isDirectory()) return listDirectoryTool(target);
+  const buffer = fs.readFileSync(target);
+  const text = buffer.slice(0, MAX_READ_BYTES).toString('utf8');
+  const kesildi = buffer.length > MAX_READ_BYTES ? '\n... (dosya uzun, kalani kesildi)' : '';
+  return `${target} (${buffer.length} bayt):\n${text}${kesildi}`;
+}
+
+const WRITE_FILE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'write_file',
+    description:
+      'Bir dosyaya yazar ya da var olani degistirir. Sadece ev dizini altinda calisir. ' +
+      'Var olan dosyanin once yedegi alinir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Dosya yolu (~ kullanilabilir)' },
+        content: { type: 'string', description: 'Dosyaya yazilacak tam icerik' },
+        append: { type: 'boolean', description: 'true ise sonuna ekler' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+};
+
+async function writeFileTool(args) {
+  const target = resolveUserPath(args.path);
+  assertWritable(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+
+  if (fs.existsSync(target) && !args.append) {
+    fs.copyFileSync(target, `${target}.yedek`);
+  }
+  if (args.append) fs.appendFileSync(target, args.content, 'utf8');
+  else fs.writeFileSync(target, args.content, 'utf8');
+
+  return `${target} yazildi (${Buffer.byteLength(args.content)} bayt)`;
+}
+
+const FIND_FILES_TOOL = {
+  type: 'function',
+  function: {
+    name: 'find_files',
+    description:
+      'Dosya/klasor arar. Kullanici "su dosyayi bul", "pdf\'lerim nerede", ' +
+      '"resimleri goster" gibi bir sey sordugunda kullan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Aranan isim parcasi (bos birakilabilir)' },
+        extension: { type: 'string', description: 'Uzanti: pdf, png, mp4, py ...' },
+        directory: { type: 'string', description: 'Nerede aransin (varsayilan: ev dizini)' },
+      },
+      required: [],
+    },
+  },
+};
+
+async function findFilesTool(args) {
+  const root = args.directory ? resolveUserPath(args.directory) : HOME;
+  const namePart = (args.name || '').trim();
+  const ext = (args.extension || '').trim().replace(/^\./, '');
+
+  const pattern = ext
+    ? `*${namePart ? namePart + '*' : ''}.${ext}`
+    : namePart
+      ? `*${namePart}*`
+      : '*';
+
+  const findArgs = [
+    root, '-maxdepth', '6',
+    '-not', '-path', '*/node_modules/*',
+    '-not', '-path', '*/.git/*',
+    '-not', '-path', '*/.cache/*',
+    '-iname', pattern,
+    '-printf', '%TY-%Tm-%Td %10s %p\\n',
+  ];
+
+  const { stdout } = await runCommand('find', findArgs).catch((err) => ({ stdout: '', stderr: err.message }));
+  const lines = stdout.split('\n').filter(Boolean).slice(0, 25);
+  if (!lines.length) return `"${pattern}" ile eslesen bir sey bulamadim (${root})`;
+  return `${root} altinda ${lines.length} sonuc:\n` + lines.join('\n');
+}
+
+const WEB_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description:
+      'Internette arama yapar. Guncel bilgi (haber, hava, fiyat, "nedir") gerektiginde kullan.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Arama sorgusu' } },
+      required: ['query'],
+    },
+  },
+};
+
+function htmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+async function webSearchTool(query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Kevin/1.0' },
+  });
+  if (!response.ok) return `arama basarisiz (HTTP ${response.status})`;
+
+  const html = await response.text();
+  const results = [];
+  const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) !== null && results.length < 3) {
+    const link = decodeURIComponent((m[1].match(/uddg=([^&]+)/) || [, m[1]])[1]);
+    results.push(`${results.length + 1}. ${htmlToText(m[2])}\n   ${link}`);
+  }
+  if (!results.length) {
+    const snippet = htmlToText(html).slice(0, 600);
+    return snippet ? `Sonuc ayiklanamadi, ham ozet: ${snippet}` : 'sonuc bulunamadi';
+  }
+  return results.join('\n');
+}
+
+const FETCH_PAGE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'fetch_page',
+    description: 'Bir web sayfasini acip icerigini METIN olarak okur. Aramadan sonra detay icin kullan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Tam adres (https://...)' },
+        question: { type: 'string', description: 'Sayfada aranan bilgi' },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+// Ham sayfa metni sohbet modeline gonderilince Groq'un ucretsiz katmani
+// (8000 TPM) tek istekte doluyordu. Sayfayi YEREL modele ozetletip kisa metin
+// donduruyoruz - look_at_screen'in goruntuyu yerelde tutmasiyla ayni mantik.
+async function summarizeLocally(text, question) {
+  try {
+    const response = await fetch('http://127.0.0.1:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.KEVIN_SUMMARY_MODEL || 'qwen3:8b',
+        stream: false,
+        think: false,
+        options: { temperature: 0, num_predict: 220 },
+        messages: [
+          {
+            role: 'user',
+            content:
+              `Asagidaki sayfa metninden su soruya cevap olacak bilgiyi cikar: "${question || 'sayfanin ozeti'}".\n` +
+              'En fazla 4 cumle, sade Turkce, yorum katma.\n\n' +
+              text.slice(0, 12000),
+          },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return (data.message?.content || '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPageTool(url, question) {
+  if (!/^https?:\/\//i.test(url)) throw new Error('gecerli bir adres ver');
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Kevin/1.0' },
+  });
+  if (!response.ok) return `sayfa acilamadi (HTTP ${response.status})`;
+
+  const text = htmlToText(await response.text());
+  const summary = await summarizeLocally(text, question);
+  if (summary) return `${url} ozeti:\n${summary}`;
+  return text.slice(0, 1200) + (text.length > 1200 ? ' ... (kisaltildi)' : '');
+}
+
 const LIST_DIR_TOOL = {
   type: 'function',
   function: {
@@ -326,18 +576,165 @@ async function listDirectoryTool(dirPath) {
   return JSON.stringify(files);
 }
 
-async function openUrlOrApp(target) {
+const DESKTOP_DIRS = [
+  path.join(HOME, '.local/share/applications'),
+  '/usr/share/applications',
+  '/var/lib/flatpak/exports/share/applications',
+  path.join(HOME, '.local/share/flatpak/exports/share/applications'),
+];
+
+// "Discord ac" gibi isteklerde xdg-open ise yaramiyor (URL de dosya da degil).
+// Kurulu .desktop dosyalarindan uygulamayi bulup onu baslatiyoruz.
+function findDesktopEntry(name) {
+  const wanted = name.toLowerCase().trim();
+  const candidates = [];
+
+  for (const dir of DESKTOP_DIRS) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const file of entries) {
+      if (!file.endsWith('.desktop')) continue;
+      const id = file.slice(0, -8);
+      let displayName = '';
+      try {
+        const body = fs.readFileSync(path.join(dir, file), 'utf8');
+        const m = body.match(/^Name=(.+)$/m);
+        displayName = m ? m[1].trim() : '';
+        if (/^NoDisplay=true/m.test(body)) continue;
+      } catch {
+        continue;
+      }
+
+      const idLower = id.toLowerCase();
+      const nameLower = displayName.toLowerCase();
+      let score = 0;
+      if (idLower === wanted || nameLower === wanted) score = 100;
+      else if (idLower.endsWith('.' + wanted) || nameLower.startsWith(wanted)) score = 80;
+      else if (idLower.includes(wanted) || nameLower.includes(wanted)) score = 50;
+      if (score) candidates.push({ id, displayName: displayName || id, score });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0] || null;
+}
+
+// Masaustu uygulamasi baslatmak icin gereken en az degisken kumesi.
+const DESKTOP_ENV_KEYS = [
+  'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LC_ALL', 'TERM',
+  'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE',
+  'XDG_CURRENT_DESKTOP', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+  'DBUS_SESSION_BUS_ADDRESS', 'QT_QPA_PLATFORM', 'GDK_BACKEND',
+  'HYPRLAND_INSTANCE_SIGNATURE',
+];
+
+function cleanDesktopEnv() {
+  const env = {};
+  for (const key of DESKTOP_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // Electron'un masaustu kimligi alt surece sizmasin
+  if (process.env.ORIGINAL_XDG_CURRENT_DESKTOP) {
+    env.XDG_CURRENT_DESKTOP = process.env.ORIGINAL_XDG_CURRENT_DESKTOP;
+  }
+  return env;
+}
+
+// Electron'dan dogrudan baslatilan GUI uygulamalari (temiz ortamla bile)
+// acilmiyordu. Compositor'a soylemek guvenilir calisiyor: uygulama Electron'un
+// surec agacindan ve ortamindan tamamen bagimsiz basliyor.
+async function launchViaCompositor(commandLine) {
+  if (!hypr.available()) return false;
+  try {
+    const out = await hypr.send(`/dispatch exec ${commandLine}`);
+    return out.trim().startsWith('ok');
+  } catch {
+    return false;
+  }
+}
+
+function spawnDetached(command, args) {
   return new Promise((resolve) => {
-    const proc = spawn('xdg-open', [target]);
-    proc.on('error', (err) => resolve(`hata: ${err.message}`));
-    proc.on('close', (code) => {
-      resolve(code === 0 ? `acildi: ${target}` : `xdg-open ${code} koduyla basarisiz oldu`);
-    });
+    let settled = false;
+    const finish = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    try {
+      // Electron alt sureclere kendi kutuphane yollarini (LD_LIBRARY_PATH,
+      // GIO/GTK modulleri, ELECTRON_RUN_AS_NODE...) miras birakiyor; bunlarla
+      // baslatilan GUI uygulamasi sessizce coküyordu. Temiz bir oturum ortami
+      // olusturup onu veriyoruz.
+      const proc = spawn(command, args, {
+        detached: true,
+        stdio: 'ignore',
+        env: cleanDesktopEnv(),
+      });
+      proc.on('error', (err) => finish({ ok: false, error: err.message }));
+      proc.on('exit', (code) => {
+        // Hemen ve hatayla cikti: baslatma basarisiz
+        if (code !== 0 && code !== null) finish({ ok: false, error: `cikis kodu ${code}` });
+      });
+      proc.unref();
+      setTimeout(() => finish({ ok: true }), 500);
+    } catch (err) {
+      finish({ ok: false, error: err.message });
+    }
   });
 }
 
-function mcpToolsAsOpenAI() {
-  const remoteTools = mcpTools.map((t) => ({
+function processRunning(name) {
+  return new Promise((resolve) => {
+    const proc = spawn('pgrep', ['-x', name], { stdio: 'ignore' });
+    proc.on('error', () => resolve(false));
+    proc.on('close', (code) => resolve(code === 0));
+  });
+}
+
+async function openUrlOrApp(target) {
+  if (!target || !target.trim()) return 'ne acacagimi soylemedin';
+  const value = target.trim();
+
+  const looksLikeUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(value);
+  const looksLikePath = value.startsWith('/') || value.startsWith('~') || value.startsWith('./');
+
+  if (looksLikeUrl || looksLikePath) {
+    const url = looksLikeUrl && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? `https://${value}` : value;
+    const expanded = looksLikePath ? resolveUserPath(url) : url;
+    if (await launchViaCompositor(`xdg-open "${expanded}"`)) return `acildi: ${expanded}`;
+    const result = await spawnDetached('xdg-open', [expanded]);
+    return result.ok ? `acildi: ${expanded}` : `acilamadi: ${result.error}`;
+  }
+
+  const entry = findDesktopEntry(value);
+  const binary = value.split(/\s+/)[0].toLowerCase();
+  const label = entry ? entry.displayName : value;
+
+  if (await launchViaCompositor(value)) {
+    if (await processRunning(binary)) return `acildi: ${label}`;
+  }
+
+  if (entry && (await launchViaCompositor(`gtk-launch ${entry.id}`))) {
+    if (await processRunning(entry.id.split('.').pop())) return `acildi: ${label}`;
+  }
+
+  const direct = await spawnDetached(binary, value.split(/\s+/).slice(1));
+  if (direct.ok && (await processRunning(binary))) return `acildi: ${label}`;
+
+  return entry
+    ? `${label} kurulu ama baslatilamadi`
+    : `"${value}" diye bir uygulama bulamadim`;
+}
+
+function mcpToolsAsOpenAI(includeScreenControl) {
+  const remoteTools = (includeScreenControl ? mcpTools : []).map((t) => ({
     type: 'function',
     function: {
       name: t.name,
@@ -345,7 +742,7 @@ function mcpToolsAsOpenAI() {
       parameters: t.inputSchema || { type: 'object', properties: {} },
     },
   }));
-  return [OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, ...remoteTools];
+  return [OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, FIND_FILES_TOOL, WEB_SEARCH_TOOL, FETCH_PAGE_TOOL, ...remoteTools];
 }
 
 function resizeAnchored(width, height) {
@@ -504,6 +901,7 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
   }
 });
 
+const AGENT_TIME_BUDGET_MS = 28000;
 const MAX_AGENT_STEPS = 6;
 const MAX_TOOL_RESULT_CHARS = 4000;
 
@@ -526,18 +924,35 @@ function sanitizeToolResult(content) {
 
 // Araclarin sema tanimlari her istekte token yakiyor - sadece gercekten
 // ekran/pencere/uygulama ile ilgili bir istek varsa gonder.
-const AGENT_KEYWORDS = [
-  'ekran', 'pencere', 'tıkla', 'tikla', 'aç', 'kapat',
-  'göster', 'gostersene', 'sekme', 'uygulama', 'program', 'yazı yaz', 'tuşa bas',
-  'discord', 'tarayıcı', 'tarayici', 'browser', 'dosya',
-  'screen', 'window', 'click', 'open', 'close', 'app', 'application',
-  'baksana', 'bakar mısın', 'bakar misin', 'ne yazıyor', 'ne yaziyor',
-  'görüyor musun', 'goruyor musun', 'okusana', 'oku bakalım', 'oku bakalim',
+// Iki kademe: temel araclar (dosya, internet, ekrana bakma) genis tetikleniyor;
+// MCP'nin ekran kontrol araclari (tikla, yaz, pencere yonet) ayri ve dar, cunku
+// semalari buyuk ve Groq'un ucretsiz katmaninda dakikalik token limitini yiyor.
+const BASIC_TOOL_KEYWORDS = [
+  'dosya', 'klasor', 'klasör', 'dizin', 'oku', 'okusana', 'yaz', 'kaydet', 'not al',
+  'duzenle', 'düzenle', 'olustur', 'oluştur', 'sil', 'listele', 'ac', 'aç', 'baslat', 'başlat',
+  'ara', 'arat', 'bul', 'internet', 'site', 'sayfa', 'link', 'adres', 'google',
+  'haber', 'hava', 'fiyat', 'kac para', 'kaç para', 'nedir', 'ne demek', 'kim',
+  'ne zaman', 'nerede', 'guncel', 'güncel', 'indir', 'goster', 'göster',
+  'ekran', 'bak', 'baksana', 'goruyor musun', 'görüyor musun', 'ne yaziyor', 'ne yazıyor',
+  'masaustu', 'masaüstü', 'indirilenler', 'belgeler',
+  'file', 'read', 'write', 'search', 'open', 'show', 'screen',
+];
+
+const SCREEN_CONTROL_KEYWORDS = [
+  'tikla', 'tıkla', 'pencere', 'sekme', 'tusa bas', 'tuşa bas', 'yazi yaz', 'yazı yaz',
+  'kaydir', 'kaydır', 'scroll', 'buyut', 'büyüt', 'kucult', 'küçült', 'kapat',
+  'one getir', 'öne getir', 'click', 'window', 'type', 'press',
 ];
 
 function messageNeedsAgent(text) {
   const lower = text.toLowerCase();
-  return AGENT_KEYWORDS.some((k) => lower.includes(k));
+  return BASIC_TOOL_KEYWORDS.some((k) => lower.includes(k))
+    || SCREEN_CONTROL_KEYWORDS.some((k) => lower.includes(k));
+}
+
+function messageNeedsScreenControl(text) {
+  const lower = text.toLowerCase();
+  return SCREEN_CONTROL_KEYWORDS.some((k) => lower.includes(k));
 }
 
 ipcMain.handle('chat', async (_event, history) => {
@@ -563,7 +978,9 @@ ipcMain.handle('chat', async (_event, history) => {
   ];
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-  let tools = messageNeedsAgent(lastUserMessage) ? mcpToolsAsOpenAI() : undefined;
+  let tools = messageNeedsAgent(lastUserMessage)
+    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage))
+    : undefined;
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
@@ -600,7 +1017,18 @@ ipcMain.handle('chat', async (_event, history) => {
     return response.json();
   }
 
+  const agentDeadline = Date.now() + AGENT_TIME_BUDGET_MS;
+
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+    // Sesli kullanimda kullanici bekliyor: zincir uzarsa elindekiyle bitir.
+    if (Date.now() > agentDeadline) {
+      tools = undefined;
+      messages.push({
+        role: 'system',
+        content: 'Sure doldu. Arac cagirma, elindeki bilgiyle tek cumlede cevap ver.',
+      });
+    }
+
     const isLastStep = step === MAX_AGENT_STEPS - 1;
     let data;
     try {
@@ -641,6 +1069,7 @@ ipcMain.handle('chat', async (_event, history) => {
         }
 
         win?.webContents.send('agent-activity', { tool: call.function.name, args });
+        if (process.env.KEVIN_DEBUG) console.log('[kevin] ARAC:', call.function.name, JSON.stringify(args).slice(0, 120));
 
         let resultText;
         try {
@@ -650,6 +1079,16 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await listDirectoryTool(args.path);
           } else if (call.function.name === 'look_at_screen') {
             resultText = await lookAtScreen(args.question);
+          } else if (call.function.name === 'read_file') {
+            resultText = await readFileTool(args.path);
+          } else if (call.function.name === 'write_file') {
+            resultText = await writeFileTool(args);
+          } else if (call.function.name === 'find_files') {
+            resultText = await findFilesTool(args);
+          } else if (call.function.name === 'web_search') {
+            resultText = await webSearchTool(args.query);
+          } else if (call.function.name === 'fetch_page') {
+            resultText = await fetchPageTool(args.url, args.question || lastUserMessage);
           } else {
             const result = await mcpClient.callTool({ name: call.function.name, arguments: args });
             resultText = JSON.stringify(result.content);

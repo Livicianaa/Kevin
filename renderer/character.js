@@ -267,9 +267,13 @@ const VOICE_SPEAKING = 'speaking';
 const DEFAULT_WAKE_REPLIES = ['Efendim?', 'Buyur', 'Ne oldu?', 'Dinliyorum'];
 const DEFAULT_SESSION_MS = 20000;
 
+const VOICE_REPLY_TIMEOUT_MS = 40000;
+const VOICE_STUCK_MS = 50000;
+
 let voiceState = VOICE_IDLE;
 let voiceSessionTimer = null;
 let voiceBusy = false;
+let voiceBusySince = 0;
 
 function voiceActive() {
   return voiceState !== VOICE_IDLE;
@@ -313,15 +317,24 @@ async function voiceReply(text, cfg) {
 
   let reply;
   try {
-    reply = await window.kevinAPI.chat(conversationHistory);
+    // Arac zinciri uzayabiliyor; renderer'i sonsuza kadar bekletmiyoruz.
+    reply = await Promise.race([
+      window.kevinAPI.chat(conversationHistory),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('zaman asimi')), VOICE_REPLY_TIMEOUT_MS),
+      ),
+    ]);
     conversationHistory.push({ role: 'assistant', content: reply });
     trimHistory();
   } catch (err) {
     conversationHistory.pop();
-    reply = 'Bir sorun cikti, tekrar soyler misin?';
+    reply = err.message === 'zaman asimi'
+      ? 'Bu biraz uzun surdu, tekrar sorar misin?'
+      : 'Bir sorun cikti, tekrar soyler misin?';
     console.error('[kevin] sohbet hatasi:', err.message);
   }
 
+  console.log('[kevin] cevap:', reply);
   playAnswerGesture(reply);
   showBubble(reply);
   setVoiceState(VOICE_SPEAKING);
@@ -332,12 +345,20 @@ async function voiceReply(text, cfg) {
 }
 
 async function handleVoice(text) {
+  // Bir sey takildiysa kilitli kalmayalim: uzun suredir mesgulse sifirla.
+  if (voiceBusy && Date.now() - voiceBusySince > VOICE_STUCK_MS) {
+    console.warn('[kevin] takilmis gorunuyor, durum sifirlaniyor');
+    voiceBusy = false;
+    endVoiceSession();
+  }
   if (voiceBusy) return;
+
   const cfg = await window.kevinAPI.getConfig();
   const wakeWords = [(cfg.name || 'Kevin').toLowerCase(), ...(cfg.nicknames || [])];
   const lower = text.toLowerCase();
 
   voiceBusy = true;
+  voiceBusySince = Date.now();
   try {
     if (voiceState === VOICE_IDLE) {
       if (!wakeWords.some((w) => w && lower.includes(w))) return;
