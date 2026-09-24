@@ -18,6 +18,9 @@ const settingsBtn = document.getElementById('settings-btn');
 const agentStatus = document.getElementById('agent-status');
 const refreshModelsBtn = document.getElementById('refresh-models');
 const handsFreeInput = document.getElementById('handsfree');
+const wakeRepliesInput = document.getElementById('wake-replies');
+const sessionSecsInput = document.getElementById('session-secs');
+const personaInput = document.getElementById('persona');
 
 const AGENT_TOOL_LABELS = {
   open_url_or_app: 'açıyor...',
@@ -84,12 +87,14 @@ let sleeping = false;
 const forcedAnim = new URLSearchParams(window.location.search).get('anim');
 
 function worldFrozen() {
-  return Boolean(busyState || conversationActive || sleeping);
+  return Boolean(busyState || conversationActive || sleeping || voiceActive());
 }
 
 function refreshKevinState() {
   if (forcedAnim) return;
   if (busyState) return window.KevinSkin.setState(busyState);
+  // Cagrildi ve bekliyor: kullaniciya donup dinliyor
+  if (voiceState === VOICE_AWAKE) return window.KevinSkin.setState('listen');
   if (conversationActive) return window.KevinSkin.setState('idle');
 
   // Uyku sadece karakter zeminde bostayken; tirmanirken uyuyup dusmesin.
@@ -247,6 +252,124 @@ function frame(now) {
 
 
 
+
+// --- Sesli akis: sohbet paneli yok, her sey ses uzerinden ---
+//
+// Bosta Kevin sadece dinler. Adi gecince kullaniciya doner ve kisa bir karsilik
+// verir ("Efendim?"), sonra oturum acilir: soylenen her sey ona gider. Konusma
+// bittikten sonra bir sure sessizlik olursa tekrar bosta moduna doner.
+
+const VOICE_IDLE = 'idle';
+const VOICE_AWAKE = 'awake';
+const VOICE_THINKING = 'thinking';
+const VOICE_SPEAKING = 'speaking';
+
+const DEFAULT_WAKE_REPLIES = ['Efendim?', 'Buyur', 'Ne oldu?', 'Dinliyorum'];
+const DEFAULT_SESSION_MS = 20000;
+
+let voiceState = VOICE_IDLE;
+let voiceSessionTimer = null;
+let voiceBusy = false;
+
+function voiceActive() {
+  return voiceState !== VOICE_IDLE;
+}
+
+function setVoiceState(next) {
+  voiceState = next;
+  refreshKevinState();
+}
+
+function endVoiceSession() {
+  clearTimeout(voiceSessionTimer);
+  voiceSessionTimer = null;
+  setBusy(null);
+  setVoiceState(VOICE_IDLE);
+}
+
+function touchVoiceSession(ms) {
+  clearTimeout(voiceSessionTimer);
+  voiceSessionTimer = setTimeout(endVoiceSession, ms || DEFAULT_SESSION_MS);
+}
+
+// "kevin hava nasil" -> "hava nasil" (uyanma kelimesi ve oncesi atiliyor)
+function stripWakeWord(text, wakeWords) {
+  const lower = text.toLowerCase();
+  let cut = -1;
+  for (const word of wakeWords) {
+    const at = lower.indexOf(word);
+    if (at >= 0) cut = Math.max(cut, at + word.length);
+  }
+  if (cut < 0) return text.trim();
+  return text.slice(cut).replace(/^[\s,.:!?]+/, '').trim();
+}
+
+async function voiceReply(text, cfg) {
+  setVoiceState(VOICE_THINKING);
+  setBusy('think');
+
+  conversationHistory.push({ role: 'user', content: text });
+  trimHistory();
+
+  let reply;
+  try {
+    reply = await window.kevinAPI.chat(conversationHistory);
+    conversationHistory.push({ role: 'assistant', content: reply });
+    trimHistory();
+  } catch (err) {
+    conversationHistory.pop();
+    reply = 'Bir sorun cikti, tekrar soyler misin?';
+    console.error('[kevin] sohbet hatasi:', err.message);
+  }
+
+  playAnswerGesture(reply);
+  showBubble(reply);
+  setVoiceState(VOICE_SPEAKING);
+  await speak(reply);
+
+  setVoiceState(VOICE_AWAKE);
+  touchVoiceSession(cfg.voiceSessionMs);
+}
+
+async function handleVoice(text) {
+  if (voiceBusy) return;
+  const cfg = await window.kevinAPI.getConfig();
+  const wakeWords = [(cfg.name || 'Kevin').toLowerCase(), ...(cfg.nicknames || [])];
+  const lower = text.toLowerCase();
+
+  voiceBusy = true;
+  try {
+    if (voiceState === VOICE_IDLE) {
+      if (!wakeWords.some((w) => w && lower.includes(w))) return;
+
+      markInteraction();
+      const rest = stripWakeWord(text, wakeWords);
+
+      if (rest.length >= 3) {
+        // "Kevin, hava nasil" - beklemeden cevapla
+        await voiceReply(rest, cfg);
+        return;
+      }
+
+      // Sadece cagirdi: donup karsilik ver
+      const replies = (cfg.wakeReplies && cfg.wakeReplies.length ? cfg.wakeReplies : DEFAULT_WAKE_REPLIES);
+      const answer = replies[Math.floor(Math.random() * replies.length)];
+      setVoiceState(VOICE_SPEAKING);
+      showBubble(answer);
+      await speak(answer);
+      setVoiceState(VOICE_AWAKE);
+      touchVoiceSession(cfg.voiceSessionMs);
+      return;
+    }
+
+    // Oturum acik: soylenen her sey Kevin'e
+    markInteraction();
+    await voiceReply(text, cfg);
+  } finally {
+    voiceBusy = false;
+  }
+}
+
 // --- Fareyi takip etme: karakter imlece bakiyor ---
 
 const CURSOR_POLL_MS = 90;
@@ -389,6 +512,20 @@ if (new URLSearchParams(window.location.search).get('selftest')) {
       console.error('SELFTEST HATA:', err.message);
     }
   }, 2500);
+}
+
+// Gelistirme: --voicetest mikrofonsuz sesli akisi deniyor
+const voiceTest = new URLSearchParams(window.location.search).get('voicetest');
+if (voiceTest) {
+  setTimeout(async () => {
+    const steps = voiceTest.split('|');
+    for (const line of steps) {
+      console.log(`VOICETEST duyulan: "${line}" (durum: ${voiceState})`);
+      await handleVoice(line);
+      console.log(`VOICETEST sonrasi durum: ${voiceState}`);
+    }
+    console.log('VOICETEST bitti');
+  }, 3000);
 }
 
 initWorld();
@@ -555,6 +692,9 @@ settingsBtn.addEventListener('click', async () => {
   nameInput.value = cfg.name || '';
   nicknamesInput.value = (cfg.nicknames || []).join(', ');
   handsFreeInput.checked = cfg.handsFree !== false;
+  wakeRepliesInput.value = (cfg.wakeReplies && cfg.wakeReplies.length ? cfg.wakeReplies : DEFAULT_WAKE_REPLIES).join(', ');
+  sessionSecsInput.value = Math.round((cfg.voiceSessionMs || DEFAULT_SESSION_MS) / 1000);
+  personaInput.value = cfg.persona || '';
   await refreshModelList(cfg.model);
   document.body.classList.add('config-open');
   chatView.classList.add('hidden');
@@ -590,6 +730,9 @@ saveConfigBtn.addEventListener('click', async () => {
     name: nameInput.value.trim() || 'Kevin',
     nicknames,
     handsFree: handsFreeInput.checked,
+    wakeReplies: wakeRepliesInput.value.split(',').map((w) => w.trim()).filter(Boolean),
+    voiceSessionMs: Math.max(5, Number(sessionSecsInput.value) || 20) * 1000,
+    persona: personaInput.value.trim(),
   });
   document.body.classList.remove('config-open');
   configView.classList.add('hidden');
@@ -606,18 +749,25 @@ function addMessage(text, who) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function speak(text) {
-  try {
-    const base64 = await window.kevinAPI.speak(text);
-    const audio = new Audio(`data:audio/wav;base64,${base64}`);
-    audio.onended = () => setBusy(null);
-    audio.onerror = () => setBusy(null);
-    setBusy('talk');
-    audio.play();
-  } catch (err) {
-    setBusy(null);
-    console.error('TTS hatasi:', err);
-  }
+function speak(text) {
+  return new Promise(async (resolve) => {
+    try {
+      const base64 = await window.kevinAPI.speak(text);
+      const audio = new Audio(`data:audio/wav;base64,${base64}`);
+      const done = () => {
+        setBusy(null);
+        resolve();
+      };
+      audio.onended = done;
+      audio.onerror = done;
+      setBusy('talk');
+      audio.play();
+    } catch (err) {
+      setBusy(null);
+      console.error('TTS hatasi:', err);
+      resolve();
+    }
+  });
 }
 
 const MAX_HISTORY_MESSAGES = 16;
@@ -803,14 +953,7 @@ async function initHandsFree() {
           const text = await window.kevinAPI.transcribeWav(wavBuffer);
           if (!text) return;
 
-          const freshCfg = await window.kevinAPI.getConfig();
-          const wakeName = (freshCfg.name || 'Kevin').toLowerCase();
-          const wakeWords = [wakeName, ...(freshCfg.nicknames || [])];
-          const lowerText = text.toLowerCase();
-          if (wakeWords.some((w) => lowerText.includes(w))) {
-            openPanelForChat();
-            sendChat(text);
-          }
+          await handleVoice(text);
         } catch (err) {
           console.error('Eller serbest transkripsiyon hatasi:', err);
         }

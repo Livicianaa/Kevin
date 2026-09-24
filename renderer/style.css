@@ -275,3 +275,15 @@ body.config-open #character {
   margin: 2px 0 0 0;
   width: auto;
 }
+
+#persona {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 11px;
+  resize: vertical;
+}
+
+#session-secs {
+  width: 80px;
+}

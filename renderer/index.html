@@ -33,6 +33,12 @@
       <input id="name" type="text" placeholder="Kevin" />
       <label>Nasıl seslenmek istersin? (virgülle ayır)</label>
       <input id="nicknames" type="text" placeholder="kanka, aga, usta..." />
+      <label>Çağırınca ne desin? (virgülle ayır)</label>
+      <input id="wake-replies" type="text" placeholder="Efendim?, Buyur, Ne oldu?" />
+      <label>Kaç saniye sessizlikten sonra dinlemeyi bıraksın?</label>
+      <input id="session-secs" type="number" min="5" max="120" step="5" />
+      <label>Karakteri (boş bırakırsan varsayılan)</label>
+      <textarea id="persona" rows="4" placeholder="Sen {isim}sin. ..."></textarea>
       <label id="handsfree-row">
         <input id="handsfree" type="checkbox" checked />
         Eller serbest dinleme (mikrofonu sürekli dinler, CPU kullanımını belirgin artırır)

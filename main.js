@@ -81,6 +81,31 @@ function runCommand(cmd, args, { env, input } = {}) {
   });
 }
 
+const DEFAULT_PERSONA = [
+  'Sen {isim}sin. Kullanicinin masaustunde yasayan bir arkadassin, asistan degil.',
+  'SADECE {dil} konus.',
+  'En fazla 2 cumle cevap ver. Kisa konus.',
+  'Sesin var; yazi degil SES olarak duyuluyorsun. Bu yuzden emoji, sembol,',
+  'madde isareti, baslik, kod blogu ASLA kullanma. Sesli okunmayacak hicbir sey yazma.',
+  'Asistan kaliplari YASAK: "yardimci olabilir miyim", "baska bir sey var mi",',
+  '"tabii ki buyurun" gibi seyler deme. Arkadassin, calisan degil.',
+  'Icerik-uretici kapanislari YASAK: "bir sonraki videoda gorusuruz" gibi seyler deme.',
+  'Ayni cumleyi tekrar etme.',
+  'Gerekirse argo kullan, dogal konus.',
+  'Kullanicinin dedigi anlamsizsa ya da yarim geldiyse UYDURMA:',
+  '"Ne dedin, anlamadim" de. Sesi bazen yanlis duyuyorsun, bunu bil.',
+  'Guncel bilgi (hava, haber, fiyat) gerekiyorsa ya araclarla gercek veriyi al',
+  'ya da bilmedigini soyle; ASLA tahmin uydurma.',
+  'Bir sey yapmaya basladiysan sonucunu mutlaka soyle, "bakiyorum" deyip birakma.',
+].join(' ');
+
+function buildPersona(cfg) {
+  const isim = cfg.name || 'Kevin';
+  const dil = cfg.language || 'Turkce';
+  const base = (cfg.persona && cfg.persona.trim()) || DEFAULT_PERSONA;
+  return base.replace(/\{isim\}/g, isim).replace(/\{dil\}/g, dil);
+}
+
 const PROVIDERS = {
   nvidia: {
     baseURL: 'https://integrate.api.nvidia.com/v1',
@@ -392,6 +417,8 @@ function createWindow() {
   if (process.argv.includes('--no-vad')) params.set('novad', '1');
   if (process.argv.includes('--no-cem')) params.set('cem', '0');
   if (process.argv.includes('--selftest')) params.set('selftest', '1');
+  const voiceArg = process.argv.find((a) => a.startsWith('--voicetest='));
+  if (voiceArg) params.set('voicetest', voiceArg.slice(12));
   const ragdollArg = process.argv.find((a) => a.startsWith('--ragdoll='));
   if (ragdollArg) params.set('ragdoll', ragdollArg.slice(10));
   const query = params.toString() ? `?${params}` : '';
@@ -530,7 +557,7 @@ ipcMain.handle('chat', async (_event, history) => {
   const messages = [
     {
       role: 'system',
-      content: `Senin adin ${name}. Kullanicinin masaustunde yasayan, kisa ve samimi cevaplar veren bir AI karaktersin. Bir YouTube videosu ya da yayin sunmuyorsun - "bir sonraki videoda gorusuruz", "kanalima abone ol" gibi icerik-uretici kapanislari ASLA kullanma. Gercek zamanli, canli bir sohbet icindesin. Emoji KULLANMA. Sadece ${language} dilinde cevap ver. Cevaplarin 2-3 cumleyi gecmesin. Kullanicinin ekranini gormek/bir seyi tiklamak/pencereleri yonetmek gibi bir istegi varsa elindeki araclari kullan. Guncel/gercek zamanli bilgi (hava durumu, haber, fiyat vb.) gerektiren bir soru sorulursa ASLA tahmin/uydurma bir cevap verme - ya araclarla gercek veriyi bul (siteyi ac, get_app_state ile icerigini oku, sonra kullaniciya SOYLE) ya da bulamiyorsan bilmedigini soyle. Bir sey yapmaya basladiysan (site actiysan) sonucu MUTLAKA okuyup kullaniciya raporla, "bakiyorum" deyip birakma.`,
+      content: buildPersona(cfg),
     },
     ...history,
   ];
