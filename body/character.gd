@@ -970,11 +970,9 @@ func _keep_above_ground(delta: float) -> void:
 		lowest = minf(lowest, _part_bottom(part))
 	# Gomulme aninda duzeltiliyor; havada kalma (oranlar insandan farkli)
 	# yavasca asagi cekiliyor
+	# Yukari da asagi da hiz sinirli: aninda kaldirmak "ziplama" gibi duruyordu
 	var need := ground_y - lowest
-	if need > getup_lift:
-		getup_lift = need
-	else:
-		getup_lift = lerpf(getup_lift, need, minf(1.0, delta * 6.0))
+	getup_lift = move_toward(getup_lift, need, delta * (2.5 if need > getup_lift else 1.2))
 	if getup_lift != 0.0:
 		for b in bodies.values():
 			b.global_position.y += getup_lift
@@ -1045,7 +1043,10 @@ func _begin_clip_getup(body_xf: Transform3D, bb: Basis, start_local: Dictionary,
 	for i in n:
 		var fr: Dictionary = getup_clip[i]
 		var frac := float(i) / float(n - 1)
-		var face := lerp_angle(face0, face1, smoothstep(0.0, GETUP_TURN, frac))
+		# Klip bastan profilde: derinlik yonunde (kameraya dogru) yatarken
+		# yuvarlanma/kalkis onden bakinca masa gibi tuhaf sekiller cikariyordu.
+		# Donus, dustugu pozdan ilk kareye gecerken yerde yapiliyor.
+		var face := face1
 		var yaw := Basis(Vector3.UP, face)
 		var d: Vector3 = fr.center - c0
 		var off := yaw * Vector3(d.x, 0, d.z)
@@ -1053,14 +1054,26 @@ func _begin_clip_getup(body_xf: Transform3D, bb: Basis, start_local: Dictionary,
 		origin.x = lerpf(origin.x, clampf(origin.x, bounds.x, bounds.y), frac)
 		keys.append([i * frame_dt, Transform3D(yaw * fr.basis, origin), fr.local])
 
-	# Dustugu pozdan klibin ilk karesine; yuz ustuyse once yan donup sirt ustune
-	var lead := GETUP_SETTLE
+	# Dustugu pozdan klibin ilk karesine (yerde yana donerek); yuz ustuyse once
+	# yan donup sirt ustune
+	var lead := 0.6
 	var start: Array = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
 	if not supine:
+		# Yuz ustunden sirt ustune: duz yuz ustu -> yan -> sirt ustu, ~1 sn,
+		# yerde kalarak. Onceden 0.4 sn'de donup kollar altta kalinca bir anda
+		# yukari "zipliyordu". Yanda kollar gogsun onunde (altina girmesin).
 		var first: Transform3D = keys[0][1]
-		var side := Transform3D(first.basis * Basis(Vector3.UP, PI / 2.0), first.origin + Vector3(0, 0.1, 0))
-		start.append([0.4, side, keys[0][2]])
-		lead = 0.8
+		var arms_front := {
+			"right_arm": _dir_quat(Vector3(-0.15, -0.35, 1.0)),
+			"left_arm": _dir_quat(Vector3(0.15, -0.35, 1.0)),
+			"right_leg": keys[0][2]["right_leg"], "left_leg": keys[0][2]["left_leg"],
+			"head": Quaternion.IDENTITY,
+		}
+		var flat := Transform3D(first.basis * Basis(Vector3.UP, PI), first.origin)
+		var side := Transform3D(first.basis * Basis(Vector3.UP, PI / 2.0), first.origin + Vector3(0, 0.15, 0))
+		start.append([0.6, flat, arms_front])
+		start.append([1.1, side, arms_front])
+		lead = 1.55
 	for k in keys:
 		k[0] += lead
 	getup_keys = start + keys
