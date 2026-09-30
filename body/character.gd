@@ -38,7 +38,7 @@ const WALK_SPEED := 1.4
 const TURN_SPEED := 6.0
 ## Yururken yonune bakis. Yari donuk (0.95 rad) yurudugunde karakter kameraya
 ## dogru yuruyormus gibi gorunuyordu; neredeyse tam profil.
-const FACE_SIDE := PI / 2.0 * 0.92
+const FACE_SIDE := PI / 2.0
 const GETUP_DELAY := 1.0
 const GETUP_TIME := 0.9
 const SETTLE_ENERGY := 0.12
@@ -69,7 +69,7 @@ const EMOTE_POOLS := {
 	"idle": ["lookaround", "Inspect", "item", "hunchback", "shake", "nervous", "heart", "bow2"],
 	"rest": ["sit", "cool_sit", "campfire_sit1", "lejat", "lay_down5", "meditation_fly"],
 	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
-		"jump", "jumping jacks", "selfie", "headball", "headspin", "headyeet", "narutonew", "tpose", "BPS_bloop"],
+		"jump", "jumping jacks", "selfie", "headspin", "tpose"],
 	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
 }
 ## Dongulu emote'larin suresi (saniye) havuza gore
@@ -365,7 +365,10 @@ func _head_angles(t: float) -> Vector2:
 
 func _cem_step(delta: float) -> void:
 	cem_age += delta * 20.0
-	var target_speed := CEM_WALK_LIMB_SPEED if anim_state == "walk" else 0.0
+	# Adim sadece tam yana donmusken: yuzu kameraya donukken adim atinca
+	# "ekrana dogru yuruyor" gibi gorunuyordu
+	var turned := absf(facing_now - facing) < 0.05 and absf(facing) > 0.1
+	var target_speed := CEM_WALK_LIMB_SPEED if anim_state == "walk" and turned else 0.0
 	limb_speed = move_toward(limb_speed, target_speed, delta * 2.0)
 	limb_swing += limb_speed * CEM_SWING_RATE * delta
 
@@ -460,14 +463,16 @@ func _update_behaviour(delta: float) -> void:
 					_end_emote()
 		"walk":
 			var dir := signf(walk_target - root_x)
-			root_x += dir * WALK_SPEED * delta
 			facing = dir * FACE_SIDE
+			# Once yana don, sonra yuru
+			if absf(facing_now - facing) < 0.05:
+				root_x += dir * WALK_SPEED * delta * (limb_speed / CEM_WALK_LIMB_SPEED)
 			if (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
 				root_x = walk_target
 				_set_state("idle", randf_range(2.0, 5.0))
 
-	# Yurumuyorken izleyiciye (kameraya) don
-	if anim_state != "walk":
+	# Yurumuyorken izleyiciye (kameraya) don - ama adimlar bittikten sonra
+	if anim_state != "walk" and limb_speed < 0.02:
 		facing = 0.0
 	facing_now = move_toward(facing_now, facing, TURN_SPEED * delta)
 	root_x = clampf(root_x, bounds.x, bounds.y)
