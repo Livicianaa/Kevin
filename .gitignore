@@ -6,3 +6,5 @@ renderer/vad-assets/
 renderer/skin-viewer-bundle.js
 .directory
 bin/cem/
+body/.godot/
+body/*.import
