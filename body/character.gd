@@ -27,8 +27,8 @@ const PARTS := {
 ## Uzuvlar: govdeye baglandigi eklem (piksel, ayakta) ve fizikteki koni acisi (derece)
 const LIMBS := {
 	"head":      { "joint": Vector3(0, 24, 0),  "swing": 32.0 },
-	"right_arm": { "joint": Vector3(-5, 23, 0), "swing": 105.0 },
-	"left_arm":  { "joint": Vector3(5, 23, 0),  "swing": 105.0 },
+	"right_arm": { "joint": Vector3(-5, 23, 0), "swing": 160.0 },
+	"left_arm":  { "joint": Vector3(5, 23, 0),  "swing": 160.0 },
 	"right_leg": { "joint": Vector3(-2, 12, 0), "swing": 50.0 },
 	"left_leg":  { "joint": Vector3(2, 12, 0),  "swing": 50.0 },
 }
@@ -732,9 +732,17 @@ func _update_ragdoll(delta: float) -> void:
 		return
 
 	released_for += delta
+	# Ayaklarinin ustune dustu: yikilmasin, comelip darbeyi alsin ve ayakta kalsin
+	var body: RigidBody3D = bodies["body"]
+	var bb := body.global_transform.basis.orthonormalized()
+	if released_for > 0.1 and bb.y.y > 0.8 and body.linear_velocity.y > -1.0 and body.linear_velocity.length() < 3.0:
+		var feet := minf(_part_bottom("right_leg"), _part_bottom("left_leg"))
+		if feet - ground_y < 0.12:
+			_begin_getup()
+			return
 	var energy := 0.0
-	for body in bodies.values():
-		energy += body.linear_velocity.length_squared()
+	for part_body in bodies.values():
+		energy += part_body.linear_velocity.length_squared()
 
 	# Yerde yatarken fizik motoru ara sira minik bir temas sarsintisi uretiyor.
 	# Onceden tek bir sarsinti sayaci sifirliyordu ve karakter hic kalkmiyordu;
@@ -769,8 +777,17 @@ func _apply_muscles() -> void:
 	var strength := {}
 
 	if held_part != "":
-		for limb in LIMBS:
-			strength[limb] = 0.0 if limb == held_part else 0.5
+		# Tutulan uzvun eklemi de kasli: gevsek birakinca govde oradan ip gibi
+		# sallaniyordu ("kendini saliyor").
+		match held_part:
+			"head":
+				targets["head"] = Quaternion.IDENTITY
+				strength["head"] = 0.9
+			"body":
+				pass
+			_:
+				targets[held_part] = _point_limb_at(held_part, hold_point, bb)
+				strength[held_part] = 0.45
 		var reach := hold_point
 		if held_part.ends_with("leg"):
 			# Bacaktan bas asagi: kollar yere uzanip kendini korumaya calisiyor
@@ -778,22 +795,38 @@ func _apply_muscles() -> void:
 		for arm in ["right_arm", "left_arm"]:
 			if arm != held_part:
 				targets[arm] = _point_limb_at(arm, reach, bb)
-				strength[arm] = 0.65
+				strength[arm] = 0.75
 		for leg in ["right_leg", "left_leg"]:
+			if leg == held_part:
+				continue
 			var phase := 0.0 if leg == "right_leg" else PI
-			targets[leg] = Quaternion.from_euler(Vector3(sin(muscle_t * 7.0 + phase) * 0.55, 0, 0))
-			strength[leg] = 0.35 if leg != held_part else 0.0
-		targets["head"] = _look_quat(hold_point, bb)
+			targets[leg] = Quaternion.from_euler(Vector3(-0.2 + sin(muscle_t * 7.0 + phase) * 0.5, 0, 0))
+			strength[leg] = 0.7
+		if held_part != "head":
+			targets["head"] = _look_quat(hold_point, bb)
+			strength["head"] = 0.6
 	else:
 		var v := body.linear_velocity
 		var airborne := v.length() > 1.5 or body.global_position.y - ground_y > 1.1
-		if airborne:
+		if airborne and bb.y.y > 0.55:
+			# Dik dusuyor: ayak ustune inmeye hazirlan, kollar denge icin acik.
+			# Govdeyi dik tutan hafif bir "havada denge" torku da var.
+			for limb in LIMBS:
+				strength[limb] = 0.8
+			targets["right_arm"] = _dir_quat(Vector3(-0.8, -0.45, 0.2))
+			targets["left_arm"] = _dir_quat(Vector3(0.8, -0.45, 0.2))
+			targets["right_leg"] = Quaternion.from_euler(Vector3(-0.05, 0, -0.06))
+			targets["left_leg"] = Quaternion.from_euler(Vector3(0.05, 0, 0.06))
+			targets["head"] = Quaternion.IDENTITY
+			body.apply_torque(bb.y.cross(Vector3.UP) * 70.0 - body.angular_velocity * 8.0)
+		elif airborne:
 			var impact := _impact_soon(body, v)
 			for limb in LIMBS:
 				strength[limb] = 1.0 if impact else 0.6
-			# Kollar yuzun onunde yukarida, bacaklar toplanmis, cene gogse
-			targets["right_arm"] = _dir_quat(Vector3(0.3, 0.8, 0.55))
-			targets["left_arm"] = _dir_quat(Vector3(-0.3, 0.8, 0.55))
+			# Kollar yuzun onunde yukarida (kendi tarafinda, capraz degil),
+			# bacaklar toplu, cene gogse
+			targets["right_arm"] = _dir_quat(Vector3(-0.15, 0.8, 0.6))
+			targets["left_arm"] = _dir_quat(Vector3(0.15, 0.8, 0.6))
 			targets["right_leg"] = Quaternion.from_euler(Vector3(-0.6, 0, -0.05))
 			targets["left_leg"] = Quaternion.from_euler(Vector3(-0.45, 0, 0.05))
 			targets["head"] = Quaternion.from_euler(Vector3(0.35, 0, 0))
@@ -839,7 +872,16 @@ func _point_limb_at(limb: String, world_point: Vector3, bb: Basis) -> Quaternion
 	var d := world_point - joint
 	if d.length() < 0.01:
 		return _dir_quat(Vector3.DOWN)
-	return _dir_quat(bb.inverse() * d)
+	var ld: Vector3 = (bb.inverse() * d).normalized()
+	# Kol kendi tarafinda ve govdenin onunde kalsin: capraz uzaninca kollar
+	# ic ice giriyor, kafadan tutunca kendini bogazliyormus gibi duruyordu.
+	if limb == "right_arm":
+		ld.x = minf(ld.x, 0.1)
+	elif limb == "left_arm":
+		ld.x = maxf(ld.x, -0.1)
+	if limb.ends_with("arm"):
+		ld.z = maxf(ld.z, 0.15)
+	return _dir_quat(ld)
 
 
 func _look_quat(world_point: Vector3, bb: Basis) -> Quaternion:
@@ -859,27 +901,51 @@ func _impact_soon(body: RigidBody3D, v: Vector3) -> bool:
 	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
 
 
+## Parcanin en alt noktasi (dunya y)
+func _part_bottom(part: String) -> float:
+	var b: RigidBody3D = bodies[part]
+	var h: Vector3 = PARTS[part].size * PX * 0.5
+	var lowest := INF
+	for sx in [-1, 1]:
+		for sy in [-1, 1]:
+			for sz in [-1, 1]:
+				lowest = minf(lowest, (b.global_transform * Vector3(h.x * sx, h.y * sy, h.z * sz)).y)
+	return lowest
+
+
 ## Kalkis anahtar kareleri. lean: govdenin one egimi (derece, + one / yuz
 ## asagi, - geriye / sirt ustu). h: govde merkezinin zeminden yuksekligi (px).
 ## dx: yuzun baktigi yone kayma (px). Uzuv acilari DUNYAYA gore (derece, dikey
 ## asagidan; + geriye, - one): kollar/bacaklar yere gercekten dayaniyor.
 ## livi: "sihirli sekilde geri ayaga kalkmasin, kolundan bacagindan destek alsin".
 const GETUP_PLANS := {
-	# Sirt ustu: dogrul-otur (eller arkada yere dayali) -> dizler -> tek diz -> ayakta
+	# Sirt ustu: dogrul-otur (eller arkada yere dayali) -> dizler -> tek diz -> ayakta.
+	# Ara pozlarda kisa duraklama: surekli donus "dimdik kalkiyor" gibi gorunuyordu.
 	"supine": [
 		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "arm": -90.0, "rleg": -90.0, "lleg": -90.0, "head": 0.0},
-		{"t": 0.55, "lean": -25.0, "h": 7.5, "dx": 4.0, "arm": 35.0, "rleg": -85.0, "lleg": -85.0, "head": 0.15},
-		{"t": 1.1, "lean": 35.0, "h": 12.0, "dx": 7.0, "arm": -10.0, "rleg": 50.0, "lleg": 50.0, "head": -0.1},
-		{"t": 1.6, "lean": 10.0, "h": 14.5, "dx": 7.5, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
-		{"t": 2.15, "lean": 0.0, "h": 18.0, "dx": 7.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.25, "lean": -85.0, "h": 2.4, "dx": 0.0, "arm": -60.0, "rleg": -90.0, "lleg": -90.0, "head": 0.35},
+		{"t": 0.8, "lean": -25.0, "h": 7.5, "dx": 4.0, "arm": 35.0, "rleg": -85.0, "lleg": -85.0, "head": 0.15},
+		{"t": 1.15, "lean": -20.0, "h": 7.8, "dx": 4.0, "arm": 30.0, "rleg": -80.0, "lleg": -85.0, "head": 0.05},
+		{"t": 1.75, "lean": 35.0, "h": 12.0, "dx": 7.0, "arm": -10.0, "rleg": 50.0, "lleg": 50.0, "head": -0.1},
+		{"t": 2.05, "lean": 32.0, "h": 12.3, "dx": 7.0, "arm": -8.0, "rleg": 48.0, "lleg": 50.0, "head": -0.2},
+		{"t": 2.6, "lean": 10.0, "h": 14.5, "dx": 7.5, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
+		{"t": 3.2, "lean": 0.0, "h": 18.0, "dx": 7.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 	# Yuz ustu: sinav gibi kollarla it -> dizler -> tek diz -> ayakta
 	"prone": [
 		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "arm": 90.0, "rleg": 90.0, "lleg": 90.0, "head": 0.0},
-		{"t": 0.5, "lean": 70.0, "h": 10.3, "dx": -1.0, "arm": 0.0, "rleg": 47.0, "lleg": 47.0, "head": -0.4},
-		{"t": 1.05, "lean": 30.0, "h": 12.0, "dx": -4.0, "arm": -5.0, "rleg": 55.0, "lleg": 55.0, "head": -0.15},
-		{"t": 1.55, "lean": 10.0, "h": 14.5, "dx": -5.0, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
-		{"t": 2.1, "lean": 0.0, "h": 18.0, "dx": -5.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.3, "lean": 88.0, "h": 2.4, "dx": 0.0, "arm": 20.0, "rleg": 90.0, "lleg": 90.0, "head": -0.3},
+		{"t": 0.8, "lean": 70.0, "h": 10.3, "dx": -1.0, "arm": 0.0, "rleg": 47.0, "lleg": 47.0, "head": -0.4},
+		{"t": 1.1, "lean": 68.0, "h": 10.0, "dx": -1.0, "arm": 2.0, "rleg": 47.0, "lleg": 47.0, "head": -0.3},
+		{"t": 1.65, "lean": 30.0, "h": 12.0, "dx": -4.0, "arm": -5.0, "rleg": 55.0, "lleg": 55.0, "head": -0.15},
+		{"t": 1.95, "lean": 28.0, "h": 12.2, "dx": -4.0, "arm": -6.0, "rleg": 53.0, "lleg": 55.0, "head": -0.2},
+		{"t": 2.5, "lean": 10.0, "h": 14.5, "dx": -5.0, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
+		{"t": 3.1, "lean": 0.0, "h": 18.0, "dx": -5.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+	],
+	# Dik (ayak ustu indi ya da oturur gibi kaldi): comel, darbeyi al, dogrul
+	"upright": [
+		{"t": 0.0, "lean": 25.0, "h": 13.0, "dx": 0.0, "arm": -35.0, "rleg": -30.0, "lleg": 25.0, "head": 0.1},
+		{"t": 0.55, "lean": 0.0, "h": 18.0, "dx": 0.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 }
 ## Dustugu pozdan planin ilk karesine (yere duzgun yatis) gecis
@@ -899,12 +965,18 @@ func _begin_getup() -> void:
 	if head_dir == 0.0:
 		head_dir = 1.0
 	var supine := bb.z.y >= 0.0
-	var plan: Array = GETUP_PLANS["supine" if supine else "prone"]
+	var upright := bb.y.y > 0.5
+	var plan: Array = GETUP_PLANS["upright" if upright else ("supine" if supine else "prone")]
 	# Sirt ustu kalkan ayaklarinin tarafina, yuz ustu kalkan kafasinin tarafina bakar
 	var face_dir := -head_dir if supine else head_dir
 	var face := face_dir * FACE_SIDE
+	if upright:
+		# Dik duruyorsa yonunu koru (profil ya da kameraya donuk)
+		face = atan2(bb.z.x, bb.z.z)
+		face_dir = signf(sin(face))
 
 	var x0 := clampf(body_xf.origin.x, bounds.x, bounds.y)
+	var settle := GETUP_SETTLE if not upright else 0.18
 	getup_keys = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
 	for key in plan:
 		var lean := deg_to_rad(key.lean)
@@ -931,7 +1003,7 @@ func _begin_getup() -> void:
 			if limb == "head":
 				e = Vector3(key.head, 0, 0)
 			local[limb] = Quaternion.from_euler(e)
-		getup_keys.append([GETUP_SETTLE + key.t, Transform3D(basis, origin), local])
+		getup_keys.append([settle + key.t, Transform3D(basis, origin), local])
 
 	getup_time = 0.0
 	root_x = clampf(x0 + face_dir * (plan[plan.size() - 1].dx) * PX, bounds.x, bounds.y)

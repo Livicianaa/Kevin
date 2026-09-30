@@ -362,7 +362,7 @@ func _mouse_world() -> Vector3:
 ## Ayaktayken koldan/kafadan/govdeden tutulunca once sendeleme (LED): yavas
 ## cekince o yone yuruyor, hizli ya da yukari cekince ragdoll. Bacaktan
 ## tutulunca dogrudan ragdoll (tokezleyip dusuyor).
-const LED_PARTS := ["right_arm", "left_arm", "head", "body"]
+const LED_PARTS := ["right_arm", "left_arm"]
 var led := false
 var led_body: RigidBody3D = null
 var last_led_target := Vector3.INF
