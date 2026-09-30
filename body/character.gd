@@ -88,6 +88,7 @@ var emote_weight := 1.0
 var emote_facing := NAN
 ## Yurume bitince ne yapilacak ("wall_sit" = kenara yaslanip otur)
 var after_walk := ""
+var walk_stall := 0.0
 var wall_sit_facing := 0.0
 
 var cem: RefCounted = null
@@ -509,13 +510,22 @@ func _update_behaviour(delta: float) -> void:
 				if emote_weight <= 0.0:
 					_end_emote()
 		"walk":
+			# Hedef her karede sinirin icinde: sinir sonradan birazcik degisince
+			# hedef disarida kaliyor, Kevin kenarda sonsuza kadar yerinde
+			# yuruyordu.
+			walk_target = clampf(walk_target, bounds.x, bounds.y)
 			var dir := signf(walk_target - root_x)
 			facing = dir * FACE_SIDE
+			var before := root_x
 			# Once yana don, sonra yuru
 			if absf(facing_now - facing) < 0.05:
-				root_x += dir * WALK_SPEED * delta * (limb_speed / CEM_WALK_LIMB_SPEED)
-			if dir == 0.0 or (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
-				root_x = walk_target
+				root_x = clampf(root_x + dir * WALK_SPEED * delta * (limb_speed / CEM_WALK_LIMB_SPEED), bounds.x, bounds.y)
+			# Emniyet: ilerleyemiyorsa (bir seye takildi) vazgec
+			walk_stall = walk_stall + delta if absf(root_x - before) < 0.0001 and limb_speed > 0.3 else 0.0
+			if walk_stall > 0.6 or absf(walk_target - root_x) < 0.01 or dir == 0.0 or (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
+				if walk_stall <= 0.6:
+					root_x = walk_target
+				walk_stall = 0.0
 				if after_walk == "wall_sit" and play_emote("sit_lean_wall", randf_range(15.0, 30.0)):
 					emote_facing = wall_sit_facing
 				else:
@@ -977,6 +987,20 @@ const GETUP_PLANS := {
 		{"t": 1.4, "lean": 0.0, "h": 18.0, "dx": 0.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 }
+## Kenara yakin dustuyse diz cokme sonrasi: kenara don, elleri duvara dayayip
+## iterek kalk (livi: "ekranin kenarindaysa duvardan destek alabilir").
+## t: diz cokme karesinden sonraki sure.
+const GETUP_WALL_TAIL := [
+	{"t": 0.5, "lean": 20.0, "h": 12.8, "arm": -110.0, "rleg": 45.0, "lleg": 50.0, "head": -0.25},
+	{"t": 1.0, "lean": 12.0, "h": 15.0, "arm": -95.0, "rleg": -30.0, "lleg": 25.0, "head": -0.1},
+	{"t": 1.5, "lean": 4.0, "h": 17.4, "arm": -70.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+	{"t": 1.9, "lean": 0.0, "h": 18.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+]
+## Duvar destegi icin kenara en fazla bu kadar yakin (birim)
+const WALL_NEAR := 0.9
+## Duvara dayanirken govdenin duvardan uzakligi (birim)
+const WALL_STAND_OFF := 0.5
+
 ## Dustugu pozdan planin ilk karesine (yere duzgun yatis) gecis
 const GETUP_SETTLE := 0.45
 
@@ -1003,7 +1027,24 @@ func _begin_getup() -> void:
 	# Sadece gercekten dik (ayaklarinin ustunde) ise comelip kalk; 60 dereceye
 	# kadar egik yatan govde "dik" sayilip direk gibi kalkiyordu.
 	var upright := bb.y.y > 0.85
-	var plan: Array = GETUP_PLANS["upright" if upright else ("supine" if supine else "prone")]
+	var plan: Array = (GETUP_PLANS["upright" if upright else ("supine" if supine else "prone")] as Array).duplicate()
+
+	# Kenara yakin mi? Oyleyse son iki kare (tek diz, ayakta) yerine duvar destegi
+	var wall_dir := 0.0
+	if not upright:
+		if body_xf.origin.x - bounds.x < WALL_NEAR:
+			wall_dir = -1.0
+		elif bounds.y - body_xf.origin.x < WALL_NEAR:
+			wall_dir = 1.0
+	var wall_x := (bounds.x - 0.45) if wall_dir < 0.0 else (bounds.y + 0.45)
+	if wall_dir != 0.0:
+		plan.resize(plan.size() - 2)
+		var base_t: float = plan[plan.size() - 1].t
+		for tail in GETUP_WALL_TAIL:
+			var k: Dictionary = tail.duplicate()
+			k.t = base_t + tail.t
+			k.wall = true
+			plan.append(k)
 	# Sirt ustu kalkan ayaklarinin tarafina, yuz ustu kalkan kafasinin tarafina bakar
 	var fwd := -h3 if supine else h3
 	if upright:
@@ -1014,12 +1055,16 @@ func _begin_getup() -> void:
 	var z0 := body_xf.origin.z
 	var settle := GETUP_SETTLE if not upright else 0.12
 	getup_keys = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
+	var face_wall := wall_dir * FACE_SIDE
 	for key in plan:
 		var lean := deg_to_rad(key.lean)
-		var basis := Basis(Vector3.UP, face) * Basis(Vector3.RIGHT, lean)
+		var on_wall: bool = key.get("wall", false)
+		var basis := Basis(Vector3.UP, face_wall if on_wall else face) * Basis(Vector3.RIGHT, lean)
 		var along: float = key.t / plan[plan.size() - 1].t
-		var origin: Vector3 = Vector3(x0, ground_y + key.h * PX, z0 * (1.0 - along)) + fwd * key.dx * PX
+		var origin: Vector3 = Vector3(x0, ground_y + key.h * PX, z0 * (1.0 - along)) + fwd * float(key.get("dx", 0.0)) * PX
 		origin.x = lerpf(origin.x, clampf(origin.x, bounds.x, bounds.y), along)
+		if on_wall:
+			origin.x = wall_x - wall_dir * WALL_STAND_OFF
 		var local := {}
 		for limb in LIMBS.keys():
 			var world_a := 0.0
@@ -1041,10 +1086,18 @@ func _begin_getup() -> void:
 			if limb == "head":
 				e = Vector3(key.head, 0, 0)
 			local[limb] = Quaternion.from_euler(e)
+		# Ilk karede uzuvlar dustukleri pozdan tam duzlesmesin (tahta gibi
+		# duzlesip oyle kalkiyordu): yari yolda kalsin
+		if getup_keys.size() == 1:
+			for limb in LIMBS.keys():
+				local[limb] = (start_local[limb] as Quaternion).slerp(local[limb], 0.45)
 		getup_keys.append([settle + key.t, Transform3D(basis, origin), local])
 
 	getup_time = 0.0
-	root_x = clampf(x0 + fwd.x * (plan[plan.size() - 1].dx) * PX, bounds.x, bounds.y)
+	var last_key: Transform3D = getup_keys[getup_keys.size() - 1][1]
+	root_x = clampf(last_key.origin.x, bounds.x, bounds.y)
+	if wall_dir != 0.0:
+		face = face_wall
 	facing = face
 	facing_now = face
 	anim_state = "idle"
