@@ -9,6 +9,12 @@ GODOT="${GODOT:-$(command -v godot || echo "$HOME/.local/bin/godot")}"
 
 if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null; then
   RULES="${XDG_RUNTIME_DIR:-/tmp}/kevin-body-rules.conf"
+  # Pencere ilk acildigi monitorun olcegini omur boyu tasiyor (XWayland,
+  # force_zero_scaling). 1.5 olcekli laptop ekraninda acilinca butun X
+  # koordinatlari 1.5'e bolunuyordu: pencere kuculuyor, Kevin ekranin
+  # ortasinda havada duruyordu, fare ile pencere birbirini tutmuyordu.
+  # En dusuk olcekli monitorde acilinca koordinatlar tutarli.
+  KEVIN_MONITOR="$(hyprctl monitors -j | python3 -c 'import json,sys; m=min(json.load(sys.stdin), key=lambda m: m["scale"]); print(m["name"])')"
   cat > "$RULES" <<'EOF'
 windowrule = float 1, match:class ^(Kevin)$
 windowrule = pin 1, match:class ^(Kevin)$
@@ -18,6 +24,7 @@ windowrule = no_anim 1, match:class ^(Kevin)$
 windowrule = no_dim 1, match:class ^(Kevin)$
 windowrule = no_initial_focus 1, match:class ^(Kevin)$
 EOF
+  echo "windowrule = monitor $KEVIN_MONITOR, match:class ^(Kevin)$" >> "$RULES"
   hyprctl keyword source "$RULES" >/dev/null
 fi
 
