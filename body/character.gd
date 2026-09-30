@@ -35,7 +35,9 @@ const LIMBS := {
 const BODY_REST_PX := Vector3(0, 18, 0)
 const WALK_SPEED := 1.1
 const TURN_SPEED := 6.0
-const FACE_SIDE := 0.95
+## Yururken yonune bakis. Yari donuk (0.95 rad) yurudugunde karakter kameraya
+## dogru yuruyormus gibi gorunuyordu; neredeyse tam profil.
+const FACE_SIDE := PI / 2.0 * 0.92
 const GETUP_DELAY := 1.0
 const GETUP_TIME := 0.9
 const SETTLE_ENERGY := 0.12
