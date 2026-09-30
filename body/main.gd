@@ -57,6 +57,8 @@ var test_throw := false
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0, 0, 0, 0))
 	get_viewport().transparent_bg = true
+	# Donen kutularin kenarlari merdiven/cizgi gibi gorunuyordu
+	get_viewport().msaa_3d = Viewport.MSAA_4X
 	Engine.max_fps = 60
 
 	for arg in OS.get_cmdline_user_args():

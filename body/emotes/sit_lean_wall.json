@@ -15,7 +15,7 @@
     "easing": "EASEINOUTSINE",
     "torso": {
      "y": -0.625,
-     "z": -0.3,
+     "z": -0.38,
      "pitch": 0.35
     }
    },
@@ -41,7 +41,7 @@
     "tick": 20,
     "easing": "EASEINOUTSINE",
     "rightArm": {
-     "pitch": -0.75,
+     "pitch": -0.35,
      "roll": 0.12
     }
    },
@@ -49,7 +49,7 @@
     "tick": 20,
     "easing": "EASEINOUTSINE",
     "leftArm": {
-     "pitch": -0.75,
+     "pitch": -0.35,
      "roll": -0.12
     }
    },
@@ -120,7 +120,7 @@
     "tick": 150,
     "easing": "EASEINOUTSINE",
     "rightArm": {
-     "pitch": -0.75,
+     "pitch": -0.35,
      "roll": 0.12
     }
    },
@@ -128,7 +128,7 @@
     "tick": 166,
     "easing": "EASEOUTQUAD",
     "rightArm": {
-     "pitch": -0.6,
+     "pitch": -0.2,
      "roll": 0.16
     }
    },
@@ -136,7 +136,7 @@
     "tick": 180,
     "easing": "EASEINOUTSINE",
     "rightArm": {
-     "pitch": -0.75,
+     "pitch": -0.35,
      "roll": 0.12
     }
    }

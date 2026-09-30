@@ -318,7 +318,9 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 	for face in faces:
 		var normal: Vector3 = face[0]
 		var c: Array = face[1]
-		var r: Rect2 = face[2]
+		# Kenar pikselleri komsu doku bolgesini okumasin (donen kutunun kenarinda
+		# ince renk cizgileri cikiyordu): yuzun UV'si icten biraz kirpiliyor
+		var r: Rect2 = (face[2] as Rect2).grow(-0.03)
 		var uv_tl := Vector2(r.position.x, r.position.y) / SKIN_SIZE
 		var uv_tr := Vector2(r.position.x + r.size.x, r.position.y) / SKIN_SIZE
 		var uv_br := Vector2(r.position.x + r.size.x, r.position.y + r.size.y) / SKIN_SIZE
@@ -334,6 +336,7 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	material.alpha_scissor_threshold = 0.5
+	material.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
 	material.roughness = 1.0
 
 	var mi := MeshInstance3D.new()
@@ -942,6 +945,32 @@ func _impact_soon(body: RigidBody3D, v: Vector3) -> bool:
 	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
 
 
+## Kalkis pozlari arasinda uzuvlar zemine gomuluyordu: gomulen varsa butun
+## vucut o kadar yukari. Eller/dizler zemine degiyor ama batmiyor.
+func _keep_above_ground() -> void:
+	var lowest := INF
+	for part in bodies:
+		lowest = minf(lowest, _part_bottom(part))
+	var sink := ground_y - lowest
+	if sink > 0.0:
+		for b in bodies.values():
+			b.global_position.y += sink
+
+
+func _num(v) -> float:
+	return v if (v is float or v is int) else 0.0
+
+
+## Temas acisi (radyan, dikey asagidan; + geri): uzvun ucu tam zemine degsin.
+## Govde egimi (lean, radyan, + one) ve govde merkez yuksekligi h (px).
+func _contact_angle(kind: String, lean: float, h: float) -> float:
+	var arm := kind.begins_with("g")
+	# Omuz govde merkezinin 5 px ustunde, kalca 6 px altinda; uzuv 12 px
+	var joint_h := h + 5.0 * cos(lean) if arm else h - 6.0 * cos(lean)
+	var a := acos(clampf(joint_h / 12.0, -1.0, 1.0))
+	return -a if kind.ends_with("f") else a
+
+
 ## Parcanin en alt noktasi (dunya y)
 func _part_bottom(part: String) -> float:
 	var b: RigidBody3D = bodies[part]
@@ -963,29 +992,30 @@ const GETUP_PLANS := {
 	# Sirt ustu: bir yana donup o eli yere dayar, eline yaslanip dogrulur, diz
 	# coker, tek ayagini basar, diger elini o dizine koyup iterek kalkar.
 	# livi: "sag elinden destek aldi, bir ayagini yere basti, diger elini o
-	# ayagina atti, ordan destek alip kalkti gibi olmasi lazim". Simetrik
-	# (iki kol/bacak ayni anda) kalkis "direk gibi" gorunuyordu.
+	# ayagina atti, ordan destek alip kalkti gibi olmasi lazim".
+	# Temas degerleri (aci yerine): "gf"/"gb" el onde/arkada yerde, "kf" ayak
+	# onde yerde, "kb" diz arkada yerde. Aci omuz/kalca yuksekliginden
+	# hesaplaniyor; elle verilen acilarda eller havada kaliyordu.
 	"supine": [
 		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "rarm": -80.0, "larm": -80.0, "rleg": -88.0, "lleg": -85.0, "head": 0.0},
-		{"t": 0.4, "lean": -80.0, "roll": 18.0, "h": 3.0, "dx": 0.5, "rarm": 20.0, "larm": -60.0, "rleg": -88.0, "lleg": -80.0, "head": 0.4},
-		{"t": 0.95, "lean": -35.0, "roll": 14.0, "h": 7.0, "dx": 3.0, "rarm": 35.0, "larm": -40.0, "rleg": -86.0, "lleg": -70.0, "head": 0.25},
-		{"t": 1.3, "lean": -30.0, "roll": 12.0, "h": 7.3, "dx": 3.2, "rarm": 32.0, "larm": -35.0, "rleg": -84.0, "lleg": -65.0, "head": 0.2},
-		{"t": 1.9, "lean": 30.0, "roll": -6.0, "h": 11.0, "dx": 6.0, "rarm": -15.0, "larm": -10.0, "rleg": 55.0, "lleg": -55.0, "head": 0.3},
-		{"t": 2.45, "lean": 26.0, "roll": -4.0, "h": 12.5, "dx": 6.5, "rarm": -8.0, "larm": -38.0, "larmroll": 0.02, "rleg": 45.0, "lleg": -45.0, "head": 0.25},
-		{"t": 3.05, "lean": 12.0, "roll": -2.0, "h": 15.5, "dx": 7.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": 20.0, "lleg": -25.0, "head": 0.05},
+		{"t": 0.4, "lean": -80.0, "roll": 18.0, "h": 3.0, "dx": 0.5, "rarm": "gb", "larm": -60.0, "rleg": -88.0, "lleg": -80.0, "head": 0.4},
+		{"t": 0.95, "lean": -35.0, "roll": 12.0, "h": 7.0, "dx": 3.0, "rarm": "gb", "larm": -40.0, "rleg": "kf", "lleg": "kf", "head": 0.25},
+		{"t": 1.3, "lean": -30.0, "roll": 10.0, "h": 7.4, "dx": 3.2, "rarm": "gb", "larm": -35.0, "rleg": "kf", "lleg": "kf", "head": 0.2},
+		{"t": 1.9, "lean": 40.0, "roll": -6.0, "h": 9.0, "dx": 6.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kf", "head": 0.3},
+		{"t": 2.45, "lean": 28.0, "roll": -4.0, "h": 11.5, "dx": 6.5, "rarm": -5.0, "larm": -40.0, "larmroll": 0.02, "rleg": "kb", "lleg": "kf", "head": 0.25},
+		{"t": 3.05, "lean": 12.0, "roll": -2.0, "h": 15.2, "dx": 7.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": "kb", "lleg": "kf", "head": 0.05},
 		{"t": 3.6, "lean": 0.0, "h": 18.0, "dx": 7.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
-	# Yuz ustu: bir eli omuz altina, iki elle it, bir dizin ustune gel, diger
-	# ayagi one bas, eli dizine koyup kalk
+	# Yuz ustu: eller one yere, iki elle it, tek diz + tek ayak, el dizde, kalk
 	"prone": [
 		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "rarm": 80.0, "larm": 80.0, "rleg": 88.0, "lleg": 88.0, "head": 0.0},
-		{"t": 0.45, "lean": 88.0, "roll": -8.0, "h": 2.6, "dx": 0.0, "rarm": 5.0, "larm": 70.0, "rleg": 88.0, "lleg": 88.0, "head": -0.3},
-		{"t": 0.95, "lean": 68.0, "roll": -4.0, "h": 9.5, "dx": -1.0, "rarm": 0.0, "larm": 4.0, "rleg": 60.0, "lleg": 72.0, "head": -0.35},
-		{"t": 1.25, "lean": 66.0, "roll": -3.0, "h": 9.4, "dx": -1.0, "rarm": 2.0, "larm": 5.0, "rleg": 58.0, "lleg": 70.0, "head": -0.25},
-		{"t": 1.85, "lean": 30.0, "roll": 5.0, "h": 11.2, "dx": -3.5, "rarm": -12.0, "larm": -8.0, "rleg": 55.0, "lleg": -50.0, "head": 0.2},
-		{"t": 2.4, "lean": 26.0, "roll": 4.0, "h": 12.5, "dx": -4.0, "rarm": -6.0, "larm": -38.0, "larmroll": 0.02, "rleg": 45.0, "lleg": -45.0, "head": 0.25},
-		{"t": 3.0, "lean": 12.0, "roll": 2.0, "h": 15.5, "dx": -4.5, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": 20.0, "lleg": -25.0, "head": 0.05},
-		{"t": 3.55, "lean": 0.0, "h": 18.0, "dx": -5.0, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.45, "lean": 88.0, "roll": -8.0, "h": 2.6, "dx": 0.0, "rarm": "gf", "larm": 70.0, "rleg": 88.0, "lleg": 88.0, "head": -0.3},
+		{"t": 0.95, "lean": 65.0, "roll": -4.0, "h": 8.5, "dx": -1.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": -0.35},
+		{"t": 1.25, "lean": 62.0, "roll": -3.0, "h": 8.7, "dx": -1.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": -0.25},
+		{"t": 1.85, "lean": 40.0, "roll": 5.0, "h": 9.0, "dx": -3.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kf", "head": 0.25},
+		{"t": 2.4, "lean": 28.0, "roll": 4.0, "h": 11.5, "dx": -3.5, "rarm": -5.0, "larm": -40.0, "larmroll": 0.02, "rleg": "kb", "lleg": "kf", "head": 0.25},
+		{"t": 3.0, "lean": 12.0, "roll": 2.0, "h": 15.2, "dx": -4.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": "kb", "lleg": "kf", "head": 0.05},
+		{"t": 3.55, "lean": 0.0, "h": 18.0, "dx": -4.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 	# livi: "put gibi duruyor, dususu biraz soft olsun": derin comelme, kollar
 	# denge icin acik, dogrulurken hafif geriye esneyip toparlanma
@@ -1038,7 +1068,10 @@ func _begin_getup() -> void:
 	# Sadece gercekten dik (ayaklarinin ustunde) ise comelip kalk; 60 dereceye
 	# kadar egik yatan govde "dik" sayilip direk gibi kalkiyordu.
 	var upright := bb.y.y > 0.85
-	var plan: Array = (GETUP_PLANS["upright" if upright else ("supine" if supine else "prone")] as Array).duplicate()
+	var plan_name := "upright" if upright else ("supine" if supine else "prone")
+	var plan: Array = (GETUP_PLANS[plan_name] as Array).duplicate()
+	if OS.is_debug_build():
+		print("[kevin] kalkis: ", plan_name)
 
 	# Kenara yakin mi? Oyleyse son iki kare (tek diz, ayakta) yerine duvar destegi
 	var wall_dir := 0.0
@@ -1090,23 +1123,29 @@ func _begin_getup() -> void:
 		# Rastgele ayna: bazen sol elden, bazen sag elden baslasin
 		var rk := "l" if mirror else "r"
 		var lk := "r" if mirror else "l"
+		var contact := {"head": "", "right_arm": "", "left_arm": "", "right_leg": "", "left_leg": ""}
+		for pair in [["right_arm", rk + "arm"], ["left_arm", lk + "arm"], ["right_leg", rk + "leg"], ["left_leg", lk + "leg"]]:
+			if key.get(pair[1]) is String:
+				contact[pair[0]] = key[pair[1]]
 		for limb in LIMBS.keys():
 			var world_a := 0.0
 			var roll := 0.0
 			match limb:
 				"right_arm":
-					world_a = key.get(rk + "arm", key.get("arm", 0.0))
+					world_a = _num(key.get(rk + "arm", key.get("arm", 0.0)))
 					roll = -key.get(rk + "armroll", key.get("aroll", 0.12))
 				"left_arm":
-					world_a = key.get(lk + "arm", key.get("arm", 0.0))
+					world_a = _num(key.get(lk + "arm", key.get("arm", 0.0)))
 					roll = key.get(lk + "armroll", key.get("aroll", 0.12))
 				"right_leg":
-					world_a = key.get(rk + "leg", 0.0)
+					world_a = _num(key.get(rk + "leg", 0.0))
 					roll = -key.get("lroll", 0.04)
 				"left_leg":
-					world_a = key.get(lk + "leg", 0.0)
+					world_a = _num(key.get(lk + "leg", 0.0))
 					roll = key.get("lroll", 0.04)
 			var e := Vector3(deg_to_rad(world_a) - lean, 0, roll)
+			if contact[limb] != "":
+				e.x = _contact_angle(contact[limb], lean, key.h) - lean
 			if limb == "head":
 				e = Vector3(key.head, 0, 0)
 			local[limb] = Quaternion.from_euler(e)
@@ -1153,6 +1192,7 @@ func _advance_getup(delta: float) -> void:
 	for limb in LIMBS.keys():
 		local[limb] = (a[2][limb] as Quaternion).slerp(b[2][limb], k)
 	_apply_pose(local, body_xf)
+	_keep_above_ground()
 
 	if getup_time >= last[0]:
 		# Kalkis eklem tabanli ayakta pozda bitiyor; paketin pozu ondan birkac
