@@ -1,0 +1,4 @@
+laytoidle.json: Quaternius "Universal Animation Library 2" (Standard) icindeki
+LayToIdle animasyonundan ornekelenmis eklem konumlari (30 kare/sn).
+Lisans: CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/).
+Kaynak: https://quaternius.com/packs/universalanimationlibrary2.html

@@ -178,6 +178,7 @@ func _ready() -> void:
 	_apply_pose(_animated_pose(0.0), _body_transform(0.0, 0.0))
 	_load_cem()
 	_load_emotes()
+	_load_getup_clip()
 
 
 func _load_emotes() -> void:
@@ -967,15 +968,115 @@ func _keep_above_ground(delta: float) -> void:
 	var lowest := INF
 	for part in bodies:
 		lowest = minf(lowest, _part_bottom(part))
-	var need := maxf(0.0, ground_y - lowest)
-	getup_lift = maxf(need, getup_lift - delta * 0.25)
-	if getup_lift > 0.0:
+	# Gomulme aninda duzeltiliyor; havada kalma (oranlar insandan farkli)
+	# yavasca asagi cekiliyor
+	var need := ground_y - lowest
+	if need > getup_lift:
+		getup_lift = need
+	else:
+		getup_lift = lerpf(getup_lift, need, minf(1.0, delta * 6.0))
+	if getup_lift != 0.0:
 		for b in bodies.values():
 			b.global_position.y += getup_lift
 
 
 func _num(v) -> float:
 	return v if (v is float or v is int) else 0.0
+
+
+# =====================================================================
+# Hazir kalkis animasyonu (Quaternius LayToIdle, CC0). livi: "duzken ayaga
+# kalkmayi yapamiyorsun, hazir bir animasyonu referans al". Elle yazilan
+# anahtar pozlar ziplama, capraz bacak, havada eller uretiyordu.
+# Insan iskeletinden sadece govde acisi, omuz->el, kalca->ayak ve kafa yonu
+# aliniyor (dirsek/diz yok, Minecraft modeli gibi).
+# =====================================================================
+
+const GETUP_CLIP_PATH := "res://anim/laytoidle.json"
+## Animasyon hizi (1 = orijinal 1.53 sn)
+const GETUP_CLIP_SPEED := 0.72
+## Kalkis boyunca profile donme suresi (klip orani)
+const GETUP_TURN := 0.35
+
+var getup_clip := []
+var clip_len := 0.0
+
+
+func _load_getup_clip() -> void:
+	if not FileAccess.file_exists(GETUP_CLIP_PATH):
+		return
+	var data = JSON.parse_string(FileAccess.get_file_as_string(GETUP_CLIP_PATH))
+	if not (data is Dictionary):
+		return
+	var frames: Array = data.frames
+	var v := func(f: Dictionary, k: String) -> Vector3: return Vector3(f[k][0], f[k][1], f[k][2])
+	var scale := 1.5 / float(frames[frames.size() - 1].neck_01[1])
+	for f in frames:
+		var pel: Vector3 = v.call(f, "pelvis")
+		var neck: Vector3 = v.call(f, "neck_01")
+		var y_up := (neck - pel).normalized()
+		var x_left: Vector3 = v.call(f, "upperarm_l") - v.call(f, "upperarm_r")
+		x_left = (x_left - y_up * x_left.dot(y_up)).normalized()
+		var basis := Basis(x_left, y_up, x_left.cross(y_up)).orthonormalized()
+		var inv := basis.inverse()
+		var local := {
+			"right_arm": _dir_quat(inv * (v.call(f, "hand_r") - v.call(f, "upperarm_r"))),
+			"left_arm": _dir_quat(inv * (v.call(f, "hand_l") - v.call(f, "upperarm_l"))),
+			"right_leg": _dir_quat(inv * (v.call(f, "foot_r") - v.call(f, "thigh_r"))),
+			"left_leg": _dir_quat(inv * (v.call(f, "foot_l") - v.call(f, "thigh_l"))),
+			"head": Quaternion(Vector3.UP, (inv * (v.call(f, "Head") - neck)).normalized()),
+		}
+		getup_clip.append({"basis": basis, "center": (pel + neck) * 0.5 * scale, "local": local})
+	clip_len = float(data.length) / GETUP_CLIP_SPEED
+
+
+func _begin_clip_getup(body_xf: Transform3D, bb: Basis, start_local: Dictionary, h3: Vector3, supine: bool) -> void:
+	# Klip sirt ustu basliyor, sonunda ayaklarin tarafina bakiyor. Klipte kafa
+	# -z'de, sonda yuz +z'de: bizde +z -> ayak yonu (-h3).
+	var fwd := -h3
+	var face0 := atan2(fwd.x, fwd.z)
+	var face1 := (1.0 if fwd.x >= 0.0 else -1.0) * FACE_SIDE
+	var c0: Vector3 = getup_clip[0].center
+	var anchor := Vector3(body_xf.origin.x, 0, body_xf.origin.z)
+	var n := getup_clip.size()
+	var frame_dt := clip_len / float(n - 1)
+
+	var keys := []
+	for i in n:
+		var fr: Dictionary = getup_clip[i]
+		var frac := float(i) / float(n - 1)
+		var face := lerp_angle(face0, face1, smoothstep(0.0, GETUP_TURN, frac))
+		var yaw := Basis(Vector3.UP, face)
+		var d: Vector3 = fr.center - c0
+		var off := yaw * Vector3(d.x, 0, d.z)
+		var origin := Vector3(anchor.x + off.x, ground_y + fr.center.y, (anchor.z + off.z) * (1.0 - frac))
+		origin.x = lerpf(origin.x, clampf(origin.x, bounds.x, bounds.y), frac)
+		keys.append([i * frame_dt, Transform3D(yaw * fr.basis, origin), fr.local])
+
+	# Dustugu pozdan klibin ilk karesine; yuz ustuyse once yan donup sirt ustune
+	var lead := GETUP_SETTLE
+	var start: Array = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
+	if not supine:
+		var first: Transform3D = keys[0][1]
+		var side := Transform3D(first.basis * Basis(Vector3.UP, PI / 2.0), first.origin + Vector3(0, 0.1, 0))
+		start.append([0.4, side, keys[0][2]])
+		lead = 0.8
+	for k in keys:
+		k[0] += lead
+	getup_keys = start + keys
+
+	if OS.is_debug_build():
+		print("[kevin] kalkis: klip (%s)" % ("sirt ustu" if supine else "yuz ustu"))
+	getup_time = 0.0
+	getup_lift = 0.0
+	hard_fall = true
+	var last_key: Transform3D = getup_keys[getup_keys.size() - 1][1]
+	root_x = clampf(last_key.origin.x, bounds.x, bounds.y)
+	facing = face1
+	facing_now = face1
+	anim_state = "idle"
+	mode = Mode.GETTING_UP
+	_set_frozen(true)
 
 
 ## Temas acisi (radyan, dikey asagidan; + geri): uzvun ucu tam zemine degsin.
@@ -1084,6 +1185,9 @@ func _begin_getup() -> void:
 	# Sadece gercekten dik (ayaklarinin ustunde) ise comelip kalk; 60 dereceye
 	# kadar egik yatan govde "dik" sayilip direk gibi kalkiyordu.
 	var upright := bb.y.y > 0.85
+	if not upright and not getup_clip.is_empty():
+		_begin_clip_getup(body_xf, bb, start_local, h3, supine)
+		return
 	var plan_name := "upright" if upright else ("supine" if supine else "prone")
 	var plan: Array = (GETUP_PLANS[plan_name] as Array).duplicate()
 	if OS.is_debug_build():
@@ -1203,7 +1307,11 @@ func _advance_getup(delta: float) -> void:
 		i += 1
 	var a: Array = getup_keys[i]
 	var b: Array = getup_keys[i + 1]
-	var k := smoothstep(0.0, 1.0, (t - a[0]) / maxf(0.001, b[0] - a[0]))
+	var span: float = b[0] - a[0]
+	var k := clampf((t - a[0]) / maxf(0.001, span), 0.0, 1.0)
+	# Sik kareli klipte duz; seyrek anahtar pozlarda yumusak
+	if span > 0.1:
+		k = smoothstep(0.0, 1.0, k)
 
 	var xa: Transform3D = a[1]
 	var xb: Transform3D = b[1]
