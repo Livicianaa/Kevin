@@ -735,7 +735,7 @@ func _update_ragdoll(delta: float) -> void:
 	# Ayaklarinin ustune dustu: yikilmasin, comelip darbeyi alsin ve ayakta kalsin
 	var body: RigidBody3D = bodies["body"]
 	var bb := body.global_transform.basis.orthonormalized()
-	if released_for > 0.1 and bb.y.y > 0.8 and body.linear_velocity.y > -1.0 and body.linear_velocity.length() < 3.0:
+	if released_for > 0.1 and bb.y.y > 0.85 and body.linear_velocity.y > -1.0 and body.linear_velocity.length() < 3.0:
 		var feet := minf(_part_bottom("right_leg"), _part_bottom("left_leg"))
 		if feet - ground_y < 0.12:
 			_begin_getup()
@@ -788,14 +788,23 @@ func _apply_muscles() -> void:
 			_:
 				targets[held_part] = _point_limb_at(held_part, hold_point, bb)
 				strength[held_part] = 0.45
-		var reach := hold_point
-		if held_part.ends_with("leg"):
-			# Bacaktan bas asagi: kollar yere uzanip kendini korumaya calisiyor
-			reach = bodies["head"].global_position + Vector3(0, -2.0, 0)
 		for arm in ["right_arm", "left_arm"]:
-			if arm != held_part:
-				targets[arm] = _point_limb_at(arm, reach, bb)
-				strength[arm] = 0.75
+			if arm == held_part:
+				continue
+			if held_part.ends_with("leg"):
+				# Bas asagi: kollar kafanin iki yaninda, kafayi koruyor
+				var side := -1.0 if arm == "right_arm" else 1.0
+				targets[arm] = _dir_quat(Vector3(side * 0.3, 0.9, 0.3))
+				strength[arm] = 0.6
+			else:
+				var reach := _reach_toward(arm, hold_point, bb)
+				if reach == Quaternion.IDENTITY:
+					# El uzanilamayacak yerde: bosluga uzanmasin, gevsek
+					targets[arm] = _rest_quats()[arm]
+					strength[arm] = 0.15
+				else:
+					targets[arm] = reach
+					strength[arm] = 0.75
 		for leg in ["right_leg", "left_leg"]:
 			if leg == held_part:
 				continue
@@ -865,6 +874,20 @@ func _rest_quats() -> Dictionary:
 ## Uzvun (asagi bakan) ekseni govde uzayinda bu yone dönsün
 func _dir_quat(local_dir: Vector3) -> Quaternion:
 	return Quaternion(Vector3.DOWN, local_dir.normalized())
+
+
+## Kolu noktaya uzat; kol kendi tarafinda/onde kalinca hedeften cok sapiyorsa
+## (ulasilamaz) IDENTITY. Onceden bu durumda kol bosluga uzaniyordu.
+func _reach_toward(arm: String, world_point: Vector3, bb: Basis) -> Quaternion:
+	var joint: Vector3 = (bodies["body"] as RigidBody3D).global_transform * ((LIMBS[arm].joint - BODY_REST_PX) * PX)
+	var d := world_point - joint
+	if d.length() < 0.05:
+		return Quaternion.IDENTITY
+	var want: Vector3 = (bb.inverse() * d).normalized()
+	var got := _point_limb_at(arm, world_point, bb) * Vector3.DOWN
+	if want.angle_to(got) > deg_to_rad(35.0):
+		return Quaternion.IDENTITY
+	return _point_limb_at(arm, world_point, bb)
 
 
 func _point_limb_at(limb: String, world_point: Vector3, bb: Basis) -> Quaternion:
@@ -943,13 +966,19 @@ const GETUP_PLANS := {
 		{"t": 3.1, "lean": 0.0, "h": 18.0, "dx": -5.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 	# Dik (ayak ustu indi ya da oturur gibi kaldi): comel, darbeyi al, dogrul
+	# livi: "put gibi duruyor, dususu biraz soft olsun": derin comelme, kollar
+	# denge icin acik, dogrulurken hafif geriye esneyip toparlanma
 	"upright": [
-		{"t": 0.0, "lean": 25.0, "h": 13.0, "dx": 0.0, "arm": -35.0, "rleg": -30.0, "lleg": 25.0, "head": 0.1},
-		{"t": 0.55, "lean": 0.0, "h": 18.0, "dx": 0.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.0, "lean": 12.0, "h": 16.5, "dx": 0.0, "arm": -20.0, "aroll": 0.35, "rleg": -10.0, "lleg": 8.0, "head": 0.05},
+		{"t": 0.22, "lean": 32.0, "h": 12.0, "dx": 0.5, "arm": -55.0, "aroll": 0.7, "rleg": -38.0, "lleg": 30.0, "head": 0.15},
+		{"t": 0.45, "lean": 28.0, "h": 12.4, "dx": 0.5, "arm": -45.0, "aroll": 0.6, "rleg": -36.0, "lleg": 28.0, "head": 0.1},
+		{"t": 0.8, "lean": -6.0, "h": 16.5, "dx": 0.5, "arm": -20.0, "aroll": 0.4, "rleg": -8.0, "lleg": 6.0, "head": -0.05},
+		{"t": 1.15, "lean": 3.0, "h": 17.7, "dx": 0.5, "arm": -5.0, "aroll": 0.18, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 1.4, "lean": 0.0, "h": 18.0, "dx": 0.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 }
 ## Dustugu pozdan planin ilk karesine (yere duzgun yatis) gecis
-const GETUP_SETTLE := 0.35
+const GETUP_SETTLE := 0.45
 
 
 func _begin_getup() -> void:
@@ -960,28 +989,37 @@ func _begin_getup() -> void:
 		var local: Basis = bb.inverse() * bodies[limb].global_transform.basis.orthonormalized()
 		start_local[limb] = local.get_rotation_quaternion()
 
-	# Kafa hangi tarafta, yuz yukari mi asagi mi?
-	var head_dir := signf(bodies["head"].global_position.x - body_xf.origin.x)
-	if head_dir == 0.0:
-		head_dir = 1.0
+	# Kafa hangi yonde (yatay duzlemde, derinlik dahil), yuz yukari mi asagi mi?
+	# Onceden hep profile cevriliyordu: kameraya donuk yatan karakter kalkarken
+	# bir anda yana "isinlaniyordu".
+	var h3: Vector3 = bodies["head"].global_position - body_xf.origin
+	h3.y = 0.0
+	if h3.length() < 0.05:
+		h3 = Vector3(bb.y.x, 0, bb.y.z)
+	if h3.length() < 0.05:
+		h3 = Vector3.RIGHT
+	h3 = h3.normalized()
 	var supine := bb.z.y >= 0.0
-	var upright := bb.y.y > 0.5
+	# Sadece gercekten dik (ayaklarinin ustunde) ise comelip kalk; 60 dereceye
+	# kadar egik yatan govde "dik" sayilip direk gibi kalkiyordu.
+	var upright := bb.y.y > 0.85
 	var plan: Array = GETUP_PLANS["upright" if upright else ("supine" if supine else "prone")]
 	# Sirt ustu kalkan ayaklarinin tarafina, yuz ustu kalkan kafasinin tarafina bakar
-	var face_dir := -head_dir if supine else head_dir
-	var face := face_dir * FACE_SIDE
+	var fwd := -h3 if supine else h3
 	if upright:
-		# Dik duruyorsa yonunu koru (profil ya da kameraya donuk)
-		face = atan2(bb.z.x, bb.z.z)
-		face_dir = signf(sin(face))
+		fwd = Vector3(bb.z.x, 0, bb.z.z).normalized() if Vector2(bb.z.x, bb.z.z).length() > 0.05 else Vector3.BACK
+	var face := atan2(fwd.x, fwd.z)
 
-	var x0 := clampf(body_xf.origin.x, bounds.x, bounds.y)
-	var settle := GETUP_SETTLE if not upright else 0.18
+	var x0 := body_xf.origin.x
+	var z0 := body_xf.origin.z
+	var settle := GETUP_SETTLE if not upright else 0.12
 	getup_keys = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
 	for key in plan:
 		var lean := deg_to_rad(key.lean)
 		var basis := Basis(Vector3.UP, face) * Basis(Vector3.RIGHT, lean)
-		var origin := Vector3(x0 + face_dir * key.dx * PX, ground_y + key.h * PX, 0)
+		var along: float = key.t / plan[plan.size() - 1].t
+		var origin: Vector3 = Vector3(x0, ground_y + key.h * PX, z0 * (1.0 - along)) + fwd * key.dx * PX
+		origin.x = lerpf(origin.x, clampf(origin.x, bounds.x, bounds.y), along)
 		var local := {}
 		for limb in LIMBS.keys():
 			var world_a := 0.0
@@ -989,10 +1027,10 @@ func _begin_getup() -> void:
 			match limb:
 				"right_arm":
 					world_a = key.arm
-					roll = -0.12
+					roll = -key.get("aroll", 0.12)
 				"left_arm":
 					world_a = key.arm
-					roll = 0.12
+					roll = key.get("aroll", 0.12)
 				"right_leg":
 					world_a = key.rleg
 					roll = -0.04
@@ -1006,7 +1044,7 @@ func _begin_getup() -> void:
 		getup_keys.append([settle + key.t, Transform3D(basis, origin), local])
 
 	getup_time = 0.0
-	root_x = clampf(x0 + face_dir * (plan[plan.size() - 1].dx) * PX, bounds.x, bounds.y)
+	root_x = clampf(x0 + fwd.x * (plan[plan.size() - 1].dx) * PX, bounds.x, bounds.y)
 	facing = face
 	facing_now = face
 	anim_state = "idle"

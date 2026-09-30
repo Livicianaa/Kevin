@@ -595,6 +595,11 @@ func _run_diag(delta: float) -> void:
 		test_time, ["ANIMATED", "RAGDOLL", "GETTING_UP", "LED"][character.mode], character.anim_state,
 		c.x, str(character.bounds), head_px.x, screen.position.x, screen.end.x, str(Vector2i(win_pos)),
 		character.joint_gaps().values().max()])
+	if character.mode == 1:
+		var e := 0.0
+		for pb in character.bodies.values():
+			e += pb.linear_velocity.length_squared()
+		print("   enerji=%.3f  settle=%.2f  released=%.2f" % [e, character.settle_timer, character.released_for])
 
 
 func _process_shots(delta: float) -> void:
