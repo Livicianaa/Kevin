@@ -1,14 +1,19 @@
 extends Node3D
-## Minecraft karakteri: 6 rijit govde, eklemlerle bagli, Godot'nun fizik motoruyla.
+## Minecraft karakteri.
 ##
-## Normalde ayakta durur (govdeler dondurulmus). Bir uzvundan tutulunca fizik
-## devralir: tutulan nokta farede kalir, gerisi yercekimiyle sarkar ve fare
-## hareketinden ivme alir. Birakilinca duser, sonra ayaga kalkar.
+## Uc hali var:
+##  ANIMATED   - ayakta; prosedurel animasyonla yuruyor, bakiniyor, fareye bakiyor
+##  RAGDOLL    - bir uzvundan tutuldu ya da dusuyor; Godot'nun fizik motoru suruyor
+##  GETTING_UP - ragdoll bitti; dustugu pozdan ayakta duruşa gecis
+##
+## Butun pozlar EKLEM noktalarindan hesaplaniyor: govde bir yerde durur, her uzuv
+## kendi ekleminde doner. Onceden kalkis sirasinda parcalar bagimsiz kaydiriliyordu;
+## eklemler hesaba katilmadigi icin uzuvlar govdeden ayrilip ic ice giriyordu.
 
 const PX := 1.0 / 16.0
 const SKIN_SIZE := 64.0
 
-## Parca tanimlari (piksel): boyut, ayakta merkez konumu, skin UV koku (ic/dis katman), kutle
+## Parcalar (piksel): boyut, ayakta merkez, skin UV koku (ic/dis katman), kutle
 const PARTS := {
 	"head":      { "size": Vector3(8, 8, 8),  "center": Vector3(0, 28, 0),  "uv": Vector2(0, 0),   "overlay": Vector2(32, 0),  "mass": 4.0 },
 	"body":      { "size": Vector3(8, 12, 4), "center": Vector3(0, 18, 0),  "uv": Vector2(16, 16), "overlay": Vector2(16, 32), "mass": 10.0 },
@@ -18,66 +23,92 @@ const PARTS := {
 	"left_leg":  { "size": Vector3(4, 12, 4), "center": Vector3(2, 6, 0),   "uv": Vector2(16, 48), "overlay": Vector2(0, 48),  "mass": 4.0 },
 }
 
-## Eklemler (piksel): hangi iki parca, dunya noktasi, koni acisi (derece)
-const JOINTS := [
-	["body", "head",      Vector3(0, 24, 0),  32.0],
-	["body", "right_arm", Vector3(-5, 23, 0), 105.0],
-	["body", "left_arm",  Vector3(5, 23, 0),  105.0],
-	["body", "right_leg", Vector3(-2, 12, 0), 50.0],
-	["body", "left_leg",  Vector3(2, 12, 0),  50.0],
-]
+## Uzuvlar: govdeye baglandigi eklem (piksel, ayakta) ve fizikteki koni acisi (derece)
+const LIMBS := {
+	"head":      { "joint": Vector3(0, 24, 0),  "swing": 32.0 },
+	"right_arm": { "joint": Vector3(-5, 23, 0), "swing": 105.0 },
+	"left_arm":  { "joint": Vector3(5, 23, 0),  "swing": 105.0 },
+	"right_leg": { "joint": Vector3(-2, 12, 0), "swing": 50.0 },
+	"left_leg":  { "joint": Vector3(2, 12, 0),  "swing": 50.0 },
+}
 
-const GETUP_DELAY := 1.6
-const GETUP_TIME := 0.7
+const BODY_REST_PX := Vector3(0, 18, 0)
+const WALK_SPEED := 1.1
+const TURN_SPEED := 6.0
+const FACE_SIDE := 0.95
+const GETUP_DELAY := 1.0
+const GETUP_TIME := 0.9
+const SETTLE_ENERGY := 0.12
+const MAX_LYING_TIME := 4.0
 
+enum Mode { ANIMATED, RAGDOLL, GETTING_UP }
+
+var mode := Mode.ANIMATED
 var bodies := {}
-var rest_transforms := {}
 var joint_probes := []
 var skin_texture: Texture2D
 
-var ragdoll_active := false
+# Ayakta durum
+var root_x := 0.0
+var facing := 0.0
+var facing_now := 0.0
+var anim_state := "idle"
+var anim_t := 0.0
+var state_timer := 2.0
+var walk_target := 0.0
+var bounds := Vector2(-4.0, 4.0)
+
+# Fareye bakma (main her karede fare konumunu dunya birimi olarak veriyor)
+var look_point := Vector3(0, 3, 0)
+var look_yaw := 0.0
+var look_pitch := 0.0
+
+# Ragdoll / kalkis
 var settle_timer := 0.0
-var getting_up := false
-var getup_progress := 0.0
-var getup_from := {}
+var released_for := 0.0
+var getup_t := 0.0
+var getup_from_body := Transform3D()
+var getup_from_local := {}
+var getup_to_origin := Vector3.ZERO
 
 
 func _ready() -> void:
 	skin_texture = load("res://skins/totem.png")
 	for part_name in PARTS.keys():
 		_build_part(part_name)
-	for j in JOINTS:
-		_build_joint(j[0], j[1], j[2] * PX, deg_to_rad(j[3]))
-	# Govdenin kendi parcalari birbirine carpmasin. Minecraft modelinde bacaklar
-	# yan yana TEMAS halinde basliyor; carpisma acikken surekli itisiyorlardi ve
-	# bu karakterin titremesine yol aciyordu. Katlanmayi eklem sinirlari onluyor.
+	for limb in LIMBS.keys():
+		_build_joint("body", limb, LIMBS[limb].joint * PX, deg_to_rad(LIMBS[limb].swing))
+
+	# Govdenin kendi parcalari birbirine carpmasin: bacaklar yan yana temas
+	# halinde basliyor, carpisma acikken itisip titremeye yol aciyorlardi.
 	var names := bodies.keys()
 	for i in names.size():
 		for k in range(i + 1, names.size()):
 			bodies[names[i]].add_collision_exception_with(bodies[names[k]])
+
 	_set_frozen(true)
+	_apply_pose(_animated_pose(0.0), _body_transform(0.0, 0.0))
 
 
-# --- Kurulum ---
+# =====================================================================
+# Kurulum
+# =====================================================================
 
 func _build_part(part_name: String) -> void:
 	var spec: Dictionary = PARTS[part_name]
-	var size: Vector3 = spec.size * PX
 
 	var body := RigidBody3D.new()
 	body.name = part_name
 	body.mass = spec.mass
 	body.position = spec.center * PX
-	# Havada asili cok parcali sarkac: sonum dusukken sallanma surup gidiyordu
-	# (durgunken bile ~1 rad/s). Ivme hissi kalsin ama salinim sonsun.
+	# Havada asili cok parcali sarkac: sonum dusukken sallanma surup gidiyordu.
 	body.linear_damp = 1.0
 	body.angular_damp = 6.0
 	body.continuous_cd = true
-	body.set_meta("part", part_name)
 
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = size
+	box.size = spec.size * PX
 	shape.shape = box
 	body.add_child(shape)
 
@@ -86,7 +117,6 @@ func _build_part(part_name: String) -> void:
 
 	add_child(body)
 	bodies[part_name] = body
-	rest_transforms[part_name] = body.transform
 
 
 func _build_joint(a_name: String, b_name: String, world_point: Vector3, swing: float) -> void:
@@ -95,7 +125,6 @@ func _build_joint(a_name: String, b_name: String, world_point: Vector3, swing: f
 
 	var joint := ConeTwistJoint3D.new()
 	joint.position = world_point
-	# Eklem ekseni yukari (Y): koni, uzvun govdeden asagi sarkma yonu etrafinda
 	joint.rotation = Vector3(0, 0, PI / 2)
 	add_child(joint)
 	joint.node_a = joint.get_path_to(a)
@@ -103,22 +132,9 @@ func _build_joint(a_name: String, b_name: String, world_point: Vector3, swing: f
 	joint.set_param(ConeTwistJoint3D.PARAM_SWING_SPAN, swing)
 	joint.set_param(ConeTwistJoint3D.PARAM_TWIST_SPAN, deg_to_rad(25))
 	joint.set_param(ConeTwistJoint3D.PARAM_RELAXATION, 1.0)
-	# Bitisik parcalar birbirine carpmasin
-	a.add_collision_exception_with(b)
-	# Teshis: eklem noktasinin iki govdeye gore yerel konumu (kopma olcumu icin)
+
 	joint_probes.append([a, a.transform.affine_inverse() * world_point,
 		b, b.transform.affine_inverse() * world_point, "%s-%s" % [a_name, b_name]])
-
-
-## Her eklemde iki govdenin eklem noktalari arasindaki aciklik (piksel).
-## 0'a yakin olmali; buyukse uzuvlar kopuyor demektir.
-func joint_gaps() -> Dictionary:
-	var out := {}
-	for p in joint_probes:
-		var pa: Vector3 = p[0].transform * p[1]
-		var pb: Vector3 = p[2].transform * p[3]
-		out[p[4]] = snappedf(pa.distance_to(pb) / PX, 0.01)
-	return out
 
 
 ## Minecraft skin UV duzenine gore kutu. grow: dis katman icin piksel sisirme.
@@ -132,7 +148,6 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 	var u := uv_origin.x
 	var v := uv_origin.y
 
-	# Her yuz: normal, dis taraftan bakinca sol-ust/sag-ust/sag-alt/sol-alt kose, UV dikdortgeni
 	var faces := [
 		[Vector3(0, 0, 1),  [Vector3(-hx, hy, hz), Vector3(hx, hy, hz), Vector3(hx, -hy, hz), Vector3(-hx, -hy, hz)],   Rect2(u + d, v + d, w, h)],
 		[Vector3(0, 0, -1), [Vector3(hx, hy, -hz), Vector3(-hx, hy, -hz), Vector3(-hx, -hy, -hz), Vector3(hx, -hy, -hz)], Rect2(u + d + w + d, v + d, w, h)],
@@ -171,21 +186,163 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 	return mi
 
 
-# --- Ragdoll durumu ---
+# =====================================================================
+# Eklem tabanli poz
+# =====================================================================
+
+## Govdenin dunya transformu: konum (x, zemin + ziplama) ve yon (y ekseni).
+func _body_transform(lift: float, lean: float) -> Transform3D:
+	var basis := Basis(Vector3.UP, facing_now) * Basis(Vector3.RIGHT, lean)
+	var origin := Vector3(root_x, BODY_REST_PX.y * PX + lift, 0)
+	return Transform3D(basis, origin)
+
+
+## Uzuvlarin govdeye gore yerel donusleri (Euler, radyan) ile poz uygular.
+## Her uzuv kendi eklem noktasinda doner - uzuvlar govdeden ASLA ayrilmaz.
+func _apply_pose(local_rot: Dictionary, body_xf: Transform3D) -> void:
+	bodies["body"].global_transform = body_xf
+	for limb in LIMBS.keys():
+		var basis: Basis = body_xf.basis * _local_basis(local_rot[limb])
+		_place_limb(limb, body_xf, basis)
+
+
+func _local_basis(value) -> Basis:
+	if value is Quaternion:
+		return Basis(value)
+	return Basis.from_euler(value)
+
+
+func _place_limb(limb: String, body_xf: Transform3D, limb_basis: Basis) -> void:
+	var spec: Dictionary = LIMBS[limb]
+	var joint_local: Vector3 = (spec.joint - BODY_REST_PX) * PX
+	var center_from_joint: Vector3 = (PARTS[limb].center - spec.joint) * PX
+	var joint_world: Vector3 = body_xf * joint_local
+	bodies[limb].global_transform = Transform3D(limb_basis, joint_world + limb_basis * center_from_joint)
+
+
+# =====================================================================
+# Animasyonlar (eski Electron surumunun poz motorundan)
+# =====================================================================
+
+const ARM_REST := PI * 0.02
+
+func _animated_pose(t: float) -> Dictionary:
+	var p := {
+		"head": Vector3.ZERO,
+		"right_arm": Vector3(0, 0, -ARM_REST),
+		"left_arm": Vector3(0, 0, ARM_REST),
+		"right_leg": Vector3.ZERO,
+		"left_leg": Vector3.ZERO,
+	}
+
+	match anim_state:
+		"idle":
+			p.right_arm = Vector3(0, 0, -ARM_REST - cos(t * 2.0) * 0.03)
+			p.left_arm = Vector3(0, 0, ARM_REST + cos(t * 2.0) * 0.03)
+		"walk":
+			var w := t * 8.0
+			p.right_leg = Vector3(sin(w) * 0.55, 0, 0)
+			p.left_leg = Vector3(-sin(w) * 0.55, 0, 0)
+			p.right_arm = Vector3(-sin(w) * 0.5, 0, -ARM_REST)
+			p.left_arm = Vector3(sin(w) * 0.5, 0, ARM_REST)
+		"look_around":
+			p.right_arm = Vector3(0, 0, -ARM_REST - cos(t * 2.0) * 0.03)
+			p.left_arm = Vector3(0, 0, ARM_REST + cos(t * 2.0) * 0.03)
+
+	# Kafa: bakinma animasyonu ya da fareye bakis (govdeye gore)
+	var head_yaw := look_yaw
+	var head_pitch := look_pitch
+	if anim_state == "look_around":
+		head_yaw = sin(t * 1.5) * 0.7
+		head_pitch = sin(t * 0.8) * 0.12
+	elif anim_state == "walk":
+		head_yaw = sin(t * 2.0) * 0.12
+		head_pitch = 0.0
+	p.head = Vector3(head_pitch, head_yaw, 0)
+	return p
+
+
+func _walk_bob(t: float) -> float:
+	if anim_state != "walk":
+		return sin(t * 2.0) * 0.004
+	return abs(sin(t * 8.0)) * 0.035
+
+
+# =====================================================================
+# Davranis (ayaktayken)
+# =====================================================================
+
+func _update_behaviour(delta: float) -> void:
+	anim_t += delta
+	state_timer -= delta
+
+	match anim_state:
+		"idle", "look_around":
+			if state_timer <= 0.0:
+				_choose_next()
+		"walk":
+			var dir := signf(walk_target - root_x)
+			root_x += dir * WALK_SPEED * delta
+			facing = dir * FACE_SIDE
+			if (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
+				root_x = walk_target
+				_set_state("idle", randf_range(2.0, 5.0))
+
+	# Yurumuyorken izleyiciye (kameraya) don
+	if anim_state != "walk":
+		facing = 0.0
+	facing_now = move_toward(facing_now, facing, TURN_SPEED * delta)
+	root_x = clampf(root_x, bounds.x, bounds.y)
+
+	_update_look(delta)
+
+
+func _choose_next() -> void:
+	var roll := randf()
+	if roll < 0.55:
+		var span := bounds.y - bounds.x
+		walk_target = clampf(root_x + randf_range(-0.45, 0.45) * span, bounds.x + 0.4, bounds.y - 0.4)
+		if absf(walk_target - root_x) < 0.5:
+			walk_target = clampf(root_x + 1.5 * (1 if randf() < 0.5 else -1), bounds.x + 0.4, bounds.y - 0.4)
+		_set_state("walk", 0.0)
+	elif roll < 0.8:
+		_set_state("look_around", randf_range(2.5, 4.0))
+	else:
+		_set_state("idle", randf_range(2.0, 4.0))
+
+
+func _set_state(state: String, duration: float) -> void:
+	anim_state = state
+	state_timer = duration
+
+
+## Kafa fareye donuyor (govdeye gore, sinirli)
+func _update_look(delta: float) -> void:
+	var head_pos := Vector3(root_x, (LIMBS.head.joint.y + 4) * PX, 0)
+	var to := look_point - head_pos
+	var target_yaw := clampf(atan2(to.x, 3.0) - facing_now, -0.9, 0.9)
+	var target_pitch := clampf(-atan2(to.y, 3.0), -0.5, 0.45)
+	look_yaw = lerpf(look_yaw, target_yaw, minf(1.0, delta * 5.0))
+	look_pitch = lerpf(look_pitch, target_pitch, minf(1.0, delta * 5.0))
+
+
+# =====================================================================
+# Ragdoll ve kalkis
+# =====================================================================
 
 func _set_frozen(frozen: bool) -> void:
 	for body in bodies.values():
-		body.freeze = frozen
 		body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+		body.freeze = frozen
 		if not frozen:
 			body.linear_velocity = Vector3.ZERO
 			body.angular_velocity = Vector3.ZERO
 
 
 func start_ragdoll() -> void:
-	getting_up = false
-	ragdoll_active = true
+	mode = Mode.RAGDOLL
 	settle_timer = 0.0
+	released_for = 0.0
 	_set_frozen(false)
 
 
@@ -193,50 +350,99 @@ func release_ragdoll() -> void:
 	settle_timer = 0.0
 
 
+func is_ragdoll() -> bool:
+	return mode == Mode.RAGDOLL
+
+
 func _physics_process(delta: float) -> void:
-	if getting_up:
-		_advance_getup(delta)
-		return
-	if not ragdoll_active:
-		return
+	match mode:
+		Mode.ANIMATED:
+			_update_behaviour(delta)
+			_apply_pose(_animated_pose(anim_t), _body_transform(_walk_bob(anim_t), 0.0))
+		Mode.RAGDOLL:
+			_update_ragdoll(delta)
+		Mode.GETTING_UP:
+			_advance_getup(delta)
+
+
+func _update_ragdoll(delta: float) -> void:
 	if get_parent().has_method("is_holding") and get_parent().is_holding():
 		settle_timer = 0.0
+		released_for = 0.0
 		return
 
-	# Birakildi: govde durulunca ayaga kalk
+	released_for += delta
 	var energy := 0.0
 	for body in bodies.values():
 		energy += body.linear_velocity.length_squared()
-	if energy < 0.02:
+
+	# Yerde yatarken fizik motoru ara sira minik bir temas sarsintisi uretiyor.
+	# Onceden tek bir sarsinti sayaci sifirliyordu ve karakter hic kalkmiyordu;
+	# artik sayac sadece yavasca geri sariyor.
+	if energy < SETTLE_ENERGY:
 		settle_timer += delta
-		if settle_timer > GETUP_DELAY:
-			_begin_getup()
 	else:
-		settle_timer = 0.0
+		settle_timer = maxf(0.0, settle_timer - delta * 0.5)
+
+	# Guvenlik: birakildiktan sonra ne olursa olsun bir sure icinde kalk
+	if settle_timer > GETUP_DELAY or released_for > MAX_LYING_TIME:
+		_begin_getup()
 
 
 func _begin_getup() -> void:
-	ragdoll_active = false
-	getting_up = true
-	getup_progress = 0.0
-	getup_from.clear()
-	# Karakter nereye dustuyse orada kalksin: dinlenme duzenini oraya tasi
-	var fallen_x: float = bodies["body"].global_position.x
-	for part_name in bodies.keys():
-		getup_from[part_name] = bodies[part_name].transform
+	# Dustugu pozu eklem tabanli olarak kaydet: govde transformu + her uzvun
+	# govdeye gore donusu. Gecis bu ikisini ayri ayri yumusatiyor.
+	var body_xf: Transform3D = bodies["body"].global_transform
+	getup_from_body = body_xf
+	getup_from_local.clear()
+	for limb in LIMBS.keys():
+		var local: Basis = body_xf.basis.inverse() * bodies[limb].global_transform.basis
+		getup_from_local[limb] = local.orthonormalized().get_rotation_quaternion()
+
+	root_x = clampf(body_xf.origin.x, bounds.x, bounds.y)
+	facing = 0.0
+	facing_now = 0.0
+	anim_state = "idle"
+	getup_t = 0.0
+	mode = Mode.GETTING_UP
 	_set_frozen(true)
-	for part_name in rest_transforms.keys():
-		var t: Transform3D = rest_transforms[part_name]
-		t.origin.x += fallen_x - rest_transforms["body"].origin.x
-		rest_transforms[part_name] = t
 
 
 func _advance_getup(delta: float) -> void:
-	getup_progress = min(1.0, getup_progress + delta / GETUP_TIME)
-	var k := ease(getup_progress, -2.0)
-	for part_name in bodies.keys():
-		var from: Transform3D = getup_from[part_name]
-		var to: Transform3D = rest_transforms[part_name]
-		bodies[part_name].transform = from.interpolate_with(to, k)
-	if getup_progress >= 1.0:
-		getting_up = false
+	getup_t = minf(1.0, getup_t + delta / GETUP_TIME)
+	var k := ease(getup_t, -2.2)
+
+	var target_body := _body_transform(0.0, 0.0)
+	var from_q := getup_from_body.basis.orthonormalized().get_rotation_quaternion()
+	var to_q := target_body.basis.get_rotation_quaternion()
+	var body_xf := Transform3D(
+		Basis(from_q.slerp(to_q, k)),
+		getup_from_body.origin.lerp(target_body.origin, k),
+	)
+
+	var target_pose := _animated_pose(0.0)
+	var local := {}
+	for limb in LIMBS.keys():
+		var to_limb := Basis.from_euler(target_pose[limb]).get_rotation_quaternion()
+		local[limb] = (getup_from_local[limb] as Quaternion).slerp(to_limb, k)
+
+	_apply_pose(local, body_xf)
+
+	if getup_t >= 1.0:
+		mode = Mode.ANIMATED
+		anim_t = 0.0
+		_set_state("idle", randf_range(1.5, 3.0))
+
+
+# =====================================================================
+# Teshis
+# =====================================================================
+
+## Her eklemde iki govdenin eklem noktalari arasindaki aciklik (piksel).
+func joint_gaps() -> Dictionary:
+	var out := {}
+	for p in joint_probes:
+		var pa: Vector3 = p[0].transform * p[1]
+		var pb: Vector3 = p[2].transform * p[3]
+		out[p[4]] = snappedf(pa.distance_to(pb) / PX, 0.01)
+	return out
