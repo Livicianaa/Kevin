@@ -44,7 +44,7 @@ const GETUP_TIME := 0.9
 const SETTLE_ENERGY := 0.12
 const MAX_LYING_TIME := 4.0
 
-enum Mode { ANIMATED, RAGDOLL, GETTING_UP }
+enum Mode { ANIMATED, RAGDOLL, GETTING_UP, LED }
 
 const Cem := preload("res://cem.gd")
 ## Yururken Minecraft'in limb_speed degeri ve limb_swing'in saniyede artisi.
@@ -131,6 +131,25 @@ var getup_t := 0.0
 var getup_from_body := Transform3D()
 var getup_from_local := {}
 var getup_to_origin := Vector3.ZERO
+## Kalkis zaman cizelgesi: [[saniye, govde transformu, {uzuv: Quaternion}], ...]
+var getup_keys := []
+var getup_time := 0.0
+
+## Tutan el (main her karede gunceller). held_part "" = tutulmuyor.
+var held_part := ""
+var hold_point := Vector3.ZERO
+var muscle_t := 0.0
+
+## Sendeleme (LED): ayaktayken yavasca cekilince ragdoll yerine dengesi
+## bozulmus gibi cekilen yone yuruyor. Hizli ya da yukari cekilince ragdoll.
+const LED_LIFT := 0.45
+const LED_MAX_PULL := 1.5
+const LED_MAX_MOUSE_SPEED := 8.0
+var led_part := ""
+var led_local := Vector3.ZERO
+var led_target := Vector3.ZERO
+var led_lean := 0.0
+var led_speed := 0.0
 
 
 func _ready() -> void:
@@ -385,6 +404,8 @@ func _cem_step(delta: float) -> void:
 	# "ekrana dogru yuruyor" gibi gorunuyordu
 	var turned := absf(facing_now - facing) < 0.05 and absf(facing) > 0.1
 	var target_speed := CEM_WALK_LIMB_SPEED if anim_state == "walk" and turned else 0.0
+	if mode == Mode.LED:
+		target_speed = led_speed
 	limb_speed = move_toward(limb_speed, target_speed, delta * 2.0)
 	limb_swing += limb_speed * CEM_SWING_RATE * delta
 
@@ -407,6 +428,10 @@ func _cem_step(delta: float) -> void:
 		pose[part + "_ty"] = pv.y
 		pose[part + "_tz"] = pv.z
 
+	# Emote oynarken Fresh Animations'in idle hareketi (govde salinimi, bacak ve
+	# kol noktalarinin kaymasi) emote'un ustune biniyordu: oturunca titreme ve
+	# kopukluk. Emote suresince vanilla poza geri cekiliyor.
+	var vanilla := pose.duplicate()
 	if cem:
 		cem.apply(pose, {
 		"age": cem_age, "time": cem_age / 20.0, "frame_time": delta,
@@ -416,7 +441,11 @@ func _cem_step(delta: float) -> void:
 	})
 
 	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y, 0))
+	if mode == Mode.LED:
+		root = root * Transform3D(Basis(Vector3.RIGHT, led_lean), Vector3.ZERO)
 	if emote:
+		for k in pose:
+			pose[k] = lerpf(pose[k], vanilla.get(k, 0.0), emote_weight)
 		root = root * _whole_body(emote.apply(pose, emote_t, emote_weight))
 	if cem_blend < 1.0:
 		cem_blend = minf(1.0, cem_blend + delta / CEM_BLEND_TIME)
@@ -426,6 +455,8 @@ func _cem_step(delta: float) -> void:
 		if k < 1.0 and cem_blend_from.has(part):
 			xf = (cem_blend_from[part] as Transform3D).interpolate_with(xf, k)
 		bodies[part].global_transform = xf
+	if mode == Mode.LED and led_part.ends_with("arm"):
+		_reach_arm(led_part, led_target)
 
 
 ## Emote'un butun vucut hareketi (yatma, egilme, ziplama). Minecraft bunu
@@ -601,7 +632,66 @@ func _set_frozen(frozen: bool) -> void:
 			body.angular_velocity = Vector3.ZERO
 
 
+## Sendeleme basladi: part'in bu yerel noktasindan tutuldu
+func start_led(part: String, local_point: Vector3) -> void:
+	emote = null
+	emote_facing = NAN
+	after_walk = ""
+	led_part = part
+	led_local = local_point
+	led_lean = 0.0
+	led_speed = 0.0
+	mode = Mode.LED
+
+
+func end_led() -> void:
+	if mode == Mode.LED:
+		mode = Mode.ANIMATED
+		_set_state("idle", randf_range(0.8, 1.6))
+	led_part = ""
+
+
+func led_grab_point() -> Vector3:
+	return bodies[led_part].global_transform * led_local
+
+
+## Tutan el hedefi (dunya) ve farenin hizi. true: artik ragdoll'a gec.
+func led_update(target: Vector3, mouse_speed: float) -> bool:
+	led_target = target
+	var pull := target - led_grab_point()
+	return pull.y > LED_LIFT or pull.length() > LED_MAX_PULL or mouse_speed > LED_MAX_MOUSE_SPEED
+
+
+func _led_step(delta: float) -> void:
+	anim_t += delta
+	var pull := led_target - led_grab_point()
+	var vx := clampf(pull.x * 4.0, -2.2, 2.2)
+	root_x = clampf(root_x + vx * delta, bounds.x, bounds.y)
+	if absf(vx) > 0.25:
+		facing = signf(vx) * FACE_SIDE
+	facing_now = move_toward(facing_now, facing, TURN_SPEED * delta)
+	# Adimlar cekme hizina gore; govde cekilen yone egiliyor
+	led_speed = clampf(absf(vx) / 2.2, 0.0, 1.0) * 0.7
+	var lean_target := clampf(absf(pull.x) * 0.5, 0.0, 0.4) if absf(facing_now) > 0.5 else 0.0
+	led_lean = lerpf(led_lean, lean_target, minf(1.0, delta * 6.0))
+	attention_left = 0.5
+	_update_look(delta)
+
+
+## Kolu dunyadaki bir noktaya uzat (omuzdan)
+func _reach_arm(arm: String, world_point: Vector3) -> void:
+	var body_xf: Transform3D = bodies["body"].global_transform
+	var joint: Vector3 = body_xf * ((LIMBS[arm].joint - BODY_REST_PX) * PX)
+	var d := world_point - joint
+	if d.length() < 0.05:
+		return
+	var basis := Basis(Quaternion(Vector3.DOWN, d.normalized()))
+	var center_from_joint: Vector3 = (PARTS[arm].center - LIMBS[arm].joint) * PX
+	bodies[arm].global_transform = Transform3D(basis, joint + basis * center_from_joint)
+
+
 func start_ragdoll() -> void:
+	led_part = ""
 	emote = null
 	emote_facing = NAN
 	after_walk = ""
@@ -628,10 +718,15 @@ func _physics_process(delta: float) -> void:
 			_update_ragdoll(delta)
 		Mode.GETTING_UP:
 			_advance_getup(delta)
+		Mode.LED:
+			_led_step(delta)
+			_cem_step(delta)
 
 
 func _update_ragdoll(delta: float) -> void:
-	if get_parent().has_method("is_holding") and get_parent().is_holding():
+	muscle_t += delta
+	_apply_muscles()
+	if held_part != "":
 		settle_timer = 0.0
 		released_for = 0.0
 		return
@@ -654,48 +749,222 @@ func _update_ragdoll(delta: float) -> void:
 		_begin_getup()
 
 
-func _begin_getup() -> void:
-	# Dustugu pozu eklem tabanli olarak kaydet: govde transformu + her uzvun
-	# govdeye gore donusu. Gecis bu ikisini ayri ayri yumusatiyor.
-	var body_xf: Transform3D = bodies["body"].global_transform
-	getup_from_body = body_xf
-	getup_from_local.clear()
-	for limb in LIMBS.keys():
-		var local: Basis = body_xf.basis.inverse() * bodies[limb].global_transform.basis
-		getup_from_local[limb] = local.orthonormalized().get_rotation_quaternion()
+# =====================================================================
+# Kaslar: ragdoll ip gibi sarkmasin. Her uzuv govdeye gore bir hedef donuse
+# yaylı motorla (PD tork) cekiliyor; hedef ve guc duruma gore degisiyor.
+# livi: "tutunca kendini tam salmasin, carpinca pat diye carpmasin, kafasini
+# korusun, tutunca itmeye calissin".
+# =====================================================================
 
-	# Nereye dustuyse orada kalksin (bounds, main tarafindan dustugu ekrana gore
-	# guncelleniyor)
-	root_x = clampf(body_xf.origin.x, bounds.x, bounds.y)
-	facing = 0.0
-	facing_now = 0.0
+const MUSCLE_K := {"head": 160.0, "right_arm": 150.0, "left_arm": 150.0, "right_leg": 240.0, "left_leg": 240.0}
+const MUSCLE_D := {"head": 12.0, "right_arm": 15.0, "left_arm": 15.0, "right_leg": 24.0, "left_leg": 24.0}
+const MUSCLE_MAX := {"head": 30.0, "right_arm": 45.0, "left_arm": 45.0, "right_leg": 70.0, "left_leg": 70.0}
+const SHOULDER_OFFSET := {"right_arm": -1.0, "left_arm": 1.0}
+
+
+func _apply_muscles() -> void:
+	var body: RigidBody3D = bodies["body"]
+	var bb := body.global_transform.basis.orthonormalized()
+	var targets := {}
+	var strength := {}
+
+	if held_part != "":
+		for limb in LIMBS:
+			strength[limb] = 0.0 if limb == held_part else 0.5
+		var reach := hold_point
+		if held_part.ends_with("leg"):
+			# Bacaktan bas asagi: kollar yere uzanip kendini korumaya calisiyor
+			reach = bodies["head"].global_position + Vector3(0, -2.0, 0)
+		for arm in ["right_arm", "left_arm"]:
+			if arm != held_part:
+				targets[arm] = _point_limb_at(arm, reach, bb)
+				strength[arm] = 0.65
+		for leg in ["right_leg", "left_leg"]:
+			var phase := 0.0 if leg == "right_leg" else PI
+			targets[leg] = Quaternion.from_euler(Vector3(sin(muscle_t * 7.0 + phase) * 0.55, 0, 0))
+			strength[leg] = 0.35 if leg != held_part else 0.0
+		targets["head"] = _look_quat(hold_point, bb)
+	else:
+		var v := body.linear_velocity
+		var airborne := v.length() > 1.5 or body.global_position.y - ground_y > 1.1
+		if airborne:
+			var impact := _impact_soon(body, v)
+			for limb in LIMBS:
+				strength[limb] = 1.0 if impact else 0.6
+			# Kollar yuzun onunde yukarida, bacaklar toplanmis, cene gogse
+			targets["right_arm"] = _dir_quat(Vector3(0.3, 0.8, 0.55))
+			targets["left_arm"] = _dir_quat(Vector3(-0.3, 0.8, 0.55))
+			targets["right_leg"] = Quaternion.from_euler(Vector3(-0.6, 0, -0.05))
+			targets["left_leg"] = Quaternion.from_euler(Vector3(-0.45, 0, 0.05))
+			targets["head"] = Quaternion.from_euler(Vector3(0.35, 0, 0))
+		else:
+			# Yerde: tamamen gevsek degil, hafif tonus
+			for limb in LIMBS:
+				strength[limb] = 0.12
+			targets = _rest_quats()
+
+	for limb in LIMBS:
+		var st: float = strength.get(limb, 0.0)
+		if st <= 0.0 or not targets.has(limb):
+			continue
+		var lb: RigidBody3D = bodies[limb]
+		var cur := (bb.inverse() * lb.global_transform.basis.orthonormalized()).get_rotation_quaternion()
+		var err: Quaternion = (targets[limb] as Quaternion) * cur.inverse()
+		if err.w < 0.0:
+			err = -err
+		var angle := err.get_angle()
+		var axis := err.get_axis() if angle > 0.0001 else Vector3.ZERO
+		var torque: Vector3 = bb * axis * angle * MUSCLE_K[limb] * st
+		torque -= (lb.angular_velocity - body.angular_velocity) * MUSCLE_D[limb] * st
+		torque = torque.limit_length(MUSCLE_MAX[limb] * st)
+		lb.apply_torque(torque)
+		body.apply_torque(-torque)
+
+
+func _rest_quats() -> Dictionary:
+	var out := {}
+	var rest := _animated_pose(0.0)
+	for limb in LIMBS:
+		out[limb] = Quaternion.from_euler(rest[limb])
+	return out
+
+
+## Uzvun (asagi bakan) ekseni govde uzayinda bu yone dönsün
+func _dir_quat(local_dir: Vector3) -> Quaternion:
+	return Quaternion(Vector3.DOWN, local_dir.normalized())
+
+
+func _point_limb_at(limb: String, world_point: Vector3, bb: Basis) -> Quaternion:
+	var joint: Vector3 = (bodies["body"] as RigidBody3D).global_transform * ((LIMBS[limb].joint - BODY_REST_PX) * PX)
+	var d := world_point - joint
+	if d.length() < 0.01:
+		return _dir_quat(Vector3.DOWN)
+	return _dir_quat(bb.inverse() * d)
+
+
+func _look_quat(world_point: Vector3, bb: Basis) -> Quaternion:
+	var local: Vector3 = bb.inverse() * (world_point - bodies["head"].global_position)
+	var yaw := clampf(atan2(local.x, local.z), -0.9, 0.9)
+	var pitch := clampf(-atan2(local.y, Vector2(local.x, local.z).length()), -0.5, 0.5)
+	return Quaternion.from_euler(Vector3(pitch, yaw, 0))
+
+
+## Hizla bir seye (zemin/duvar) carpmak uzere mi?
+func _impact_soon(body: RigidBody3D, v: Vector3) -> bool:
+	if v.length() < 2.0:
+		return false
+	var from := body.global_position
+	var q := PhysicsRayQueryParameters3D.create(from, from + v * 0.3)
+	q.exclude = bodies.values().map(func(b): return b.get_rid())
+	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+
+
+## Kalkis anahtar kareleri. lean: govdenin one egimi (derece, + one / yuz
+## asagi, - geriye / sirt ustu). h: govde merkezinin zeminden yuksekligi (px).
+## dx: yuzun baktigi yone kayma (px). Uzuv acilari DUNYAYA gore (derece, dikey
+## asagidan; + geriye, - one): kollar/bacaklar yere gercekten dayaniyor.
+## livi: "sihirli sekilde geri ayaga kalkmasin, kolundan bacagindan destek alsin".
+const GETUP_PLANS := {
+	# Sirt ustu: dogrul-otur (eller arkada yere dayali) -> dizler -> tek diz -> ayakta
+	"supine": [
+		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "arm": -90.0, "rleg": -90.0, "lleg": -90.0, "head": 0.0},
+		{"t": 0.55, "lean": -25.0, "h": 7.5, "dx": 4.0, "arm": 35.0, "rleg": -85.0, "lleg": -85.0, "head": 0.15},
+		{"t": 1.1, "lean": 35.0, "h": 12.0, "dx": 7.0, "arm": -10.0, "rleg": 50.0, "lleg": 50.0, "head": -0.1},
+		{"t": 1.6, "lean": 10.0, "h": 14.5, "dx": 7.5, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
+		{"t": 2.15, "lean": 0.0, "h": 18.0, "dx": 7.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+	],
+	# Yuz ustu: sinav gibi kollarla it -> dizler -> tek diz -> ayakta
+	"prone": [
+		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "arm": 90.0, "rleg": 90.0, "lleg": 90.0, "head": 0.0},
+		{"t": 0.5, "lean": 70.0, "h": 10.3, "dx": -1.0, "arm": 0.0, "rleg": 47.0, "lleg": 47.0, "head": -0.4},
+		{"t": 1.05, "lean": 30.0, "h": 12.0, "dx": -4.0, "arm": -5.0, "rleg": 55.0, "lleg": 55.0, "head": -0.15},
+		{"t": 1.55, "lean": 10.0, "h": 14.5, "dx": -5.0, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
+		{"t": 2.1, "lean": 0.0, "h": 18.0, "dx": -5.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+	],
+}
+## Dustugu pozdan planin ilk karesine (yere duzgun yatis) gecis
+const GETUP_SETTLE := 0.35
+
+
+func _begin_getup() -> void:
+	var body_xf: Transform3D = bodies["body"].global_transform
+	var bb := body_xf.basis.orthonormalized()
+	var start_local := {}
+	for limb in LIMBS.keys():
+		var local: Basis = bb.inverse() * bodies[limb].global_transform.basis.orthonormalized()
+		start_local[limb] = local.get_rotation_quaternion()
+
+	# Kafa hangi tarafta, yuz yukari mi asagi mi?
+	var head_dir := signf(bodies["head"].global_position.x - body_xf.origin.x)
+	if head_dir == 0.0:
+		head_dir = 1.0
+	var supine := bb.z.y >= 0.0
+	var plan: Array = GETUP_PLANS["supine" if supine else "prone"]
+	# Sirt ustu kalkan ayaklarinin tarafina, yuz ustu kalkan kafasinin tarafina bakar
+	var face_dir := -head_dir if supine else head_dir
+	var face := face_dir * FACE_SIDE
+
+	var x0 := clampf(body_xf.origin.x, bounds.x, bounds.y)
+	getup_keys = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
+	for key in plan:
+		var lean := deg_to_rad(key.lean)
+		var basis := Basis(Vector3.UP, face) * Basis(Vector3.RIGHT, lean)
+		var origin := Vector3(x0 + face_dir * key.dx * PX, ground_y + key.h * PX, 0)
+		var local := {}
+		for limb in LIMBS.keys():
+			var world_a := 0.0
+			var roll := 0.0
+			match limb:
+				"right_arm":
+					world_a = key.arm
+					roll = -0.12
+				"left_arm":
+					world_a = key.arm
+					roll = 0.12
+				"right_leg":
+					world_a = key.rleg
+					roll = -0.04
+				"left_leg":
+					world_a = key.lleg
+					roll = 0.04
+			var e := Vector3(deg_to_rad(world_a) - lean, 0, roll)
+			if limb == "head":
+				e = Vector3(key.head, 0, 0)
+			local[limb] = Quaternion.from_euler(e)
+		getup_keys.append([GETUP_SETTLE + key.t, Transform3D(basis, origin), local])
+
+	getup_time = 0.0
+	root_x = clampf(x0 + face_dir * (plan[plan.size() - 1].dx) * PX, bounds.x, bounds.y)
+	facing = face
+	facing_now = face
 	anim_state = "idle"
-	getup_t = 0.0
 	mode = Mode.GETTING_UP
 	_set_frozen(true)
 
 
 func _advance_getup(delta: float) -> void:
-	getup_t = minf(1.0, getup_t + delta / GETUP_TIME)
-	var k := ease(getup_t, -2.2)
+	getup_time += delta
+	var last: Array = getup_keys[getup_keys.size() - 1]
+	var t := minf(getup_time, last[0])
+	var i := 0
+	while i < getup_keys.size() - 2 and t > getup_keys[i + 1][0]:
+		i += 1
+	var a: Array = getup_keys[i]
+	var b: Array = getup_keys[i + 1]
+	var k := smoothstep(0.0, 1.0, (t - a[0]) / maxf(0.001, b[0] - a[0]))
 
-	var target_body := _body_transform(0.0, 0.0)
-	var from_q := getup_from_body.basis.orthonormalized().get_rotation_quaternion()
-	var to_q := target_body.basis.get_rotation_quaternion()
+	var xa: Transform3D = a[1]
+	var xb: Transform3D = b[1]
 	var body_xf := Transform3D(
-		Basis(from_q.slerp(to_q, k)),
-		getup_from_body.origin.lerp(target_body.origin, k),
+		Basis(xa.basis.get_rotation_quaternion().slerp(xb.basis.get_rotation_quaternion(), k)),
+		xa.origin.lerp(xb.origin, k),
 	)
-
-	var target_pose := _animated_pose(0.0)
 	var local := {}
 	for limb in LIMBS.keys():
-		var to_limb := Basis.from_euler(target_pose[limb]).get_rotation_quaternion()
-		local[limb] = (getup_from_local[limb] as Quaternion).slerp(to_limb, k)
-
+		local[limb] = (a[2][limb] as Quaternion).slerp(b[2][limb], k)
 	_apply_pose(local, body_xf)
 
-	if getup_t >= 1.0:
+	if getup_time >= last[0]:
 		# Kalkis eklem tabanli ayakta pozda bitiyor; paketin pozu ondan birkac
 		# piksel farkli, sicramasin diye kisa bir gecisle devraliyor.
 		cem_blend = 0.0
@@ -704,7 +973,7 @@ func _advance_getup(delta: float) -> void:
 			cem_blend_from[part] = bodies[part].global_transform
 		mode = Mode.ANIMATED
 		anim_t = 0.0
-		_set_state("idle", randf_range(1.5, 3.0))
+		_set_state("idle", randf_range(1.0, 2.0))
 
 
 # =====================================================================

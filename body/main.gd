@@ -47,6 +47,7 @@ var test_offscreen := false
 var test_anim := ""
 ## Test: acilista bu emote oynasin
 var test_emote := ""
+var test_led := false
 var shot_times := [0.6, 3.0, 6.95, 9.5]
 var shot_index := 0
 var shot_clock := 0.0
@@ -65,6 +66,8 @@ func _ready() -> void:
 			test_diag = true
 		elif arg.begins_with("--shot="):
 			shot_prefix = arg.substr(7)
+		elif arg == "--led":
+			test_led = true
 		elif arg == "--throw":
 			test_throw = true
 		elif arg == "--offscreen":
@@ -356,14 +359,52 @@ func _mouse_world() -> Vector3:
 ## Basildigi an tutar. (Tik/surukleme ayrimi icin 6 px esik denendi; karakter
 ## yururken tutma noktasi kaydi ve tutmak zorlasti. Tik ile konusma, beyin
 ## baglaninca surukleme mesafesine bakilarak birakma aninda ayirt edilecek.)
+## Ayaktayken koldan/kafadan/govdeden tutulunca once sendeleme (LED): yavas
+## cekince o yone yuruyor, hizli ya da yukari cekince ragdoll. Bacaktan
+## tutulunca dogrudan ragdoll (tokezleyip dusuyor).
+const LED_PARTS := ["right_arm", "left_arm", "head", "body"]
+var led := false
+var led_body: RigidBody3D = null
+var last_led_target := Vector3.INF
+var led_speed := 0.0
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var hit := _hit_at(event.position)
 			if not hit.is_empty():
-				_grab_body(hit.collider, hit.position)
+				_press_body(hit.collider, hit.position)
 		else:
 			_release()
+
+
+func _press_body(body: RigidBody3D, point: Vector3) -> void:
+	if character.mode == 0 and str(body.name) in LED_PARTS:
+		character.start_led(str(body.name), body.global_transform.affine_inverse() * point)
+		led = true
+		led_body = body
+		last_led_target = Vector3.INF
+		led_speed = 0.0
+		grab_offset = point - _mouse_world()
+		grab_offset.z = 0
+		return
+	_grab_body(body, point)
+
+
+func _update_led(target: Vector3) -> void:
+	target.z = character.led_grab_point().z
+	var dt := get_physics_process_delta_time()
+	if last_led_target != Vector3.INF:
+		led_speed = lerpf(led_speed, target.distance_to(last_led_target) / dt, 0.5)
+	last_led_target = target
+	if character.led_update(target, led_speed):
+		led = false
+		var point: Vector3 = character.led_grab_point()
+		_grab_body(led_body, point)
+		if test_led:
+			test_grab_origin = point
+			test_time = 0.8
 
 
 func _hit_at(screen_pos: Vector2) -> Dictionary:
@@ -397,15 +438,21 @@ func _grab_body(body: RigidBody3D, point: Vector3) -> void:
 	pin.node_b = pin.get_path_to(holder)
 	pin.set_param(PinJoint3D.PARAM_DAMPING, 1.0)
 	holding = true
+	character.held_part = str(body.name)
+	character.hold_point = point
 
 
 var grab_offset := Vector3.ZERO
 
 
 func _release() -> void:
+	if led:
+		led = false
+		character.end_led()
 	if pin:
 		pin.queue_free()
 		pin = null
+	character.held_part = ""
 	if holding:
 		holding = false
 		character.release_ragdoll()
@@ -416,7 +463,15 @@ func _release() -> void:
 # =====================================================================
 
 func _physics_process(delta: float) -> void:
+	var mw := _mouse_world()
+	if led and test_grab == "":
+		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_release()
+		else:
+			_update_led(mw + grab_offset)
+
 	if holding and holder:
+		character.hold_point = holder.global_position
 		# Pencere disina tasan hizli fare hareketinde de takip: masaustu koordinati
 		if test_grab == "":
 			var m := _mouse_world() + grab_offset
@@ -427,7 +482,8 @@ func _physics_process(delta: float) -> void:
 				_release()
 		holder.global_position = holder.global_position.lerp(holder_target, 0.6)
 
-	character.look_point = _mouse_world()
+	if not led:
+		character.look_point = mw
 
 	if test_grab != "":
 		_run_grab_test(delta)
@@ -496,7 +552,18 @@ func _run_grab_test(delta: float) -> void:
 			test_grabbed = true
 			var point := body.global_position + Vector3(0, 0.3, 0)
 			test_grab_origin = point
-			_grab_body(body, point)
+			if test_led:
+				_press_body(body, point)
+			else:
+				_grab_body(body, point)
+	if led:
+		# Sendeleme testi: yavasca saga cek, sonra yukari silkele
+		var lt := test_time - 0.8
+		var target := test_grab_origin + Vector3(minf(lt, 2.2) * 0.9, 0, 0)
+		if lt > 2.6:
+			target.y += (lt - 2.6) * 6.0
+		_update_led(target)
+		return
 	if holding:
 		var t := test_time - 0.8
 		if test_throw:
@@ -525,7 +592,7 @@ func _run_diag(delta: float) -> void:
 	var screen := _screen_at_x(cpx.x)
 	var head_px := _world_to_px(b["head"].global_position)
 	print("DIAG t=%.1f mod=%s durum=%s  govde_x=%.2f  sinir=%s  kafa_px_x=%.0f  ekran=%d..%d  pencere=%s  bosluk=%.2fpx" % [
-		test_time, ["ANIMATED", "RAGDOLL", "GETTING_UP"][character.mode], character.anim_state,
+		test_time, ["ANIMATED", "RAGDOLL", "GETTING_UP", "LED"][character.mode], character.anim_state,
 		c.x, str(character.bounds), head_px.x, screen.position.x, screen.end.x, str(Vector2i(win_pos)),
 		character.joint_gaps().values().max()])
 
