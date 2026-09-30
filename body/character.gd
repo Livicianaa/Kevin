@@ -135,6 +135,7 @@ var getup_to_origin := Vector3.ZERO
 ## Kalkis zaman cizelgesi: [[saniye, govde transformu, {uzuv: Quaternion}], ...]
 var getup_keys := []
 var getup_time := 0.0
+var hard_fall := false
 
 ## Tutan el (main her karede gunceller). held_part "" = tutulmuyor.
 var held_part := ""
@@ -143,14 +144,19 @@ var muscle_t := 0.0
 
 ## Sendeleme (LED): ayaktayken yavasca cekilince ragdoll yerine dengesi
 ## bozulmus gibi cekilen yone yuruyor. Hizli ya da yukari cekilince ragdoll.
-const LED_LIFT := 0.45
-const LED_MAX_PULL := 1.5
-const LED_MAX_MOUSE_SPEED := 8.0
+## livi: "kendini ne kadar az birakirsa o kadar iyi; kuvvet uygulamadikca
+## salmasina gerek yok". Esikler yuksek: ancak gercekten kaldirinca/savurunca.
+const LED_LIFT := 1.1
+const LED_MAX_PULL := 2.6
+const LED_MAX_MOUSE_SPEED := 14.0
+## Yukari cekince once parmak uclarinda yukseliyor (en fazla, birim)
+const LED_TIPTOE := 0.22
 var led_part := ""
 var led_local := Vector3.ZERO
 var led_target := Vector3.ZERO
 var led_lean := 0.0
 var led_speed := 0.0
+var led_rise := 0.0
 
 
 func _ready() -> void:
@@ -443,7 +449,7 @@ func _cem_step(delta: float) -> void:
 
 	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y, 0))
 	if mode == Mode.LED:
-		root = root * Transform3D(Basis(Vector3.RIGHT, led_lean), Vector3.ZERO)
+		root = root * Transform3D(Basis(Vector3.RIGHT, led_lean), Vector3(0, led_rise, 0))
 	if emote:
 		for k in pose:
 			pose[k] = lerpf(pose[k], vanilla.get(k, 0.0), emote_weight)
@@ -651,6 +657,7 @@ func start_led(part: String, local_point: Vector3) -> void:
 	led_local = local_point
 	led_lean = 0.0
 	led_speed = 0.0
+	led_rise = 0.0
 	mode = Mode.LED
 
 
@@ -684,6 +691,7 @@ func _led_step(delta: float) -> void:
 	led_speed = clampf(absf(vx) / 2.2, 0.0, 1.0) * 0.7
 	var lean_target := clampf(absf(pull.x) * 0.5, 0.0, 0.4) if absf(facing_now) > 0.5 else 0.0
 	led_lean = lerpf(led_lean, lean_target, minf(1.0, delta * 6.0))
+	led_rise = lerpf(led_rise, clampf(pull.y * 0.35, 0.0, LED_TIPTOE), minf(1.0, delta * 8.0))
 	attention_left = 0.5
 	_update_look(delta)
 
@@ -797,7 +805,7 @@ func _apply_muscles() -> void:
 				pass
 			_:
 				targets[held_part] = _point_limb_at(held_part, hold_point, bb)
-				strength[held_part] = 0.45
+				strength[held_part] = 0.7
 		for arm in ["right_arm", "left_arm"]:
 			if arm == held_part:
 				continue
@@ -814,20 +822,20 @@ func _apply_muscles() -> void:
 					strength[arm] = 0.15
 				else:
 					targets[arm] = reach
-					strength[arm] = 0.75
+					strength[arm] = 0.95
 		for leg in ["right_leg", "left_leg"]:
 			if leg == held_part:
 				continue
 			var phase := 0.0 if leg == "right_leg" else PI
 			targets[leg] = Quaternion.from_euler(Vector3(-0.2 + sin(muscle_t * 7.0 + phase) * 0.5, 0, 0))
-			strength[leg] = 0.7
+			strength[leg] = 0.9
 		if held_part != "head":
 			targets["head"] = _look_quat(hold_point, bb)
 			strength["head"] = 0.6
 	else:
 		var v := body.linear_velocity
 		var airborne := v.length() > 1.5 or body.global_position.y - ground_y > 1.1
-		if airborne and bb.y.y > 0.55:
+		if airborne and bb.y.y > 0.9:
 			# Dik dusuyor: ayak ustune inmeye hazirlan, kollar denge icin acik.
 			# Govdeyi dik tutan hafif bir "havada denge" torku da var.
 			for limb in LIMBS:
@@ -952,39 +960,42 @@ func _part_bottom(part: String) -> float:
 ## asagidan; + geriye, - one): kollar/bacaklar yere gercekten dayaniyor.
 ## livi: "sihirli sekilde geri ayaga kalkmasin, kolundan bacagindan destek alsin".
 const GETUP_PLANS := {
-	# Sirt ustu: dogrul-otur (eller arkada yere dayali) -> dizler -> tek diz -> ayakta.
-	# Ara pozlarda kisa duraklama: surekli donus "dimdik kalkiyor" gibi gorunuyordu.
+	# Sirt ustu: bir yana donup o eli yere dayar, eline yaslanip dogrulur, diz
+	# coker, tek ayagini basar, diger elini o dizine koyup iterek kalkar.
+	# livi: "sag elinden destek aldi, bir ayagini yere basti, diger elini o
+	# ayagina atti, ordan destek alip kalkti gibi olmasi lazim". Simetrik
+	# (iki kol/bacak ayni anda) kalkis "direk gibi" gorunuyordu.
 	"supine": [
-		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "arm": -90.0, "rleg": -90.0, "lleg": -90.0, "head": 0.0},
-		{"t": 0.25, "lean": -85.0, "h": 2.4, "dx": 0.0, "arm": -60.0, "rleg": -90.0, "lleg": -90.0, "head": 0.35},
-		{"t": 0.8, "lean": -25.0, "h": 7.5, "dx": 4.0, "arm": 35.0, "rleg": -85.0, "lleg": -85.0, "head": 0.15},
-		{"t": 1.15, "lean": -20.0, "h": 7.8, "dx": 4.0, "arm": 30.0, "rleg": -80.0, "lleg": -85.0, "head": 0.05},
-		{"t": 1.75, "lean": 35.0, "h": 12.0, "dx": 7.0, "arm": -10.0, "rleg": 50.0, "lleg": 50.0, "head": -0.1},
-		{"t": 2.05, "lean": 32.0, "h": 12.3, "dx": 7.0, "arm": -8.0, "rleg": 48.0, "lleg": 50.0, "head": -0.2},
-		{"t": 2.6, "lean": 10.0, "h": 14.5, "dx": 7.5, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
-		{"t": 3.2, "lean": 0.0, "h": 18.0, "dx": 7.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "rarm": -80.0, "larm": -80.0, "rleg": -88.0, "lleg": -85.0, "head": 0.0},
+		{"t": 0.4, "lean": -80.0, "roll": 18.0, "h": 3.0, "dx": 0.5, "rarm": 20.0, "larm": -60.0, "rleg": -88.0, "lleg": -80.0, "head": 0.4},
+		{"t": 0.95, "lean": -35.0, "roll": 14.0, "h": 7.0, "dx": 3.0, "rarm": 35.0, "larm": -40.0, "rleg": -86.0, "lleg": -70.0, "head": 0.25},
+		{"t": 1.3, "lean": -30.0, "roll": 12.0, "h": 7.3, "dx": 3.2, "rarm": 32.0, "larm": -35.0, "rleg": -84.0, "lleg": -65.0, "head": 0.2},
+		{"t": 1.9, "lean": 30.0, "roll": -6.0, "h": 11.0, "dx": 6.0, "rarm": -15.0, "larm": -10.0, "rleg": 55.0, "lleg": -55.0, "head": 0.3},
+		{"t": 2.45, "lean": 26.0, "roll": -4.0, "h": 12.5, "dx": 6.5, "rarm": -8.0, "larm": -38.0, "larmroll": 0.02, "rleg": 45.0, "lleg": -45.0, "head": 0.25},
+		{"t": 3.05, "lean": 12.0, "roll": -2.0, "h": 15.5, "dx": 7.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": 20.0, "lleg": -25.0, "head": 0.05},
+		{"t": 3.6, "lean": 0.0, "h": 18.0, "dx": 7.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
-	# Yuz ustu: sinav gibi kollarla it -> dizler -> tek diz -> ayakta
+	# Yuz ustu: bir eli omuz altina, iki elle it, bir dizin ustune gel, diger
+	# ayagi one bas, eli dizine koyup kalk
 	"prone": [
-		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "arm": 90.0, "rleg": 90.0, "lleg": 90.0, "head": 0.0},
-		{"t": 0.3, "lean": 88.0, "h": 2.4, "dx": 0.0, "arm": 20.0, "rleg": 90.0, "lleg": 90.0, "head": -0.3},
-		{"t": 0.8, "lean": 70.0, "h": 10.3, "dx": -1.0, "arm": 0.0, "rleg": 47.0, "lleg": 47.0, "head": -0.4},
-		{"t": 1.1, "lean": 68.0, "h": 10.0, "dx": -1.0, "arm": 2.0, "rleg": 47.0, "lleg": 47.0, "head": -0.3},
-		{"t": 1.65, "lean": 30.0, "h": 12.0, "dx": -4.0, "arm": -5.0, "rleg": 55.0, "lleg": 55.0, "head": -0.15},
-		{"t": 1.95, "lean": 28.0, "h": 12.2, "dx": -4.0, "arm": -6.0, "rleg": 53.0, "lleg": 55.0, "head": -0.2},
-		{"t": 2.5, "lean": 10.0, "h": 14.5, "dx": -5.0, "arm": -15.0, "rleg": -35.0, "lleg": 30.0, "head": 0.0},
-		{"t": 3.1, "lean": 0.0, "h": 18.0, "dx": -5.0, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "rarm": 80.0, "larm": 80.0, "rleg": 88.0, "lleg": 88.0, "head": 0.0},
+		{"t": 0.45, "lean": 88.0, "roll": -8.0, "h": 2.6, "dx": 0.0, "rarm": 5.0, "larm": 70.0, "rleg": 88.0, "lleg": 88.0, "head": -0.3},
+		{"t": 0.95, "lean": 68.0, "roll": -4.0, "h": 9.5, "dx": -1.0, "rarm": 0.0, "larm": 4.0, "rleg": 60.0, "lleg": 72.0, "head": -0.35},
+		{"t": 1.25, "lean": 66.0, "roll": -3.0, "h": 9.4, "dx": -1.0, "rarm": 2.0, "larm": 5.0, "rleg": 58.0, "lleg": 70.0, "head": -0.25},
+		{"t": 1.85, "lean": 30.0, "roll": 5.0, "h": 11.2, "dx": -3.5, "rarm": -12.0, "larm": -8.0, "rleg": 55.0, "lleg": -50.0, "head": 0.2},
+		{"t": 2.4, "lean": 26.0, "roll": 4.0, "h": 12.5, "dx": -4.0, "rarm": -6.0, "larm": -38.0, "larmroll": 0.02, "rleg": 45.0, "lleg": -45.0, "head": 0.25},
+		{"t": 3.0, "lean": 12.0, "roll": 2.0, "h": 15.5, "dx": -4.5, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": 20.0, "lleg": -25.0, "head": 0.05},
+		{"t": 3.55, "lean": 0.0, "h": 18.0, "dx": -5.0, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
-	# Dik (ayak ustu indi ya da oturur gibi kaldi): comel, darbeyi al, dogrul
 	# livi: "put gibi duruyor, dususu biraz soft olsun": derin comelme, kollar
 	# denge icin acik, dogrulurken hafif geriye esneyip toparlanma
 	"upright": [
-		{"t": 0.0, "lean": 12.0, "h": 16.5, "dx": 0.0, "arm": -20.0, "aroll": 0.35, "rleg": -10.0, "lleg": 8.0, "head": 0.05},
-		{"t": 0.22, "lean": 32.0, "h": 12.0, "dx": 0.5, "arm": -55.0, "aroll": 0.7, "rleg": -38.0, "lleg": 30.0, "head": 0.15},
-		{"t": 0.45, "lean": 28.0, "h": 12.4, "dx": 0.5, "arm": -45.0, "aroll": 0.6, "rleg": -36.0, "lleg": 28.0, "head": 0.1},
-		{"t": 0.8, "lean": -6.0, "h": 16.5, "dx": 0.5, "arm": -20.0, "aroll": 0.4, "rleg": -8.0, "lleg": 6.0, "head": -0.05},
-		{"t": 1.15, "lean": 3.0, "h": 17.7, "dx": 0.5, "arm": -5.0, "aroll": 0.18, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
-		{"t": 1.4, "lean": 0.0, "h": 18.0, "dx": 0.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.0, "lean": 10.0, "roll": 8.0, "h": 16.5, "dx": 0.0, "arm": -20.0, "aroll": 0.6, "rleg": -10.0, "lleg": 8.0, "lroll": 0.25, "head": 0.05},
+		{"t": 0.18, "lean": 24.0, "roll": -7.0, "h": 13.0, "dx": 0.3, "arm": -40.0, "aroll": 1.15, "rleg": -25.0, "lleg": 20.0, "lroll": 0.38, "head": 0.2},
+		{"t": 0.45, "lean": 16.0, "roll": 8.0, "h": 13.8, "dx": 0.5, "arm": -30.0, "aroll": 0.95, "rleg": -15.0, "lleg": 10.0, "lroll": 0.3, "head": -0.1},
+		{"t": 0.75, "lean": -4.0, "roll": -5.0, "h": 16.4, "dx": 0.5, "arm": -15.0, "aroll": 0.5, "rleg": -5.0, "lleg": 4.0, "lroll": 0.15, "head": 0.05},
+		{"t": 1.05, "lean": 2.0, "roll": 2.0, "h": 17.6, "dx": 0.5, "arm": -5.0, "aroll": 0.25, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 1.35, "lean": 0.0, "h": 18.0, "dx": 0.5, "arm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 }
 ## Kenara yakin dustuyse diz cokme sonrasi: kenara don, elleri duvara dayayip
@@ -1050,38 +1061,51 @@ func _begin_getup() -> void:
 	if upright:
 		fwd = Vector3(bb.z.x, 0, bb.z.z).normalized() if Vector2(bb.z.x, bb.z.z).length() > 0.05 else Vector3.BACK
 	var face := atan2(fwd.x, fwd.z)
+	# Yattigi yonden baslayip ilk ~0.9 sn icinde profile donuyor: kameraya dogru
+	# uzanmis yatarken oturma/diz cokme derinlikte kaliyor, onden bakinca
+	# "direk gibi" kalkiyormus gibi gorunuyordu. Birden donunce de isinlaniyordu.
+	var face_profile := (1.0 if fwd.x >= 0.0 else -1.0) * FACE_SIDE
 
 	var x0 := body_xf.origin.x
 	var z0 := body_xf.origin.z
 	var settle := GETUP_SETTLE if not upright else 0.12
 	getup_keys = [[0.0, Transform3D(bb, body_xf.origin), start_local]]
 	var face_wall := wall_dir * FACE_SIDE
+	var mirror := randf() < 0.5
 	for key in plan:
 		var lean := deg_to_rad(key.lean)
 		var on_wall: bool = key.get("wall", false)
-		var basis := Basis(Vector3.UP, face_wall if on_wall else face) * Basis(Vector3.RIGHT, lean)
+		var face_k := face if upright else lerp_angle(face, face_profile, clampf(key.t / 0.9, 0.0, 1.0))
+		if on_wall:
+			face_k = face_wall
+		var basis := Basis(Vector3.UP, face_k) * Basis(Vector3.RIGHT, lean) \
+			* Basis(Vector3.BACK, deg_to_rad(key.get("roll", 0.0)) * (-1.0 if mirror else 1.0))
+		var fwd_k := Vector3(sin(face_k), 0, cos(face_k))
 		var along: float = key.t / plan[plan.size() - 1].t
-		var origin: Vector3 = Vector3(x0, ground_y + key.h * PX, z0 * (1.0 - along)) + fwd * float(key.get("dx", 0.0)) * PX
+		var origin: Vector3 = Vector3(x0, ground_y + key.h * PX, z0 * (1.0 - along)) + fwd_k * float(key.get("dx", 0.0)) * PX
 		origin.x = lerpf(origin.x, clampf(origin.x, bounds.x, bounds.y), along)
 		if on_wall:
 			origin.x = wall_x - wall_dir * WALL_STAND_OFF
 		var local := {}
+		# Rastgele ayna: bazen sol elden, bazen sag elden baslasin
+		var rk := "l" if mirror else "r"
+		var lk := "r" if mirror else "l"
 		for limb in LIMBS.keys():
 			var world_a := 0.0
 			var roll := 0.0
 			match limb:
 				"right_arm":
-					world_a = key.arm
-					roll = -key.get("aroll", 0.12)
+					world_a = key.get(rk + "arm", key.get("arm", 0.0))
+					roll = -key.get(rk + "armroll", key.get("aroll", 0.12))
 				"left_arm":
-					world_a = key.arm
-					roll = key.get("aroll", 0.12)
+					world_a = key.get(lk + "arm", key.get("arm", 0.0))
+					roll = key.get(lk + "armroll", key.get("aroll", 0.12))
 				"right_leg":
-					world_a = key.rleg
-					roll = -0.04
+					world_a = key.get(rk + "leg", 0.0)
+					roll = -key.get("lroll", 0.04)
 				"left_leg":
-					world_a = key.lleg
-					roll = 0.04
+					world_a = key.get(lk + "leg", 0.0)
+					roll = key.get("lroll", 0.04)
 			var e := Vector3(deg_to_rad(world_a) - lean, 0, roll)
 			if limb == "head":
 				e = Vector3(key.head, 0, 0)
@@ -1094,10 +1118,13 @@ func _begin_getup() -> void:
 		getup_keys.append([settle + key.t, Transform3D(basis, origin), local])
 
 	getup_time = 0.0
+	hard_fall = not upright
 	var last_key: Transform3D = getup_keys[getup_keys.size() - 1][1]
 	root_x = clampf(last_key.origin.x, bounds.x, bounds.y)
 	if wall_dir != 0.0:
 		face = face_wall
+	elif not upright:
+		face = face_profile
 	facing = face
 	facing_now = face
 	anim_state = "idle"
@@ -1137,6 +1164,9 @@ func _advance_getup(delta: float) -> void:
 		mode = Mode.ANIMATED
 		anim_t = 0.0
 		_set_state("idle", randf_range(1.0, 2.0))
+		# Sert dustuyse ara sira sersemlemis gibi kafasini sallasin
+		if hard_fall and randf() < 0.5:
+			play_emote("shake", 1.6)
 
 
 # =====================================================================
