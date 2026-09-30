@@ -59,6 +59,9 @@ var anim_t := 0.0
 var state_timer := 2.0
 var walk_target := 0.0
 var bounds := Vector2(-4.0, 4.0)
+## Karakterin bulundugu ekranin zemini (dunya y). Ekranlar farkli yukseklikte
+## olabiliyor (laptop 1.5 olcekli: alti 720'de, yandaki ekranin 1080'de).
+var ground_y := 0.0
 
 # Fareye bakma (main her karede fare konumunu dunya birimi olarak veriyor)
 var look_point := Vector3(0, 3, 0)
@@ -195,7 +198,7 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 ## Govdenin dunya transformu: konum (x, zemin + ziplama) ve yon (y ekseni).
 func _body_transform(lift: float, lean: float) -> Transform3D:
 	var basis := Basis(Vector3.UP, facing_now) * Basis(Vector3.RIGHT, lean)
-	var origin := Vector3(root_x, BODY_REST_PX.y * PX + lift, 0)
+	var origin := Vector3(root_x, ground_y + BODY_REST_PX.y * PX + lift, 0)
 	return Transform3D(basis, origin)
 
 
@@ -320,7 +323,7 @@ func _set_state(state: String, duration: float) -> void:
 
 ## Kafa fareye donuyor (govdeye gore, sinirli)
 func _update_look(delta: float) -> void:
-	var head_pos := Vector3(root_x, (LIMBS.head.joint.y + 4) * PX, 0)
+	var head_pos := Vector3(root_x, ground_y + (LIMBS.head.joint.y + 4) * PX, 0)
 	var to := look_point - head_pos
 	var target_yaw := clampf(atan2(to.x, 3.0) - facing_now, -0.9, 0.9)
 	var target_pitch := clampf(-atan2(to.y, 3.0), -0.5, 0.45)
@@ -401,6 +404,8 @@ func _begin_getup() -> void:
 		var local: Basis = body_xf.basis.inverse() * bodies[limb].global_transform.basis
 		getup_from_local[limb] = local.orthonormalized().get_rotation_quaternion()
 
+	# Nereye dustuyse orada kalksin (bounds, main tarafindan dustugu ekrana gore
+	# guncelleniyor)
 	root_x = clampf(body_xf.origin.x, bounds.x, bounds.y)
 	facing = 0.0
 	facing_now = 0.0

@@ -11,8 +11,10 @@ const Character := preload("res://character.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
 const PX_PER_UNIT := 118.0
-## Takip penceresi (piksel): ragdoll'da uzuvlar acilsa da sigacak kadar
-const WIN_SIZE := Vector2i(430, 500)
+## Takip penceresi (piksel), SABIT. Tutarken buyuyup ayaktayken kuculen bir
+## surum denendi: Hyprland pencere boyutunu kamerayla ayni anda degistirmeyince
+## karakter tutuldugunda kuculuyordu. 430x500 ise "asiri buyuktu".
+const WIN_SIZE := Vector2i(300, 300)
 ## Pencere karakteri ne kadar hizli takip etsin (0-1, kare basina)
 const FOLLOW := 0.55
 
@@ -25,6 +27,9 @@ var holder_target := Vector3.ZERO
 
 ## Masaustu sinirlari (piksel, X11 koordinatlari - y asagi)
 var desk_rect := Rect2i()
+## Panellerin disinda kalan yatay alan (karakterin girebildigi)
+var usable_left := 0.0
+var usable_right := 0.0
 var screens: Array[Rect2i] = []
 var win_pos := Vector2.ZERO
 
@@ -58,6 +63,9 @@ func _ready() -> void:
 			test_throw = true
 
 	_read_screens()
+	if usable_right <= usable_left:
+		usable_left = desk_rect.position.x
+		usable_right = desk_rect.end.x
 	DisplayServer.window_set_size(WIN_SIZE)
 
 	_build_camera()
@@ -75,6 +83,16 @@ func _ready() -> void:
 	win_pos = _desired_window_pos()
 	_apply_window()
 
+	# Hyprland pencere kenarligini (ve kose yuvarlamasini) kaldir. Bu ozellikler
+	# kural dosyasiyla degil, pencere ACILDIKTAN sonra setprop ile veriliyor.
+	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") != "":
+		get_tree().create_timer(0.6).timeout.connect(_strip_decorations)
+
+
+func _strip_decorations() -> void:
+	for prop in [["decorate", "0"], ["rounding", "0"]]:
+		OS.execute("hyprctl", ["dispatch", "setprop", "class:^(Kevin)$", prop[0], prop[1]])
+
 
 # =====================================================================
 # Masaustu <-> dunya donusumu
@@ -83,6 +101,19 @@ func _ready() -> void:
 func _read_screens() -> void:
 	screens.clear()
 	desk_rect = Rect2i()
+
+	# Hyprland'deysek ekranlari ONDAN oku: XWayland olcekli ekranlari fiziksel
+	# boyutuyla (1920x1080) raporluyor, Hyprland ise mantiksal boyutla (1280x720)
+	# yonetiyor. Zemin yanlis hesaplaninca karakter laptop ekraninin altina
+	# gomuluyordu.
+	var hypr := _hyprland_screens()
+	if not hypr.is_empty():
+		for r in hypr:
+			screens.append(r)
+			desk_rect = r if screens.size() == 1 else desk_rect.merge(r)
+		_read_usable_area()
+		return
+
 	for i in DisplayServer.get_screen_count():
 		var r := Rect2i(DisplayServer.screen_get_position(i), DisplayServer.screen_get_size(i))
 		if r.size.x <= 0 or r.size.y <= 0:
@@ -93,6 +124,66 @@ func _read_screens() -> void:
 	if screens.is_empty():
 		screens = [Rect2i(0, 0, 1920, 1080), Rect2i(1920, 0, 1920, 1080)]
 		desk_rect = Rect2i(0, 0, 3840, 1080)
+
+
+func _hyprland_screens() -> Array[Rect2i]:
+	var result: Array[Rect2i] = []
+	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") == "":
+		return result
+	var out := []
+	if OS.execute("hyprctl", ["monitors", "-j"], out) != 0 or out.is_empty():
+		return result
+	var data = JSON.parse_string(out[0])
+	if not (data is Array):
+		return result
+	for m in data:
+		var scale: float = float(m.get("scale", 1.0))
+		var w := roundi(float(m.width) / scale)
+		var h := roundi(float(m.height) / scale)
+		# 90/270 derece dondurulmus ekranlarda en/boy yer degistiriyor
+		if int(m.get("transform", 0)) % 2 == 1:
+			var tmp := w
+			w = h
+			h = tmp
+		result.append(Rect2i(int(m.x), int(m.y), w, h))
+	return result
+
+
+## Panellerin kapladigi kenarlari bul. hyprctl'in "reserved" bilgisi yaniltici
+## olabiliyor (caelestia bari solda dururken "ustte 60px" diyordu); tiling
+## pencerelerin gercekte nereden basladigi daha guvenilir.
+func _read_usable_area() -> void:
+	usable_left = desk_rect.position.x
+	usable_right = desk_rect.end.x
+	var out := []
+	if OS.execute("hyprctl", ["clients", "-j"], out) != 0 or out.is_empty():
+		return
+	var clients = JSON.parse_string(out[0])
+	if not (clients is Array):
+		return
+	var min_x := INF
+	var max_x := -INF
+	for c in clients:
+		if c.get("floating", true) or not c.get("mapped", false):
+			continue
+		var at: Array = c.get("at", [0, 0])
+		var size: Array = c.get("size", [0, 0])
+		if float(size[0]) < 200 or float(size[1]) < 200:
+			continue
+		min_x = minf(min_x, float(at[0]))
+		max_x = maxf(max_x, float(at[0]) + float(size[0]))
+	if min_x < INF:
+		usable_left = maxf(usable_left, min_x - 10.0)
+	if max_x > -INF:
+		usable_right = minf(usable_right, max_x + 10.0)
+
+
+## Karakterin bulundugu ekran (govdenin x'ine gore)
+func _screen_at_x(px_x: float) -> Rect2i:
+	for r in screens:
+		if px_x >= r.position.x and px_x < r.end.x:
+			return r
+	return screens[0] if px_x < screens[0].position.x else screens[screens.size() - 1]
 
 
 ## Dunya: x = masaustu x / olcek; y = (masaustunun en alti - masaustu y) / olcek
@@ -141,20 +232,27 @@ func _build_lights() -> void:
 ## Her ekranin alt kenari bir zemin; masaustunun dis kenarlari ve tavani duvar.
 ## Ekranlar farkli yukseklikteyse her biri kendi zeminini aliyor.
 func _build_world_edges() -> void:
+	# Her ekranin zemini masaustunun en altina kadar DOLU bir blok: alcak ekranin
+	# (laptop, alti 720'de) altinda ekrani olmayan bos alan var, karakter oraya
+	# dusup gorunmez olmasin. Yan yana farkli yukseklikte ekranlar arasinda bu
+	# blok bir basamak olusturuyor; yuruyerek gecilmiyor, firlatinca geciliyor.
 	for r in screens:
 		var floor_y := (desk_rect.end.y - r.end.y) / PX_PER_UNIT
 		var width := r.size.x / PX_PER_UNIT
+		var depth := floor_y + 3.0
 		var body := StaticBody3D.new()
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(width, 2.0, 20.0)
+		box.size = Vector3(width, depth, 20.0)
 		shape.shape = box
 		body.add_child(shape)
-		body.position = Vector3(r.position.x / PX_PER_UNIT + width / 2.0, floor_y - 1.0, 0)
+		body.position = Vector3(r.position.x / PX_PER_UNIT + width / 2.0, floor_y - depth / 2.0, 0)
 		add_child(body)
 
-	var left := desk_rect.position.x / PX_PER_UNIT
-	var right := desk_rect.end.x / PX_PER_UNIT
+	# Yan duvarlar ekranin fiziksel kenarinda degil, panellerin (caelestia bari
+	# solda 0-82 arasi) bittigi yerde: karakter barin arkasina girmesin.
+	var left := usable_left / PX_PER_UNIT
+	var right := usable_right / PX_PER_UNIT
 	var top := (desk_rect.end.y - desk_rect.position.y) / PX_PER_UNIT
 	for e in [[Vector3(left, 0, 0), Vector3.RIGHT], [Vector3(right, 0, 0), Vector3.LEFT], [Vector3(0, top, 0), Vector3.DOWN]]:
 		var wall := StaticBody3D.new()
@@ -178,12 +276,34 @@ func _character_center() -> Vector3:
 
 func _desired_window_pos() -> Vector2:
 	var center_px := _world_to_px(_character_center())
+	var screen := _screen_at_x(center_px.x)
 	var pos := center_px - Vector2(WIN_SIZE) / 2.0
-	# Pencere masaustu disina tasmasin (karakter zemindeyken pencere ekranin
-	# altina yapisik kaliyor, ayaklar ekranin gercek alt kenarinda gorunuyor)
+
+	# Ayaktayken pencerenin alt kenari ekranin alt kenarinda: ayaklar ekranin
+	# gercek altina basiyor ve pencere karakterden buyuk olmuyor.
+	if character.mode == 0:
+		pos.y = screen.end.y - WIN_SIZE.y
+
+	# Karakterin bulundugu ekranin disina tasmasin
 	pos.x = clampf(pos.x, desk_rect.position.x, desk_rect.end.x - WIN_SIZE.x)
-	pos.y = clampf(pos.y, desk_rect.position.y, desk_rect.end.y - WIN_SIZE.y)
+	pos.y = clampf(pos.y, screen.position.y, screen.end.y - WIN_SIZE.y)
 	return pos
+
+
+## Karakter hangi ekrandaysa onun zemini ve yatay siniri. Ayaktayken yuruyerek
+## ekran degistirmiyor (farkli yukseklikteki ekranlar arasinda basamak var);
+## firlatilinca geciyor, dustugu ekranda kalkiyor.
+func _update_character_screen() -> void:
+	var center_px := _world_to_px(_character_center())
+	var screen := _screen_at_x(center_px.x)
+	var margin := 0.45
+	character.ground_y = (desk_rect.end.y - screen.end.y) / PX_PER_UNIT
+	character.bounds = Vector2(
+		maxf(screen.position.x, usable_left) / PX_PER_UNIT + margin,
+		minf(screen.end.x, usable_right) / PX_PER_UNIT - margin,
+	)
+
+
 
 
 func _apply_window() -> void:
@@ -214,21 +334,26 @@ func _mouse_world() -> Vector3:
 	return _px_to_world(Vector2(DisplayServer.mouse_get_position()))
 
 
+## Basildigi an tutar. (Tik/surukleme ayrimi icin 6 px esik denendi; karakter
+## yururken tutma noktasi kaydi ve tutmak zorlasti. Tik ile konusma, beyin
+## baglaninca surukleme mesafesine bakilarak birakma aninda ayirt edilecek.)
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			_try_grab(event.position)
+			var hit := _hit_at(event.position)
+			if not hit.is_empty():
+				_grab_body(hit.collider, hit.position)
 		else:
 			_release()
 
 
-func _try_grab(screen_pos: Vector2) -> void:
+func _hit_at(screen_pos: Vector2) -> Dictionary:
 	var from := camera.project_ray_origin(screen_pos)
 	var to := from + camera.project_ray_normal(screen_pos) * 100.0
 	var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, to))
 	if hit.is_empty() or not (hit.collider is RigidBody3D):
-		return
-	_grab_body(hit.collider, hit.position)
+		return {}
+	return hit
 
 
 func _grab_body(body: RigidBody3D, point: Vector3) -> void:
@@ -290,6 +415,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	_update_character_screen()
 	_update_window()
 	_update_mouse_passthrough(delta)
 	_process_shots(delta)
@@ -343,7 +469,7 @@ func _run_grab_test(delta: float) -> void:
 		var t := test_time - 0.8
 		if test_throw:
 			# Firlatma: sag ekrana dogru hizla savur, sonra birak
-			holder_target = test_grab_origin + Vector3(t * 9.0, minf(t * 3.0, 1.6), 0)
+			holder_target = test_grab_origin + Vector3(t * 16.0, minf(t * 4.0, 3.5), 0)
 			if t > 0.9:
 				_release()
 		else:
