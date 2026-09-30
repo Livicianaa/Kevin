@@ -45,6 +45,8 @@ var shot_prefix := ""
 var test_offscreen := false
 ## Test: karakter hep bu durumda kalsin (walk, idle, look_around)
 var test_anim := ""
+## Test: acilista bu emote oynasin
+var test_emote := ""
 var shot_times := [0.6, 3.0, 6.95, 9.5]
 var shot_index := 0
 var shot_clock := 0.0
@@ -69,6 +71,8 @@ func _ready() -> void:
 			test_offscreen = true
 		elif arg.begins_with("--anim="):
 			test_anim = arg.substr(7)
+		elif arg.begins_with("--emote="):
+			test_emote = arg.substr(8)
 		elif arg.begins_with("--shots="):
 			shot_times = []
 			for v in arg.substr(8).split(","):
@@ -431,6 +435,8 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_update_character_screen()
+	if test_emote != "" and character.mode == 0 and character.anim_state != "emote":
+		character.play_emote(test_emote, 999.0)
 	if test_anim != "" and character.mode == 0 and character.anim_state != test_anim:
 		character.walk_target = character.bounds.y if test_anim == "walk" else character.root_x
 		character._set_state(test_anim, 999.0)

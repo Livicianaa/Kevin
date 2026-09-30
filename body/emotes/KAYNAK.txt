@@ -1,0 +1,3 @@
+Kaynak: https://github.com/KosmX/Emotecraft-emotes (CC0 1.0, bkz. LICENSE).
+Twerk ve NSFW klasoru bilerek alinmadi.
+Kendi indirdigin emote dosyalari (ornegin emotes.redlance.org) repoya degil bin/emotes/ klasorune.

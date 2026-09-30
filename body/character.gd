@@ -62,6 +62,27 @@ const CEM_PIVOT := {
 }
 const CEM_BLEND_TIME := 0.3
 
+const Emote := preload("res://emote.gd")
+## Hangi emote ne zaman. Listede olmayan (kullanicinin bin/emotes'a attigi)
+## emote'lar "fun" havuzuna giriyor.
+const EMOTE_POOLS := {
+	"idle": ["lookaround", "Inspect", "item", "hunchback", "shake", "nervous", "heart", "bow2"],
+	"rest": ["sit", "cool_sit", "campfire_sit1", "lejat", "lay_down5", "meditation_fly"],
+	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
+		"jump", "jumping jacks", "selfie", "headball", "headspin", "headyeet", "narutonew", "tpose", "BPS_bloop"],
+	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
+}
+## Dongulu emote'larin suresi (saniye) havuza gore
+const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0)}
+const EMOTE_FADE := 0.5
+
+var emotes := {}
+var emote_pool := {}
+var emote: RefCounted = null
+var emote_t := 0.0
+var emote_until := 0.0
+var emote_weight := 1.0
+
 var cem: RefCounted = null
 var cem_age := 0.0
 var limb_swing := 0.0
@@ -118,6 +139,56 @@ func _ready() -> void:
 	_set_frozen(true)
 	_apply_pose(_animated_pose(0.0), _body_transform(0.0, 0.0))
 	_load_cem()
+	_load_emotes()
+
+
+func _load_emotes() -> void:
+	var dirs := [
+		ProjectSettings.globalize_path("res://emotes"),
+		ProjectSettings.globalize_path("res://").path_join("../bin/emotes").simplify_path(),
+	]
+	if OS.get_environment("KEVIN_EMOTES") != "":
+		dirs.append(OS.get_environment("KEVIN_EMOTES"))
+	for dir in dirs:
+		for f in DirAccess.get_files_at(dir):
+			if not f.ends_with(".json"):
+				continue
+			var e = Emote.load_file(dir.path_join(f))
+			if e == null:
+				push_warning("[kevin] emote okunamadi: " + f)
+				continue
+			emotes[e.name] = e
+	for name in emotes:
+		emote_pool[name] = "fun"
+		for pool in EMOTE_POOLS:
+			if name in EMOTE_POOLS[pool]:
+				emote_pool[name] = pool
+	print("[kevin] %d emote yuklendi" % emotes.size())
+
+
+## Emote oynat (beyin de bunu cagiracak). Dongulu emote'lar sure bitince
+## yumusakca birakiliyor, digerleri kendi sonunda.
+func play_emote(emote_name: String, seconds := -1.0) -> bool:
+	if mode != Mode.ANIMATED or not emotes.has(emote_name):
+		return false
+	emote = emotes[emote_name]
+	emote_t = 0.0
+	emote_weight = 1.0
+	var pool: String = emote_pool.get(emote_name, "fun")
+	var range: Vector2 = LOOP_TIME[pool]
+	emote_until = seconds if seconds > 0.0 else randf_range(range.x, range.y)
+	if not emote.looped:
+		emote_until = emote.length_seconds()
+	_set_state("emote", 0.0)
+	return true
+
+
+func _random_emote(pool: String) -> String:
+	var names := []
+	for n in emote_pool:
+		if emote_pool[n] == pool:
+			names.append(n)
+	return names.pick_random() if not names.is_empty() else ""
 
 
 func _load_cem() -> void:
@@ -264,13 +335,14 @@ func _place_limb(limb: String, body_xf: Transform3D, limb_basis: Basis) -> void:
 
 
 # =====================================================================
-# Animasyonlar (eski Electron surumunun poz motorundan)
+# Ayakta durus (kalkisin hedefi). Ayaktayken pozu Fresh Animations + emote'lar
+# uretiyor (_cem_step); bu sadece eklem tabanli kalkis icin.
 # =====================================================================
 
 const ARM_REST := PI * 0.02
 
-func _animated_pose(t: float) -> Dictionary:
-	var p := {
+func _animated_pose(_t: float) -> Dictionary:
+	return {
 		"head": Vector3.ZERO,
 		"right_arm": Vector3(0, 0, -ARM_REST),
 		"left_arm": Vector3(0, 0, ARM_REST),
@@ -278,31 +350,11 @@ func _animated_pose(t: float) -> Dictionary:
 		"left_leg": Vector3.ZERO,
 	}
 
-	match anim_state:
-		"idle":
-			p.right_arm = Vector3(0, 0, -ARM_REST - cos(t * 2.0) * 0.03)
-			p.left_arm = Vector3(0, 0, ARM_REST + cos(t * 2.0) * 0.03)
-		"walk":
-			var w := t * 8.0
-			p.right_leg = Vector3(sin(w) * 0.55, 0, 0)
-			p.left_leg = Vector3(-sin(w) * 0.55, 0, 0)
-			p.right_arm = Vector3(-sin(w) * 0.5, 0, -ARM_REST)
-			p.left_arm = Vector3(sin(w) * 0.5, 0, ARM_REST)
-		"look_around":
-			p.right_arm = Vector3(0, 0, -ARM_REST - cos(t * 2.0) * 0.03)
-			p.left_arm = Vector3(0, 0, ARM_REST + cos(t * 2.0) * 0.03)
-
-	var head := _head_angles(t)
-	p.head = Vector3(head.x, head.y, 0)
-	return p
-
 
 ## Kafa: bakinma animasyonu ya da fareye bakis (govdeye gore). x = egim, y = donus
 func _head_angles(t: float) -> Vector2:
-	if anim_state == "look_around":
-		return Vector2(sin(t * 0.8) * 0.12, sin(t * 1.5) * 0.7)
 	if anim_state == "walk":
-		return Vector2(0.0, sin(t * 2.0) * 0.12)
+		return Vector2.ZERO
 	return Vector2(look_pitch, look_yaw)
 
 
@@ -336,7 +388,8 @@ func _cem_step(delta: float) -> void:
 		pose[part + "_ty"] = pv.y
 		pose[part + "_tz"] = pv.z
 
-	cem.apply(pose, {
+	if cem:
+		cem.apply(pose, {
 		"age": cem_age, "time": cem_age / 20.0, "frame_time": delta,
 		"limb_swing": limb_swing, "limb_speed": limb_speed,
 		"move_forward": 1.0 if anim_state == "walk" else 0.0,
@@ -344,6 +397,8 @@ func _cem_step(delta: float) -> void:
 	})
 
 	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y, 0))
+	if emote:
+		root = root * _whole_body(emote.apply(pose, emote_t, emote_weight))
 	if cem_blend < 1.0:
 		cem_blend = minf(1.0, cem_blend + delta / CEM_BLEND_TIME)
 	var k := ease(cem_blend, -2.0)
@@ -352,6 +407,20 @@ func _cem_step(delta: float) -> void:
 		if k < 1.0 and cem_blend_from.has(part):
 			xf = (cem_blend_from[part] as Transform3D).interpolate_with(xf, k)
 		bodies[part].global_transform = xf
+
+
+## Emote'un butun vucut hareketi (yatma, egilme, ziplama). Minecraft bunu
+## varligin kendi uzayinda (y yukari, yuz -z, birim blok) ayaklarin 0.7 blok
+## ustundeki noktanin etrafinda uyguluyor; bizim uzaya Y'de 180 derece.
+func _whole_body(w: Dictionary) -> Transform3D:
+	if w.is_empty():
+		return Transform3D.IDENTITY
+	var pos := Vector3(-float(w.get("tx", 0.0)), float(w.get("ty", 0.0)), -float(w.get("tz", 0.0)))
+	var basis := Basis(Vector3.BACK, -float(w.get("rz", 0.0))) \
+		* Basis(Vector3.UP, float(w.get("ry", 0.0))) \
+		* Basis(Vector3.RIGHT, -float(w.get("rx", 0.0)))
+	var pivot := Vector3(0, 0.7, 0)
+	return Transform3D(Basis.IDENTITY, pos + pivot) * Transform3D(basis, Vector3.ZERO) * Transform3D(Basis.IDENTITY, -pivot)
 
 
 ## Model uzayi (y asagi, yuz -z) -> karakter uzayi (y yukari, yuz +z): X ekseni
@@ -369,12 +438,6 @@ func _cem_part_transform(part: String, pose: Dictionary) -> Transform3D:
 	return Transform3D(basis, pivot + basis * offset)
 
 
-func _walk_bob(t: float) -> float:
-	if anim_state != "walk":
-		return sin(t * 2.0) * 0.004
-	return abs(sin(t * 8.0)) * 0.035
-
-
 # =====================================================================
 # Davranis (ayaktayken)
 # =====================================================================
@@ -384,9 +447,17 @@ func _update_behaviour(delta: float) -> void:
 	state_timer -= delta
 
 	match anim_state:
-		"idle", "look_around":
+		"idle":
 			if state_timer <= 0.0:
 				_choose_next()
+		"emote":
+			emote_t += delta
+			if emote == null or emote.finished(emote_t):
+				_end_emote()
+			elif emote.looped and emote_t >= emote_until:
+				emote_weight -= delta / EMOTE_FADE
+				if emote_weight <= 0.0:
+					_end_emote()
 		"walk":
 			var dir := signf(walk_target - root_x)
 			root_x += dir * WALK_SPEED * delta
@@ -404,18 +475,35 @@ func _update_behaviour(delta: float) -> void:
 	_update_look(delta)
 
 
+func _end_emote() -> void:
+	emote = null
+	_set_state("idle", randf_range(1.5, 4.0))
+
+
+## Siradaki davranis. Kisa bir durusla yuruyus arasina emote'lar giriyor;
+## uzun dinlenmeler (oturma, uzanma) seyrek.
 func _choose_next() -> void:
 	var roll := randf()
+	var pool := ""
+	if roll < 0.12:
+		pool = "idle"
+	elif roll < 0.19:
+		pool = "fun"
+	elif roll < 0.23:
+		pool = "rest"
+	if pool != "":
+		var name := _random_emote(pool)
+		if name != "" and play_emote(name):
+			return
+		roll = randf()
 	if roll < 0.55:
 		var span := bounds.y - bounds.x
 		walk_target = clampf(root_x + randf_range(-0.45, 0.45) * span, bounds.x + 0.4, bounds.y - 0.4)
 		if absf(walk_target - root_x) < 0.5:
 			walk_target = clampf(root_x + 1.5 * (1 if randf() < 0.5 else -1), bounds.x + 0.4, bounds.y - 0.4)
 		_set_state("walk", 0.0)
-	elif roll < 0.8:
-		_set_state("look_around", randf_range(2.5, 4.0))
 	else:
-		_set_state("idle", randf_range(2.0, 4.0))
+		_set_state("idle", randf_range(2.0, 5.0))
 
 
 func _set_state(state: String, duration: float) -> void:
@@ -447,6 +535,7 @@ func _set_frozen(frozen: bool) -> void:
 
 
 func start_ragdoll() -> void:
+	emote = null
 	mode = Mode.RAGDOLL
 	settle_timer = 0.0
 	released_for = 0.0
@@ -465,10 +554,7 @@ func _physics_process(delta: float) -> void:
 	match mode:
 		Mode.ANIMATED:
 			_update_behaviour(delta)
-			if cem:
-				_cem_step(delta)
-			else:
-				_apply_pose(_animated_pose(anim_t), _body_transform(_walk_bob(anim_t), 0.0))
+			_cem_step(delta)
 		Mode.RAGDOLL:
 			_update_ragdoll(delta)
 		Mode.GETTING_UP:
