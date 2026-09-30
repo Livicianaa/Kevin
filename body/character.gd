@@ -136,6 +136,7 @@ var getup_to_origin := Vector3.ZERO
 var getup_keys := []
 var getup_time := 0.0
 var hard_fall := false
+var getup_lift := 0.0
 
 ## Tutan el (main her karede gunceller). held_part "" = tutulmuyor.
 var held_part := ""
@@ -269,7 +270,10 @@ func _build_part(part_name: String) -> void:
 	body.add_child(shape)
 
 	body.add_child(_make_box_mesh(spec.size, spec.uv, 0.0))
-	body.add_child(_make_box_mesh(spec.size, spec.overlay, 0.5))
+	# Dis katman sadece deride o bolge doluysa: bos katman kutusu hicbir sey
+	# gostermeden kenar cizgisi uretiyordu
+	if _overlay_used(spec.size, spec.overlay):
+		body.add_child(_make_box_mesh(spec.size, spec.overlay, 0.5))
 
 	add_child(body)
 	bodies[part_name] = body
@@ -291,6 +295,17 @@ func _build_joint(a_name: String, b_name: String, world_point: Vector3, swing: f
 
 	joint_probes.append([a, a.transform.affine_inverse() * world_point,
 		b, b.transform.affine_inverse() * world_point, "%s-%s" % [a_name, b_name]])
+
+
+func _overlay_used(px_size: Vector3, uv: Vector2) -> bool:
+	var img := skin_texture.get_image()
+	var w := int(2 * (px_size.x + px_size.z))
+	var h := int(px_size.y + px_size.z)
+	for y in range(int(uv.y), mini(int(uv.y) + h, img.get_height())):
+		for x in range(int(uv.x), mini(int(uv.x) + w, img.get_width())):
+			if img.get_pixel(x, y).a > 0.5:
+				return true
+	return false
 
 
 ## Minecraft skin UV duzenine gore kutu. grow: dis katman icin piksel sisirme.
@@ -336,7 +351,6 @@ func _make_box_mesh(px_size: Vector3, uv_origin: Vector2, grow: float) -> MeshIn
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	material.alpha_scissor_threshold = 0.5
-	material.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
 	material.roughness = 1.0
 
 	var mi := MeshInstance3D.new()
@@ -947,14 +961,17 @@ func _impact_soon(body: RigidBody3D, v: Vector3) -> bool:
 
 ## Kalkis pozlari arasinda uzuvlar zemine gomuluyordu: gomulen varsa butun
 ## vucut o kadar yukari. Eller/dizler zemine degiyor ama batmiyor.
-func _keep_above_ground() -> void:
+## Kaldirma aninda ama inis yavas: her karede farkli miktarda kaldirmak
+## karakteri "zipliyormus" gibi gosteriyordu.
+func _keep_above_ground(delta: float) -> void:
 	var lowest := INF
 	for part in bodies:
 		lowest = minf(lowest, _part_bottom(part))
-	var sink := ground_y - lowest
-	if sink > 0.0:
+	var need := maxf(0.0, ground_y - lowest)
+	getup_lift = maxf(need, getup_lift - delta * 0.25)
+	if getup_lift > 0.0:
 		for b in bodies.values():
-			b.global_position.y += sink
+			b.global_position.y += getup_lift
 
 
 func _num(v) -> float:
@@ -997,25 +1014,24 @@ const GETUP_PLANS := {
 	# onde yerde, "kb" diz arkada yerde. Aci omuz/kalca yuksekliginden
 	# hesaplaniyor; elle verilen acilarda eller havada kaliyordu.
 	"supine": [
-		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "rarm": -80.0, "larm": -80.0, "rleg": -88.0, "lleg": -85.0, "head": 0.0},
-		{"t": 0.4, "lean": -80.0, "roll": 18.0, "h": 3.0, "dx": 0.5, "rarm": "gb", "larm": -60.0, "rleg": -88.0, "lleg": -80.0, "head": 0.4},
-		{"t": 0.95, "lean": -35.0, "roll": 12.0, "h": 7.0, "dx": 3.0, "rarm": "gb", "larm": -40.0, "rleg": "kf", "lleg": "kf", "head": 0.25},
-		{"t": 1.3, "lean": -30.0, "roll": 10.0, "h": 7.4, "dx": 3.2, "rarm": "gb", "larm": -35.0, "rleg": "kf", "lleg": "kf", "head": 0.2},
-		{"t": 1.9, "lean": 40.0, "roll": -6.0, "h": 9.0, "dx": 6.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kf", "head": 0.3},
-		{"t": 2.45, "lean": 28.0, "roll": -4.0, "h": 11.5, "dx": 6.5, "rarm": -5.0, "larm": -40.0, "larmroll": 0.02, "rleg": "kb", "lleg": "kf", "head": 0.25},
-		{"t": 3.05, "lean": 12.0, "roll": -2.0, "h": 15.2, "dx": 7.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": "kb", "lleg": "kf", "head": 0.05},
-		{"t": 3.6, "lean": 0.0, "h": 18.0, "dx": 7.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 0.0, "lean": -90.0, "h": 2.2, "dx": 0.0, "rarm": -80.0, "larm": -80.0, "rleg": -88.0, "lleg": -86.0, "head": 0.0},
+		{"t": 0.45, "lean": -80.0, "roll": 16.0, "h": 3.0, "dx": 0.5, "rarm": "gb", "larm": -60.0, "rleg": -88.0, "lleg": -84.0, "head": 0.4},
+		{"t": 1.0, "lean": -35.0, "roll": 10.0, "h": 7.0, "dx": 3.0, "rarm": "gb", "larm": -40.0, "rleg": "kf", "lleg": "kf", "head": 0.25},
+		{"t": 1.35, "lean": -28.0, "roll": 8.0, "h": 7.3, "dx": 3.2, "rarm": "gb", "larm": -35.0, "rleg": "kf", "lleg": "kf", "head": 0.2},
+		{"t": 1.95, "lean": 45.0, "roll": -4.0, "h": 7.0, "dx": 4.5, "rarm": "gf", "larm": "gf", "rleg": "kf", "lleg": "kf", "head": 0.35},
+		{"t": 2.55, "lean": 30.0, "roll": -3.0, "h": 12.0, "dx": 5.5, "rarm": -5.0, "larm": -40.0, "larmroll": 0.02, "rleg": "kf", "lleg": "kf", "head": 0.25},
+		{"t": 3.1, "lean": 15.0, "roll": -1.0, "h": 15.5, "dx": 6.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": "kf", "lleg": "kf", "head": 0.05},
+		{"t": 3.6, "lean": 0.0, "h": 18.0, "dx": 6.0, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
-	# Yuz ustu: eller one yere, iki elle it, tek diz + tek ayak, el dizde, kalk
 	"prone": [
-		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "rarm": 80.0, "larm": 80.0, "rleg": 88.0, "lleg": 88.0, "head": 0.0},
-		{"t": 0.45, "lean": 88.0, "roll": -8.0, "h": 2.6, "dx": 0.0, "rarm": "gf", "larm": 70.0, "rleg": 88.0, "lleg": 88.0, "head": -0.3},
+		{"t": 0.0, "lean": 90.0, "h": 2.2, "dx": 0.0, "rarm": 80.0, "larm": 80.0, "rleg": 88.0, "lleg": 86.0, "head": 0.0},
+		{"t": 0.45, "lean": 88.0, "roll": -8.0, "h": 2.6, "dx": 0.0, "rarm": "gf", "larm": 70.0, "rleg": 88.0, "lleg": 86.0, "head": -0.3},
 		{"t": 0.95, "lean": 65.0, "roll": -4.0, "h": 8.5, "dx": -1.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": -0.35},
-		{"t": 1.25, "lean": 62.0, "roll": -3.0, "h": 8.7, "dx": -1.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": -0.25},
-		{"t": 1.85, "lean": 40.0, "roll": 5.0, "h": 9.0, "dx": -3.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kf", "head": 0.25},
-		{"t": 2.4, "lean": 28.0, "roll": 4.0, "h": 11.5, "dx": -3.5, "rarm": -5.0, "larm": -40.0, "larmroll": 0.02, "rleg": "kb", "lleg": "kf", "head": 0.25},
-		{"t": 3.0, "lean": 12.0, "roll": 2.0, "h": 15.2, "dx": -4.0, "rarm": 0.0, "larm": -25.0, "larmroll": 0.04, "rleg": "kb", "lleg": "kf", "head": 0.05},
-		{"t": 3.55, "lean": 0.0, "h": 18.0, "dx": -4.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
+		{"t": 1.3, "lean": 60.0, "roll": -3.0, "h": 8.7, "dx": -1.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": -0.25},
+		{"t": 1.9, "lean": 45.0, "roll": 3.0, "h": 9.5, "dx": -2.0, "rarm": "gf", "larm": "gf", "rleg": "kb", "lleg": "kb", "head": 0.2},
+		{"t": 2.5, "lean": 35.0, "roll": 2.0, "h": 12.0, "dx": -3.0, "rarm": -5.0, "larm": -20.0, "larmroll": 0.04, "rleg": "kb", "lleg": "kb", "head": 0.2},
+		{"t": 3.05, "lean": 18.0, "roll": 1.0, "h": 15.2, "dx": -3.5, "rarm": 0.0, "larm": -10.0, "rleg": "kb", "lleg": "kb", "head": 0.05},
+		{"t": 3.55, "lean": 0.0, "h": 18.0, "dx": -3.5, "rarm": 0.0, "larm": 0.0, "rleg": 0.0, "lleg": 0.0, "head": 0.0},
 	],
 	# livi: "put gibi duruyor, dususu biraz soft olsun": derin comelme, kollar
 	# denge icin acik, dogrulurken hafif geriye esneyip toparlanma
@@ -1084,10 +1100,16 @@ func _begin_getup() -> void:
 	if wall_dir != 0.0:
 		plan.resize(plan.size() - 2)
 		var base_t: float = plan[plan.size() - 1].t
-		for tail in GETUP_WALL_TAIL:
-			var k: Dictionary = tail.duplicate()
-			k.t = base_t + tail.t
+		var base_key: Dictionary = plan[plan.size() - 1]
+		for n in GETUP_WALL_TAIL.size():
+			var k: Dictionary = GETUP_WALL_TAIL[n].duplicate()
+			k.t = base_t + k.t
 			k.wall = true
+			# Bacaklar ayni yonde kalsin (one/arkaya gecip capraz olmasin),
+			# son karede dik
+			if n < GETUP_WALL_TAIL.size() - 1:
+				k.rleg = base_key.get("rleg", 0.0)
+				k.lleg = base_key.get("lleg", 0.0)
 			plan.append(k)
 	# Sirt ustu kalkan ayaklarinin tarafina, yuz ustu kalkan kafasinin tarafina bakar
 	var fwd := -h3 if supine else h3
@@ -1157,6 +1179,7 @@ func _begin_getup() -> void:
 		getup_keys.append([settle + key.t, Transform3D(basis, origin), local])
 
 	getup_time = 0.0
+	getup_lift = 0.0
 	hard_fall = not upright
 	var last_key: Transform3D = getup_keys[getup_keys.size() - 1][1]
 	root_x = clampf(last_key.origin.x, bounds.x, bounds.y)
@@ -1192,7 +1215,7 @@ func _advance_getup(delta: float) -> void:
 	for limb in LIMBS.keys():
 		local[limb] = (a[2][limb] as Quaternion).slerp(b[2][limb], k)
 	_apply_pose(local, body_xf)
-	_keep_above_ground()
+	_keep_above_ground(delta)
 
 	if getup_time >= last[0]:
 		# Kalkis eklem tabanli ayakta pozda bitiyor; paketin pozu ondan birkac

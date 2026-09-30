@@ -30,6 +30,8 @@ var desk_rect := Rect2i()
 ## Panellerin disinda kalan yatay alan (karakterin girebildigi)
 var usable_left := 0.0
 var usable_right := 0.0
+## Ekran basina kullanilabilir yatay alan (px): x = sol, y = sag
+var usable: Array[Vector2] = []
 var screens: Array[Rect2i] = []
 var win_pos := Vector2.ZERO
 
@@ -182,8 +184,12 @@ func _read_usable_area() -> void:
 	var clients = JSON.parse_string(out[0])
 	if not (clients is Array):
 		return
-	var min_x := INF
-	var max_x := -INF
+	# Her ekranin kendi paneli olabilir (caelestia her monitorde solda):
+	# kullanilabilir yatay alan ekran ekran. Onceden sadece genel sol/sag
+	# vardi, Kevin ikinci ekranin barinin altina oturuyordu.
+	usable.clear()
+	for i in screens.size():
+		usable.append(Vector2(screens[i].position.x, screens[i].end.x))
 	for c in clients:
 		if c.get("floating", true) or not c.get("mapped", false):
 			continue
@@ -191,12 +197,18 @@ func _read_usable_area() -> void:
 		var size: Array = c.get("size", [0, 0])
 		if float(size[0]) < 200 or float(size[1]) < 200:
 			continue
-		min_x = minf(min_x, float(at[0]))
-		max_x = maxf(max_x, float(at[0]) + float(size[0]))
-	if min_x < INF:
-		usable_left = maxf(usable_left, min_x - 10.0)
-	if max_x > -INF:
-		usable_right = minf(usable_right, max_x + 10.0)
+		var cx := float(at[0]) + float(size[0]) / 2.0
+		for i in screens.size():
+			if cx >= screens[i].position.x and cx < screens[i].end.x:
+				var u: Vector2 = usable[i]
+				# Ilk goruldugunde ekran siniri yerine pencerenin kenari
+				if u.x == screens[i].position.x or float(at[0]) - 10.0 < u.x:
+					u.x = maxf(screens[i].position.x, float(at[0]) - 10.0)
+				if u.y == screens[i].end.x or float(at[0]) + float(size[0]) + 10.0 > u.y:
+					u.y = minf(screens[i].end.x, float(at[0]) + float(size[0]) + 10.0)
+				usable[i] = u
+	usable_left = usable[0].x if not usable.is_empty() else usable_left
+	usable_right = usable[usable.size() - 1].y if not usable.is_empty() else usable_right
 
 
 ## Karakterin bulundugu ekran (govdenin x'ine gore)
@@ -319,10 +331,11 @@ func _update_character_screen() -> void:
 	var screen := _screen_at_x(center_px.x)
 	var margin := 0.45
 	character.ground_y = (desk_rect.end.y - screen.end.y) / PX_PER_UNIT
-	character.bounds = Vector2(
-		maxf(screen.position.x, usable_left) / PX_PER_UNIT + margin,
-		minf(screen.end.x, usable_right) / PX_PER_UNIT - margin,
-	)
+	var u := Vector2(screen.position.x, screen.end.x)
+	var idx := screens.find(screen)
+	if idx >= 0 and idx < usable.size():
+		u = usable[idx]
+	character.bounds = Vector2(u.x / PX_PER_UNIT + margin, u.y / PX_PER_UNIT - margin)
 
 
 
