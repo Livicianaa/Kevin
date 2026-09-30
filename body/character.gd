@@ -1070,8 +1070,13 @@ func _begin_clip_getup(body_xf: Transform3D, bb: Basis, start_local: Dictionary,
 			"head": Quaternion.IDENTITY,
 		}
 		var flat := Transform3D(first.basis * Basis(Vector3.UP, PI), first.origin)
-		var side := Transform3D(first.basis * Basis(Vector3.UP, PI / 2.0), first.origin + Vector3(0, 0.15, 0))
-		start.append([0.6, flat, arms_front])
+		var side := Transform3D(first.basis * Basis(Vector3.UP, PI / 2.0), first.origin)
+		# Yuz ustu duzken kollar govdenin yaninda (ayak yonunde): "gogsun onu"
+		# burada zemin; kollar zemine uzaninca vucut kol boyu havaya kalkiyordu
+		var arms_side := arms_front.duplicate()
+		arms_side["right_arm"] = _dir_quat(Vector3(-0.12, -1.0, 0.0))
+		arms_side["left_arm"] = _dir_quat(Vector3(0.12, -1.0, 0.0))
+		start.append([0.6, flat, arms_side])
 		start.append([1.1, side, arms_front])
 		lead = 1.55
 	for k in keys:
