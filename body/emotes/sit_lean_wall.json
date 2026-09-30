@@ -1,0 +1,145 @@
+{
+ "name": "Yaslanip otur",
+ "author": "Kevin (Liviciana)",
+ "description": "Kenara sirtini verip oturur, arada uyuklar",
+ "emote": {
+  "beginTick": 0,
+  "endTick": 220,
+  "stopTick": 240,
+  "isLoop": "true",
+  "returnTick": 20,
+  "degrees": false,
+  "moves": [
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "torso": {
+     "y": -0.625,
+     "z": -0.3,
+     "pitch": 0.35
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "rightLeg": {
+     "pitch": -1.0499999999999998,
+     "yaw": 0.35,
+     "roll": -0.15
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "leftLeg": {
+     "pitch": -0.9499999999999998,
+     "yaw": -0.25,
+     "roll": 0.15
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -0.75,
+     "roll": 0.12
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "leftArm": {
+     "pitch": -0.75,
+     "roll": -0.12
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.05
+    }
+   },
+   {
+    "tick": 120,
+    "easing": "EASEINOUTSINE",
+    "torso": {
+     "pitch": 0.38
+    }
+   },
+   {
+    "tick": 220,
+    "easing": "EASEINOUTSINE",
+    "torso": {
+     "pitch": 0.35
+    }
+   },
+   {
+    "tick": 100,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.05
+    }
+   },
+   {
+    "tick": 150,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.42
+    }
+   },
+   {
+    "tick": 166,
+    "easing": "EASEOUTQUAD",
+    "head": {
+     "pitch": 0.45
+    }
+   },
+   {
+    "tick": 172,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.06
+    }
+   },
+   {
+    "tick": 190,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.05
+    }
+   },
+   {
+    "tick": 220,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.05
+    }
+   },
+   {
+    "tick": 150,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -0.75,
+     "roll": 0.12
+    }
+   },
+   {
+    "tick": 166,
+    "easing": "EASEOUTQUAD",
+    "rightArm": {
+     "pitch": -0.6,
+     "roll": 0.16
+    }
+   },
+   {
+    "tick": 180,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -0.75,
+     "roll": 0.12
+    }
+   }
+  ]
+ }
+}

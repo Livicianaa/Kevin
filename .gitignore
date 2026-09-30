@@ -8,3 +8,4 @@ renderer/skin-viewer-bundle.js
 bin/cem/
 body/.godot/
 body/*.import
+.body-test/

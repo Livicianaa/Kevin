@@ -431,11 +431,19 @@ func _physics_process(delta: float) -> void:
 
 	if test_grab != "":
 		_run_grab_test(delta)
+	elif test_diag:
+		test_time += delta
+	if test_diag:
+		_run_diag(delta)
+		if test_time > (10.0 if test_grab != "" else 20.0):
+			get_tree().quit()
 
 
 func _process(delta: float) -> void:
 	_update_character_screen()
-	if test_emote != "" and character.mode == 0 and character.anim_state != "emote":
+	if test_emote == "wall_sit" and character.mode == 0 and character.after_walk == "" and character.anim_state != "emote":
+		character._go_wall_sit()
+	elif test_emote != "" and test_emote != "wall_sit" and character.mode == 0 and character.anim_state != "emote":
 		character.play_emote(test_emote, 999.0)
 	if test_anim != "" and character.mode == 0 and character.anim_state != test_anim:
 		character.walk_target = character.bounds.y if test_anim == "walk" else character.root_x
@@ -504,23 +512,22 @@ func _run_grab_test(delta: float) -> void:
 			if t > 3.2:
 				_release()
 
-	if test_diag:
-		diag_clock += delta
-		if diag_clock >= 0.5:
-			diag_clock = 0.0
-			var b: Dictionary = character.bodies
-			var c := _character_center()
-			var cpx := _world_to_px(c)
-			var screen_idx := -1
-			for i in screens.size():
-				if screens[i].has_point(Vector2i(cpx)):
-					screen_idx = i
-			print("DIAG t=%.1f mod=%s  govde_x=%.2f (ekran %d)  pencere=%s  kafa_y=%.2f  bosluk=%.2fpx" % [
-				test_time, ["ANIMATED", "RAGDOLL", "GETTING_UP"][character.mode],
-				c.x, screen_idx, str(Vector2i(win_pos)), b["head"].global_position.y,
-				character.joint_gaps().values().max()])
-		if test_time > 10.0:
-			get_tree().quit()
+
+
+func _run_diag(delta: float) -> void:
+	diag_clock += delta
+	if diag_clock < 0.5:
+		return
+	diag_clock = 0.0
+	var b: Dictionary = character.bodies
+	var c := _character_center()
+	var cpx := _world_to_px(c)
+	var screen := _screen_at_x(cpx.x)
+	var head_px := _world_to_px(b["head"].global_position)
+	print("DIAG t=%.1f mod=%s durum=%s  govde_x=%.2f  sinir=%s  kafa_px_x=%.0f  ekran=%d..%d  pencere=%s  bosluk=%.2fpx" % [
+		test_time, ["ANIMATED", "RAGDOLL", "GETTING_UP"][character.mode], character.anim_state,
+		c.x, str(character.bounds), head_px.x, screen.position.x, screen.end.x, str(Vector2i(win_pos)),
+		character.joint_gaps().values().max()])
 
 
 func _process_shots(delta: float) -> void:

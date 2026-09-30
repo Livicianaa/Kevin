@@ -67,7 +67,7 @@ const Emote := preload("res://emote.gd")
 ## emote'lar "fun" havuzuna giriyor.
 const EMOTE_POOLS := {
 	"idle": ["lookaround", "Inspect", "item", "hunchback", "shake", "nervous", "heart", "bow2"],
-	"rest": ["sit", "cool_sit", "campfire_sit1", "lejat", "lay_down5", "meditation_fly"],
+	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lejat", "lay_down5", "meditation_fly"],
 	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
 		"jump", "jumping jacks", "selfie", "headspin", "tpose"],
 	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
@@ -75,6 +75,8 @@ const EMOTE_POOLS := {
 ## Dongulu emote'larin suresi (saniye) havuza gore
 const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0)}
 const EMOTE_FADE := 0.5
+## Rastgele secimde agirlik (varsayilan 1). lookaround sik geliyordu.
+const EMOTE_WEIGHT := {"lookaround": 0.25}
 
 var emotes := {}
 var emote_pool := {}
@@ -82,6 +84,11 @@ var emote: RefCounted = null
 var emote_t := 0.0
 var emote_until := 0.0
 var emote_weight := 1.0
+## Emote boyunca tutulacak yon (NAN = kameraya don). Kenara yaslaninca yana.
+var emote_facing := NAN
+## Yurume bitince ne yapilacak ("wall_sit" = kenara yaslanip otur)
+var after_walk := ""
+var wall_sit_facing := 0.0
 
 var cem: RefCounted = null
 var cem_age := 0.0
@@ -112,6 +119,10 @@ var ground_y := 0.0
 var look_point := Vector3(0, 3, 0)
 var look_yaw := 0.0
 var look_pitch := 0.0
+var last_look_point := Vector3.ZERO
+var mouse_activity := 0.0
+var attention_left := 0.0
+var attention_cooldown := 3.0
 
 # Ragdoll / kalkis
 var settle_timer := 0.0
@@ -174,6 +185,7 @@ func play_emote(emote_name: String, seconds := -1.0) -> bool:
 	emote = emotes[emote_name]
 	emote_t = 0.0
 	emote_weight = 1.0
+	emote_facing = NAN
 	var pool: String = emote_pool.get(emote_name, "fun")
 	var range: Vector2 = LOOP_TIME[pool]
 	emote_until = seconds if seconds > 0.0 else randf_range(range.x, range.y)
@@ -185,10 +197,14 @@ func play_emote(emote_name: String, seconds := -1.0) -> bool:
 
 func _random_emote(pool: String) -> String:
 	var names := []
+	var weights := []
 	for n in emote_pool:
 		if emote_pool[n] == pool:
 			names.append(n)
-	return names.pick_random() if not names.is_empty() else ""
+			weights.append(EMOTE_WEIGHT.get(n, 1.0))
+	if names.is_empty():
+		return ""
+	return names[RandomNumberGenerator.new().rand_weighted(PackedFloat32Array(weights))]
 
 
 func _load_cem() -> void:
@@ -467,12 +483,18 @@ func _update_behaviour(delta: float) -> void:
 			# Once yana don, sonra yuru
 			if absf(facing_now - facing) < 0.05:
 				root_x += dir * WALK_SPEED * delta * (limb_speed / CEM_WALK_LIMB_SPEED)
-			if (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
+			if dir == 0.0 or (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
 				root_x = walk_target
-				_set_state("idle", randf_range(2.0, 5.0))
+				if after_walk == "wall_sit" and play_emote("sit_lean_wall", randf_range(15.0, 30.0)):
+					emote_facing = wall_sit_facing
+				else:
+					_set_state("idle", randf_range(0.8, 2.5))
+				after_walk = ""
 
 	# Yurumuyorken izleyiciye (kameraya) don - ama adimlar bittikten sonra
-	if anim_state != "walk" and limb_speed < 0.02:
+	if anim_state == "emote" and not is_nan(emote_facing):
+		facing = emote_facing
+	elif anim_state != "walk" and limb_speed < 0.02:
 		facing = 0.0
 	facing_now = move_toward(facing_now, facing, TURN_SPEED * delta)
 	root_x = clampf(root_x, bounds.x, bounds.y)
@@ -482,7 +504,8 @@ func _update_behaviour(delta: float) -> void:
 
 func _end_emote() -> void:
 	emote = null
-	_set_state("idle", randf_range(1.5, 4.0))
+	emote_facing = NAN
+	_set_state("idle", randf_range(0.8, 2.5))
 
 
 ## Siradaki davranis. Kisa bir durusla yuruyus arasina emote'lar giriyor;
@@ -490,25 +513,39 @@ func _end_emote() -> void:
 func _choose_next() -> void:
 	var roll := randf()
 	var pool := ""
-	if roll < 0.12:
+	if roll < 0.08:
 		pool = "idle"
-	elif roll < 0.19:
+	elif roll < 0.13:
 		pool = "fun"
-	elif roll < 0.23:
+	elif roll < 0.15:
 		pool = "rest"
+	elif roll < 0.18:
+		_go_wall_sit()
+		return
 	if pool != "":
 		var name := _random_emote(pool)
-		if name != "" and play_emote(name):
+		if name != "sit_lean_wall" and name != "" and play_emote(name):
 			return
-		roll = randf()
-	if roll < 0.55:
+	if randf() < 0.8:
 		var span := bounds.y - bounds.x
 		walk_target = clampf(root_x + randf_range(-0.45, 0.45) * span, bounds.x + 0.4, bounds.y - 0.4)
 		if absf(walk_target - root_x) < 0.5:
 			walk_target = clampf(root_x + 1.5 * (1 if randf() < 0.5 else -1), bounds.x + 0.4, bounds.y - 0.4)
 		_set_state("walk", 0.0)
 	else:
-		_set_state("idle", randf_range(2.0, 5.0))
+		_set_state("idle", randf_range(1.0, 3.0))
+
+
+## En yakin kenara yuru, sirtini yaslayip otur (livi: "yasli dayilar gibi")
+func _go_wall_sit() -> void:
+	var left := root_x - bounds.x < bounds.y - root_x
+	if randf() < 0.25:
+		left = not left
+	walk_target = bounds.x if left else bounds.y
+	after_walk = "wall_sit"
+	# Sirti kenara: yuzu ekranin icine
+	wall_sit_facing = FACE_SIDE if left else -FACE_SIDE
+	_set_state("walk", 0.0)
 
 
 func _set_state(state: String, duration: float) -> void:
@@ -516,14 +553,39 @@ func _set_state(state: String, duration: float) -> void:
 	state_timer = duration
 
 
-## Kafa fareye donuyor (govdeye gore, sinirli)
+## Fareye bakis artik OLAY: fare hareket edince ara sira "bu ne yapiyor" diye
+## kisa bakip birakiyor. Onceden kafa surekli farenin durdugu yere kilitliydi,
+## fare kimildamayinca bos bir noktaya bakiyormus gibi duruyordu.
+## (Baska pencerede klavyeyi goremiyoruz; tetik sadece fare.)
 func _update_look(delta: float) -> void:
 	var head_pos := Vector3(root_x, ground_y + (LIMBS.head.joint.y + 4) * PX, 0)
-	var to := look_point - head_pos
-	var target_yaw := clampf(atan2(to.x, 3.0) - facing_now, -0.9, 0.9)
-	var target_pitch := clampf(-atan2(to.y, 3.0), -0.5, 0.45)
-	look_yaw = lerpf(look_yaw, target_yaw, minf(1.0, delta * 5.0))
-	look_pitch = lerpf(look_pitch, target_pitch, minf(1.0, delta * 5.0))
+	var moved := look_point.distance_to(last_look_point)
+	last_look_point = look_point
+	mouse_activity = maxf(0.0, mouse_activity - delta * 2.0) + moved
+
+	attention_cooldown -= delta
+	attention_left -= delta
+	if attention_left <= 0.0 and attention_cooldown <= 0.0 and mouse_activity > 1.2:
+		var near := look_point.distance_to(head_pos) < 3.0
+		if randf() < (0.6 if near else 0.25):
+			attention_left = randf_range(1.2, 2.6)
+			attention_cooldown = randf_range(10.0, 25.0)
+		else:
+			attention_cooldown = randf_range(2.0, 4.0)
+
+	var target := Vector2.ZERO
+	if attention_left > 0.0 and anim_state != "walk":
+		var to := look_point - head_pos
+		target = Vector2(
+			clampf(-atan2(to.y, 3.0), -0.5, 0.45),
+			clampf(atan2(to.x, 3.0) - facing_now, -0.9, 0.9),
+		)
+	else:
+		# Kendi halinde: onune bakiyor, cok yavas hafif bir kayma
+		target = Vector2(sin(anim_t * 0.23) * 0.04, sin(anim_t * 0.17 + 1.3) * 0.1)
+	var k := minf(1.0, delta * (6.0 if attention_left > 0.0 else 2.0))
+	look_pitch = lerpf(look_pitch, target.x, k)
+	look_yaw = lerpf(look_yaw, target.y, k)
 
 
 # =====================================================================
@@ -541,6 +603,8 @@ func _set_frozen(frozen: bool) -> void:
 
 func start_ragdoll() -> void:
 	emote = null
+	emote_facing = NAN
+	after_walk = ""
 	mode = Mode.RAGDOLL
 	settle_timer = 0.0
 	released_for = 0.0
