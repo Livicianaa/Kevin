@@ -102,3 +102,27 @@ rag.grab('leftArm');
 const beforeSwing = rag.limbs.leftLeg.vel;
 rag.setInertia(-900, 0);
 console.log('RAGDOLL ani hareket uzuvlara ivme veriyor mu:', rag.limbs.leftLeg.vel !== beforeSwing);
+
+// --- 3B: derinlikte savrulma ---
+const rag3d = new Ragdoll();
+rag3d.grab('leftArm');
+for (let i = 0; i < 200; i++) { rag3d.setGrabPoint(0, 16, 0); rag3d.step(1 / 60); }
+const depthBefore = rag3d.limbs.leftLeg.angleX;
+for (let i = 0; i < 20; i++) { rag3d.setInertia(1800, 900); rag3d.step(1 / 60); }
+const depthSwing = Math.abs(rag3d.limbs.leftLeg.angleX - depthBefore);
+console.log('3B surukleyince bacak DERINLIKTE savruluyor mu:', depthSwing > 0.05, `(${((depthSwing * 180) / Math.PI).toFixed(1)} derece)`);
+
+for (let i = 0; i < 400; i++) { rag3d.setGrabPoint(0, 16, 0); rag3d.step(1 / 60); }
+console.log('3B derinlik salinimi sonra duruluyor mu:', Math.abs(rag3d.bodyVelX) < 0.05);
+
+const fakeSkin = {};
+for (const n of ['head', 'body', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg']) {
+  fakeSkin[n] = {
+    position: { set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    rotation: { set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+  };
+}
+fakeSkin.rotation = { y: 0 };
+rag3d.setSpin(1.2);
+rag3d.applyTo(fakeSkin);
+console.log('3B karakter kendi ekseninde donuyor mu:', Math.abs(fakeSkin.rotation.y - 1.2) < 1e-9);

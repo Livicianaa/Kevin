@@ -433,6 +433,7 @@ export class KevinAnimator extends PlayerAnimation {
       skin[part].position.set(rest.x, rest.y, rest.z);
       skin[part].quaternion.set(0, 0, 0, 1);
     }
+    skin.rotation.y = 0;
   }
 
   cemPose(pose) {

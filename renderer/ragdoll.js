@@ -29,47 +29,77 @@ const GRAB_POINT = {
 
 const BODY_CENTER = [0, -6];
 const GRAVITY = 16;
+const MAX_SHIFT = 7;
 const GROUND_Y = -24;
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-function rotate(x, y, angle) {
+// Z ekseni etrafinda (ekran duzleminde) donus
+function rotateZ(v, angle) {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  return [x * c - y * s, x * s + y * c];
+  return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+}
+
+// X ekseni etrafinda (derinlik) donus
+function rotateX(v, angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c];
+}
+
+// Uzvun yonu: once z, sonra x - Three.js'in XYZ Euler sirasiyla uyumlu
+function rotateLimb(v, ax, az) {
+  return rotateX(rotateZ(v, az), ax);
 }
 
 export class Ragdoll {
   constructor() {
+    // Govde ve her uzuv IKI eksende doner: az ekran duzleminde, ax derinlikte.
     this.bodyAngle = 0;
     this.bodyVel = 0;
-    this.bodyPos = [0, BODY_CENTER[1]];
+    this.bodyAngleX = 0;
+    this.bodyVelX = 0;
+    this.bodyPos = [0, BODY_CENTER[1], 0];
     this.bodyDrop = 0;
     this.limbs = {};
     for (const name of Object.keys(LIMBS)) {
-      this.limbs[name] = { angle: 0, vel: 0 };
+      this.limbs[name] = { angle: 0, vel: 0, angleX: 0, velX: 0 };
     }
     this.grabbed = null;
-    this.target = [0, 0];
+    this.target = [0, 0, 0];
     this.muscle = 1;
+    this.spin = 0;
   }
 
   rest() {
     this.bodyAngle = 0;
     this.bodyVel = 0;
-    this.bodyPos = [0, BODY_CENTER[1]];
+    this.bodyAngleX = 0;
+    this.bodyVelX = 0;
+    this.bodyPos = [0, BODY_CENTER[1], 0];
     this.bodyDrop = 0;
     for (const limb of Object.values(this.limbs)) {
       limb.angle = 0;
       limb.vel = 0;
+      limb.angleX = 0;
+      limb.velX = 0;
     }
   }
 
   grab(partName) {
     this.rest();
     this.grabbed = GRAB_POINT[partName] ? partName : 'body';
+    // Tutma noktasi, uzvun TUTULDUGU ANDAKI kendi yeri: karakter tutuldugu an
+    // yerinden sicramiyor, sadece oradan sarkmaya basliyor.
+    const offset = this.grabOffset();
+    this.target = [
+      this.bodyPos[0] + offset[0],
+      this.bodyPos[1] + offset[1],
+      this.bodyPos[2] + offset[2],
+    ];
     // Bacaktan tutulmak kararsiz denge: kucuk bir sapma olmadan ters donmez.
     this.bodyAngle = 0.12;
   }
@@ -89,21 +119,57 @@ export class Ragdoll {
     this.muscle = clamp(value, 0.05, 1);
   }
 
-  setGrabPoint(x, y) {
-    this.target = [x, y];
+  setGrabPoint(x, y, z = 0) {
+    this.target = [x, y, z];
+  }
+
+  // Karakterin kendi ekseni etrafindaki donusu (3B oldugunu gosteren sey).
+  setSpin(radians) {
+    this.spin = radians;
   }
 
   // Tutulan noktanin govde merkezine gore konumu (govde acisi dahil).
   grabOffset() {
     const name = this.grabbed;
     const point = GRAB_POINT[name];
-    if (name === 'body') return rotate(point[0], point[1], this.bodyAngle);
+    if (name === 'body') {
+      return rotateLimb([point[0], point[1], 0], this.bodyAngleX, this.bodyAngle);
+    }
 
     const spec = LIMBS[name];
-    const limbAngle = this.bodyAngle + this.limbs[name].angle;
-    const jointLocal = rotate(spec.joint[0], spec.joint[1] - BODY_CENTER[1], this.bodyAngle);
-    const alongLimb = rotate(0, point[1] + spec.length, limbAngle);
-    return [jointLocal[0] + alongLimb[0], jointLocal[1] + alongLimb[1]];
+    const limb = this.limbs[name];
+    const jointLocal = rotateLimb(
+      [spec.joint[0], spec.joint[1] - BODY_CENTER[1], 0],
+      this.bodyAngleX,
+      this.bodyAngle,
+    );
+    const alongLimb = rotateLimb(
+      [0, point[1] + spec.length, 0],
+      this.bodyAngleX + limb.angleX,
+      this.bodyAngle + limb.angle,
+    );
+    return [
+      jointLocal[0] + alongLimb[0],
+      jointLocal[1] + alongLimb[1],
+      jointLocal[2] + alongLimb[2],
+    ];
+  }
+
+  // Tek eksende sarkac: yercekimi + dinlenmeye cekme yayi + sonumleme.
+  // Adim basina hiz ve aci sinirli oldugu icin salinim olusamiyor.
+  integrate(angle, vel, gravityTorque, stiffness, damping, limit, h) {
+    let next = clamp(vel + (gravityTorque - angle * stiffness - vel * damping) * h, -12, 12);
+    let a = angle + next * h;
+    // Limite carpinca hiz da sifirlanmali: sadece aciyi kirpmak hizi biriktiriyor
+    // ve uzuv sinirda yapisip kaliyordu (derinlikte 74 derecede takiliyordu).
+    if (a > limit) {
+      a = limit;
+      if (next > 0) next = 0;
+    } else if (a < -limit) {
+      a = -limit;
+      if (next < 0) next = 0;
+    }
+    return [a, next];
   }
 
   step(dt) {
@@ -111,92 +177,113 @@ export class Ragdoll {
     const m = this.muscle;
 
     if (this.grabbed) {
-      // Govde asildigi eklemin altina donmeye calisiyor: agirlik merkezinden
-      // eklem noktasina olan kaldiracin yatay bileseni tork uretiyor.
       const pivot = this.hangPivot();
-      const lever = rotate(-pivot[0], -pivot[1], this.bodyAngle);
-      const hangTorque = -lever[0] * GRAVITY * 0.32;
-      const spring = -this.bodyAngle * (0.6 + 7 * m);
-      const damp = -this.bodyVel * (3.2 + 2.5 * m);
-      this.bodyVel = clamp(this.bodyVel + (hangTorque + spring + damp) * h, -9, 9);
-      this.bodyAngle = clamp(this.bodyAngle + this.bodyVel * h, -2.4, 2.4);
+      const lever = rotateLimb([-pivot[0], -pivot[1], 0], this.bodyAngleX, this.bodyAngle);
+      // Ekran duzleminde: agirlik merkezi asildigi eklemin altina donuyor
+      const hangZ = -lever[0] * GRAVITY * 0.32;
+      // Derinlikte: agirlik merkezi one/arkaya sapmissa geri sallaniyor
+      const hangX = -lever[2] * GRAVITY * 0.32;
+
+      [this.bodyAngle, this.bodyVel] = this.integrate(
+        this.bodyAngle, this.bodyVel, hangZ, 0.6 + 7 * m, 3.2 + 2.5 * m, 2.4, h,
+      );
+      [this.bodyAngleX, this.bodyVelX] = this.integrate(
+        this.bodyAngleX, this.bodyVelX, hangX, 1.2 + 7 * m, 3.0 + 2.5 * m, 1.3, h,
+      );
       this.bodyDrop = 0;
     } else {
-      // Serbest dusus sirasinda govde gevsek sallaniyor.
-      const spring = -this.bodyAngle * 12;
-      const damp = -this.bodyVel * 5;
-      this.bodyVel = clamp(this.bodyVel + (spring + damp) * h, -9, 9);
-      this.bodyAngle = clamp(this.bodyAngle + this.bodyVel * h, -2.4, 2.4);
+      [this.bodyAngle, this.bodyVel] = this.integrate(this.bodyAngle, this.bodyVel, 0, 12, 5, 2.4, h);
+      [this.bodyAngleX, this.bodyVelX] = this.integrate(this.bodyAngleX, this.bodyVelX, 0, 12, 5, 1.3, h);
     }
 
     for (const [name, spec] of Object.entries(LIMBS)) {
+      const limb = this.limbs[name];
+
       if (name === this.grabbed) {
-        // Tutulan uzuv: govdenin agirligi onu duzeltiyor
-        const limb = this.limbs[name];
-        const spring = -limb.angle * 22;
-        const damp = -limb.vel * 6;
-        limb.vel = clamp(limb.vel + (spring + damp) * h, -10, 10);
-        limb.angle = clamp(limb.angle + limb.vel * h, -spec.limit, spec.limit);
+        [limb.angle, limb.vel] = this.integrate(limb.angle, limb.vel, 0, 22, 6, spec.limit, h);
+        [limb.angleX, limb.velX] = this.integrate(limb.angleX, limb.velX, 0, 22, 6, spec.limit, h);
         continue;
       }
 
-      const limb = this.limbs[name];
-      const worldAngle = this.bodyAngle + limb.angle;
-      // Uzvun kutle merkezi eklemin altinda: yercekimi onu dikey yapmaya calisiyor
-      const gravityTorque = -Math.sin(worldAngle) * GRAVITY * spec.inertia;
-      const spring = -limb.angle * (2 + 26 * m) * spec.inertia;
-      const damp = -limb.vel * (4 + 3 * m);
+      const worldZ = this.bodyAngle + limb.angle;
+      const worldX = this.bodyAngleX + limb.angleX;
+      const stiffness = (2 + 26 * m) * spec.inertia;
+      const damping = 4 + 3 * m;
 
-      limb.vel = clamp(limb.vel + (gravityTorque + spring + damp) * h, -12, 12);
-      limb.angle = clamp(limb.angle + limb.vel * h, -spec.limit, spec.limit);
+      [limb.angle, limb.vel] = this.integrate(
+        limb.angle, limb.vel, -Math.sin(worldZ) * GRAVITY * spec.inertia,
+        stiffness, damping, spec.limit, h,
+      );
+      [limb.angleX, limb.velX] = this.integrate(
+        limb.angleX, limb.velX, -Math.sin(worldX) * GRAVITY * spec.inertia,
+        stiffness, damping, spec.limit, h,
+      );
     }
 
-    // Tutulan nokta tam farede olsun: govde konumunu ona gore yerlestiriyoruz.
     if (this.grabbed) {
       const offset = this.grabOffset();
-      this.bodyPos = [this.target[0] - offset[0], this.target[1] - offset[1]];
+      // Govde, tutma noktasi sabit kalacak sekilde yerlestiriliyor - ama pencere
+      // disina tasmasin diye dinlenme konumundan en fazla MAX_SHIFT uzaklasiyor.
+      // Sarkmayi zaten acilar gosteriyor; konum sadece cerceve icinde kalmali.
+      this.bodyPos = [
+        clamp(this.target[0] - offset[0], -MAX_SHIFT, MAX_SHIFT),
+        clamp(this.target[1] - offset[1], BODY_CENTER[1] - MAX_SHIFT, BODY_CENTER[1] + MAX_SHIFT),
+        clamp(this.target[2] - offset[2], -MAX_SHIFT, MAX_SHIFT),
+      ];
     } else {
-      this.bodyPos = [0, BODY_CENTER[1]];
+      this.bodyPos = [0, BODY_CENTER[1], 0];
     }
   }
 
   applyTo(skin) {
-    const [bx, by] = this.bodyPos;
+    const [bx, by, bz] = this.bodyPos;
+
+    // Karakterin kendi ekseni etrafinda donmesi: 3B oldugunu en cok bu gosteriyor
+    skin.rotation.y = this.spin;
 
     if (skin.body) {
-      skin.body.position.set(bx, by, 0);
-      skin.body.rotation.set(0, 0, this.bodyAngle);
+      skin.body.position.set(bx, by, bz);
+      skin.body.rotation.set(this.bodyAngleX, 0, this.bodyAngle);
     }
 
     for (const [name, spec] of Object.entries(LIMBS)) {
       const part = skin[name];
       if (!part) continue;
 
-      const limbAngle = this.bodyAngle + this.limbs[name].angle;
-      const jointOffset = rotate(spec.joint[0], spec.joint[1] - BODY_CENTER[1], this.bodyAngle);
-      const jointX = bx + jointOffset[0];
-      const jointY = by + jointOffset[1];
+      const limb = this.limbs[name];
+      const joint = rotateLimb(
+        [spec.joint[0], spec.joint[1] - BODY_CENTER[1], 0],
+        this.bodyAngleX,
+        this.bodyAngle,
+      );
 
-      // Parca gruplarinin origin'i eklemde; mesh offset'i aci ile birlikte doner.
-      part.position.set(jointX, jointY, 0);
-      part.rotation.set(0, 0, limbAngle);
+      part.position.set(bx + joint[0], by + joint[1], bz + joint[2]);
+      part.rotation.set(this.bodyAngleX + limb.angleX, 0, this.bodyAngle + limb.angle);
     }
   }
 
   get settled() {
-    let energy = this.bodyVel * this.bodyVel;
-    for (const limb of Object.values(this.limbs)) energy += limb.vel * limb.vel;
+    let energy = this.bodyVel * this.bodyVel + this.bodyVelX * this.bodyVelX;
+    for (const limb of Object.values(this.limbs)) {
+      energy += limb.vel * limb.vel + limb.velX * limb.velX;
+    }
     return energy < 0.05;
   }
 
   // Tasima ataleti: fare hizlandiginda uzuvlar geride kaliyor.
+  // Tasima ataleti: fare hizlandiginda uzuvlar geride kaliyor. Yatay ivme
+  // ekran duzleminde, dikey ivme DERINLIKTE savurma yapiyor - boylece karakter
+  // surulurken one-arkaya da sallaniyor, duz bir kagit gibi kalmiyor.
   setInertia(ax, ay) {
-    const push = clamp(-ax / 900, -1.2, 1.2);
+    const pushZ = clamp(-ax / 900, -1.2, 1.2);
+    const pushX = clamp(ay / 2400, -0.35, 0.35) + clamp(Math.abs(ax) / 6000, 0, 0.18);
     for (const [name, spec] of Object.entries(LIMBS)) {
       if (name === this.grabbed) continue;
-      this.limbs[name].vel += push * spec.inertia;
+      this.limbs[name].vel += pushZ * spec.inertia;
+      this.limbs[name].velX += pushX * spec.inertia;
     }
-    this.bodyVel += push * 0.5;
+    this.bodyVel += pushZ * 0.5;
+    this.bodyVelX += pushX * 0.3;
   }
 }
 

@@ -210,14 +210,11 @@ function frame(now) {
     if (world.update(dt) === 'land') window.KevinSkin.play('land');
 
     if (world.mode === 'held' && lastCursor) {
+      // Pencere fareyi takip ediyor; ragdoll'un tutma noktasi ise tutuldugu an
+      // SABITLENDI. Onceden her karede fareden yeniden hesaplaniyordu: fare 90 ms'de
+      // bir okundugu ve pencere ekran sinirinda kirpildigi icin hesap sapiyor,
+      // karakter pencere disindaki bir noktaya uzanip yatiyordu.
       world.dragTo(lastCursor.x, lastCursor.y + dragOffsetY);
-      // Farenin ragdoll yerel uzayindaki karsiligi: karakterin ayagi yerel -24'te.
-      window.KevinSkin.ragdollGrabPoint(
-        (lastCursor.x - world.x) / RAGDOLL_SCALE,
-        (world.y - lastCursor.y) / RAGDOLL_SCALE - 24,
-        dt,
-      );
-      // Debelenirken kaslari kasiyor, arada gevsiyip sarkiyor
       window.KevinSkin.ragdollMuscle(world.struggling ? 1 : 0.22);
     }
 
@@ -228,7 +225,14 @@ function frame(now) {
       const vy = (world.y - lastWorldPos.y) / dt;
       window.KevinSkin.ragdollInertia((vx - lastWorldVel.x) / dt, (vy - lastWorldVel.y) / dt);
       lastWorldVel = { x: vx, y: vy };
+
+      // Surukleme yonune donuyor: hizli saga cekince saga, sola cekince sola.
+      // Karakterin duz bir kagit degil 3B bir govde oldugunu en cok bu gosteriyor.
+      const spinTarget = Math.max(-1.15, Math.min(1.15, vx / 520));
+      heldSpin += (spinTarget - heldSpin) * Math.min(1, dt * 4);
+      window.KevinSkin.ragdollSpin(heldSpin);
     } else {
+      heldSpin = 0;
       window.KevinSkin.ragdollStop();
       lastWorldVel = { x: 0, y: 0 };
     }
@@ -505,7 +509,6 @@ const ragdollTest = new URLSearchParams(window.location.search).get('ragdoll');
 if (ragdollTest) {
   setTimeout(() => {
     window.KevinSkin.ragdollGrab(ragdollTest);
-    window.KevinSkin.ragdollGrabPoint(2, 14);
     if (world) world.grab('arm');
   }, 1200);
 }
@@ -561,6 +564,7 @@ const CLICK_MAX_MS = 260;
 let pressInfo = null;
 let dragOffsetY = 0;
 const RAGDOLL_SCALE = 6;
+let heldSpin = 0;
 let lastWorldPos = { x: 0, y: 0 };
 let lastWorldVel = { x: 0, y: 0 };
 

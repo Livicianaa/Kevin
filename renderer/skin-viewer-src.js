@@ -21,7 +21,7 @@ function initSkinViewer(canvas, skinUrl, width, height) {
   });
 
   viewer.background = null;
-  viewer.fov = 30;
+  viewer.fov = 42;
   viewer.zoom = 0.68;
   viewer.playerWrapper.position.y = 1;
 
@@ -52,6 +52,10 @@ function ragdollGrab(part) {
 
 function ragdollGrabPoint(x, y, dt) {
   if (ragdoll) ragdoll.setGrabPoint(x, y, dt);
+}
+
+function ragdollSpin(radians) {
+  if (ragdoll) ragdoll.setSpin(radians);
 }
 
 function ragdollMuscle(value) {
@@ -125,4 +129,4 @@ function currentState() {
 }
 
 window.KevinWorld = KevinWorld;
-window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, ragdollGrab, ragdollGrabPoint, ragdollMuscle, ragdollRelease, ragdollStop, ragdollInertia, ragdollSettled, useCemPack, setCemContext, currentState, ANIMATION_STATES };
+window.KevinSkin = { initSkinViewer, tick, setState, play, setSitting, setFacing, setLook, setRootRotation, setSpeed, ragdollGrab, ragdollGrabPoint, ragdollMuscle, ragdollSpin, ragdollRelease, ragdollStop, ragdollInertia, ragdollSettled, useCemPack, setCemContext, currentState, ANIMATION_STATES };
