@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 const hypr = require('./hypr.js');
+const platform = require('./platform.js');
+const browser = require('./browser.js');
 
 // Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
 // karakterin yuruyus hizi buna kurban gidiyordu.
@@ -98,7 +100,10 @@ const DEFAULT_PERSONA = [
   'ya da bilmedigini soyle; ASLA tahmin uydurma.',
   'Bir sey yapmaya basladiysan sonucunu mutlaka soyle, "bakiyorum" deyip birakma.',
   'ARACLARIN VAR: dosya okuma/yazma, internette arama, sayfa okuma, ekrana bakma,',
-  'uygulama/site acma, klasor listeleme. Kullanici bunlardan birini isterse ARACI CAGIR,',
+  'uygulama/site acma, klasor listeleme, dosya arama (uzantiyla), ve KENDI TARAYICIN',
+  '(browser_open ile acip browser_read ile okursun, browser_click/browser_type ile',
+  'tiklayip yazarsin). Giris gerektiren ya da JavaScript ile yuklenen sayfalarda',
+  'fetch_page degil tarayiciyi kullan. Kullanici bunlardan birini isterse ARACI CAGIR,',
   'tahmin etme ve "yapamam" deme. Arac sonucunu aldiktan sonra kisa bir cumleyle anlat.',
 ].join(' ');
 
@@ -250,16 +255,26 @@ const VISION_MODEL = process.env.KEVIN_VISION_MODEL || PROVIDERS.ollama.visionMo
 // Ekran goruntusunu sohbet modeline ham olarak gondermek yerine yerel vision
 // modeline sorup METIN aliyoruz: boylece vision'i olmayan modeller de ekrani
 // "gorebiliyor" ve token israfi olmuyor.
+async function describeImage(imagePath, question) {
+  const image = fs.readFileSync(imagePath).toString('base64');
+  return describeImageBase64(image, question);
+}
+
 async function lookAtScreen(question) {
   const shot = path.join(os.tmpdir(), `kevin-vision-${crypto.randomUUID()}.png`);
   try {
-    try {
-      await runCommand('grim', ['-s', '0.5', '-l', '0', shot]);
-    } catch (err) {
-      return `ekran goruntusu alinamadi: ${err.message}`;
-    }
+    const captured = await platform.captureScreen(shot, 0.5);
+    if (!captured) return 'ekran goruntusu alinamadi';
 
     const image = fs.readFileSync(shot).toString('base64');
+    return describeImageBase64(image, question);
+  } finally {
+    fs.rmSync(shot, { force: true });
+  }
+}
+
+async function describeImageBase64(image, question) {
+  try {
     const prompt = question && question.trim()
       ? question.trim()
       : 'Bu ekranda ne var? Kisa ve somut anlat.';
@@ -288,11 +303,9 @@ async function lookAtScreen(question) {
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || 'ekrandan bir sey okunamadi';
+    return data.choices?.[0]?.message?.content?.trim() || 'goruntuden bir sey okunamadi';
   } catch (err) {
-    return `ekrana bakilamadi: ${err.message}`;
-  } finally {
-    fs.rmSync(shot, { force: true });
+    return `goruntuye bakilamadi: ${err.message}`;
   }
 }
 
@@ -429,6 +442,90 @@ async function findFilesTool(args) {
   const lines = stdout.split('\n').filter(Boolean).slice(0, 25);
   if (!lines.length) return `"${pattern}" ile eslesen bir sey bulamadim (${root})`;
   return `${root} altinda ${lines.length} sonuc:\n` + lines.join('\n');
+}
+
+// --- Tarayici araclari (Playwright) ---
+// Kevin kendi tarayicisini suruyor: pencere GORUNUR aciliyor, ne yaptigi
+// canli izlenebiliyor, oturumlari kalici. Windows/Linux/macOS'ta ayni calisiyor.
+
+function browserProfileDir() {
+  return path.join(app.getPath('userData'), 'browser-profile');
+}
+
+const BROWSER_OPEN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_open',
+    description:
+      'Kendi tarayicisinda bir adresi acar ve sayfayi okur. Giris gerektiren ya da ' +
+      'JavaScript ile yuklenen sayfalar icin fetch_page yerine BUNU kullan.',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Adres' } },
+      required: ['url'],
+    },
+  },
+};
+
+const BROWSER_READ_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_read',
+    description: 'Tarayicida ACIK olan sayfanin metnini okur.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+};
+
+const BROWSER_CLICK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_click',
+    description: 'Tarayicidaki sayfada gorunen bir yaziya/butona tiklar.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'Tiklanacak yazi' } },
+      required: ['text'],
+    },
+  },
+};
+
+const BROWSER_TYPE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_type',
+    description: 'Tarayicidaki bir kutuya yazar ve Enter\'a basar (arama kutusu, giris formu).',
+    parameters: {
+      type: 'object',
+      properties: {
+        value: { type: 'string', description: 'Yazilacak metin' },
+        field: { type: 'string', description: 'Kutunun etiketi/placeholder\'i (opsiyonel)' },
+      },
+      required: ['value'],
+    },
+  },
+};
+
+const BROWSER_LOOK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_look',
+    description: 'Tarayicidaki sayfanin GORUNTUSUNE bakar ve ne gordugunu anlatir.',
+    parameters: {
+      type: 'object',
+      properties: { question: { type: 'string', description: 'Sayfada neye bakilacagi' } },
+      required: [],
+    },
+  },
+};
+
+async function browserLook(question) {
+  const shot = path.join(os.tmpdir(), `kevin-page-${crypto.randomUUID()}.png`);
+  try {
+    await browser.screenshot(browserProfileDir(), shot);
+    return await describeImage(shot, question || 'Bu sayfada ne var?');
+  } finally {
+    fs.rmSync(shot, { force: true });
+  }
 }
 
 const WEB_SEARCH_TOOL = {
@@ -576,78 +673,6 @@ async function listDirectoryTool(dirPath) {
   return JSON.stringify(files);
 }
 
-const DESKTOP_DIRS = [
-  path.join(HOME, '.local/share/applications'),
-  '/usr/share/applications',
-  '/var/lib/flatpak/exports/share/applications',
-  path.join(HOME, '.local/share/flatpak/exports/share/applications'),
-];
-
-// "Discord ac" gibi isteklerde xdg-open ise yaramiyor (URL de dosya da degil).
-// Kurulu .desktop dosyalarindan uygulamayi bulup onu baslatiyoruz.
-function findDesktopEntry(name) {
-  const wanted = name.toLowerCase().trim();
-  const candidates = [];
-
-  for (const dir of DESKTOP_DIRS) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const file of entries) {
-      if (!file.endsWith('.desktop')) continue;
-      const id = file.slice(0, -8);
-      let displayName = '';
-      try {
-        const body = fs.readFileSync(path.join(dir, file), 'utf8');
-        const m = body.match(/^Name=(.+)$/m);
-        displayName = m ? m[1].trim() : '';
-        if (/^NoDisplay=true/m.test(body)) continue;
-      } catch {
-        continue;
-      }
-
-      const idLower = id.toLowerCase();
-      const nameLower = displayName.toLowerCase();
-      let score = 0;
-      if (idLower === wanted || nameLower === wanted) score = 100;
-      else if (idLower.endsWith('.' + wanted) || nameLower.startsWith(wanted)) score = 80;
-      else if (idLower.includes(wanted) || nameLower.includes(wanted)) score = 50;
-      if (score) candidates.push({ id, displayName: displayName || id, score });
-    }
-  }
-
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0] || null;
-}
-
-// Masaustu uygulamasi baslatmak icin gereken en az degisken kumesi.
-const DESKTOP_ENV_KEYS = [
-  'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LC_ALL', 'TERM',
-  'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE',
-  'XDG_CURRENT_DESKTOP', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-  'DBUS_SESSION_BUS_ADDRESS', 'QT_QPA_PLATFORM', 'GDK_BACKEND',
-  'HYPRLAND_INSTANCE_SIGNATURE',
-];
-
-function cleanDesktopEnv() {
-  const env = {};
-  for (const key of DESKTOP_ENV_KEYS) {
-    const value = process.env[key];
-    if (value !== undefined) env[key] = value;
-  }
-  // Electron'un masaustu kimligi alt surece sizmasin
-  if (process.env.ORIGINAL_XDG_CURRENT_DESKTOP) {
-    env.XDG_CURRENT_DESKTOP = process.env.ORIGINAL_XDG_CURRENT_DESKTOP;
-  }
-  return env;
-}
-
-// Electron'dan dogrudan baslatilan GUI uygulamalari (temiz ortamla bile)
-// acilmiyordu. Compositor'a soylemek guvenilir calisiyor: uygulama Electron'un
-// surec agacindan ve ortamindan tamamen bagimsiz basliyor.
 async function launchViaCompositor(commandLine) {
   if (!hypr.available()) return false;
   try {
@@ -656,46 +681,6 @@ async function launchViaCompositor(commandLine) {
   } catch {
     return false;
   }
-}
-
-function spawnDetached(command, args) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
-    try {
-      // Electron alt sureclere kendi kutuphane yollarini (LD_LIBRARY_PATH,
-      // GIO/GTK modulleri, ELECTRON_RUN_AS_NODE...) miras birakiyor; bunlarla
-      // baslatilan GUI uygulamasi sessizce coküyordu. Temiz bir oturum ortami
-      // olusturup onu veriyoruz.
-      const proc = spawn(command, args, {
-        detached: true,
-        stdio: 'ignore',
-        env: cleanDesktopEnv(),
-      });
-      proc.on('error', (err) => finish({ ok: false, error: err.message }));
-      proc.on('exit', (code) => {
-        // Hemen ve hatayla cikti: baslatma basarisiz
-        if (code !== 0 && code !== null) finish({ ok: false, error: `cikis kodu ${code}` });
-      });
-      proc.unref();
-      setTimeout(() => finish({ ok: true }), 500);
-    } catch (err) {
-      finish({ ok: false, error: err.message });
-    }
-  });
-}
-
-function processRunning(name) {
-  return new Promise((resolve) => {
-    const proc = spawn('pgrep', ['-x', name], { stdio: 'ignore' });
-    proc.on('error', () => resolve(false));
-    proc.on('close', (code) => resolve(code === 0));
-  });
 }
 
 async function openUrlOrApp(target) {
@@ -709,27 +694,14 @@ async function openUrlOrApp(target) {
     const url = looksLikeUrl && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? `https://${value}` : value;
     const expanded = looksLikePath ? resolveUserPath(url) : url;
     if (await launchViaCompositor(`xdg-open "${expanded}"`)) return `acildi: ${expanded}`;
-    const result = await spawnDetached('xdg-open', [expanded]);
-    return result.ok ? `acildi: ${expanded}` : `acilamadi: ${result.error}`;
+    const result = await platform.openUrl(expanded);
+    return result.ok ? `acildi: ${expanded}` : `acilamadi: ${result.error || ''}`;
   }
 
-  const entry = findDesktopEntry(value);
-  const binary = value.split(/\s+/)[0].toLowerCase();
-  const label = entry ? entry.displayName : value;
-
-  if (await launchViaCompositor(value)) {
-    if (await processRunning(binary)) return `acildi: ${label}`;
-  }
-
-  if (entry && (await launchViaCompositor(`gtk-launch ${entry.id}`))) {
-    if (await processRunning(entry.id.split('.').pop())) return `acildi: ${label}`;
-  }
-
-  const direct = await spawnDetached(binary, value.split(/\s+/).slice(1));
-  if (direct.ok && (await processRunning(binary))) return `acildi: ${label}`;
-
-  return entry
-    ? `${label} kurulu ama baslatilamadi`
+  const result = await platform.launchApp(value, launchViaCompositor);
+  if (result.ok) return `acildi: ${result.label}`;
+  return result.installed
+    ? `${result.label} kurulu ama baslatilamadi`
     : `"${value}" diye bir uygulama bulamadim`;
 }
 
@@ -742,7 +714,14 @@ function mcpToolsAsOpenAI(includeScreenControl) {
       parameters: t.inputSchema || { type: 'object', properties: {} },
     },
   }));
-  return [OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, FIND_FILES_TOOL, WEB_SEARCH_TOOL, FETCH_PAGE_TOOL, ...remoteTools];
+  return [
+    OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL,
+    FIND_FILES_TOOL, WEB_SEARCH_TOOL, FETCH_PAGE_TOOL,
+    ...(browser.available()
+      ? [BROWSER_OPEN_TOOL, BROWSER_READ_TOOL, BROWSER_CLICK_TOOL, BROWSER_TYPE_TOOL, BROWSER_LOOK_TOOL]
+      : []),
+    ...remoteTools,
+  ];
 }
 
 function resizeAnchored(width, height) {
@@ -936,6 +915,9 @@ const BASIC_TOOL_KEYWORDS = [
   'ekran', 'bak', 'baksana', 'goruyor musun', 'görüyor musun', 'ne yaziyor', 'ne yazıyor',
   'masaustu', 'masaüstü', 'indirilenler', 'belgeler',
   'file', 'read', 'write', 'search', 'open', 'show', 'screen',
+  'youtube', 'video', 'izle', 'dinle', 'sarki', 'şarkı', 'muzik', 'müzik',
+  'giris yap', 'giriş yap', 'login', 'form', 'doldur', 'gonder', 'gönder',
+  'tarayici', 'tarayıcı', 'browser', 'sekmede', 'sitede',
 ];
 
 const SCREEN_CONTROL_KEYWORDS = [
@@ -1083,6 +1065,16 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await readFileTool(args.path);
           } else if (call.function.name === 'write_file') {
             resultText = await writeFileTool(args);
+          } else if (call.function.name === 'browser_open') {
+            resultText = await browser.goto(browserProfileDir(), args.url);
+          } else if (call.function.name === 'browser_read') {
+            resultText = await browser.readPage(browserProfileDir());
+          } else if (call.function.name === 'browser_click') {
+            resultText = await browser.clickText(browserProfileDir(), args.text);
+          } else if (call.function.name === 'browser_type') {
+            resultText = await browser.typeText(browserProfileDir(), args.value, args.field);
+          } else if (call.function.name === 'browser_look') {
+            resultText = await browserLook(args.question);
           } else if (call.function.name === 'find_files') {
             resultText = await findFilesTool(args);
           } else if (call.function.name === 'web_search') {
@@ -1190,7 +1182,7 @@ const MUSIC_PLAYER_HINTS = [
 ];
 
 ipcMain.handle('music-status', async () => {
-  if (process.platform !== 'linux') return { playing: false };
+  if (!platform.isLinux) return { playing: false };
 
   try {
     const { stdout } = await runCommand('playerctl', [
