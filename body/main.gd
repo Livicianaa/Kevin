@@ -41,6 +41,10 @@ var test_grabbed := false
 var test_diag := false
 var diag_clock := 0.0
 var shot_prefix := ""
+## Test: pencere ekranda gorunmesin (render yine aliniyor)
+var test_offscreen := false
+## Test: karakter hep bu durumda kalsin (walk, idle, look_around)
+var test_anim := ""
 var shot_times := [0.6, 3.0, 6.95, 9.5]
 var shot_index := 0
 var shot_clock := 0.0
@@ -61,6 +65,14 @@ func _ready() -> void:
 			shot_prefix = arg.substr(7)
 		elif arg == "--throw":
 			test_throw = true
+		elif arg == "--offscreen":
+			test_offscreen = true
+		elif arg.begins_with("--anim="):
+			test_anim = arg.substr(7)
+		elif arg.begins_with("--shots="):
+			shot_times = []
+			for v in arg.substr(8).split(","):
+				shot_times.append(float(v))
 
 	_read_screens()
 	if usable_right <= usable_left:
@@ -307,7 +319,10 @@ func _update_character_screen() -> void:
 
 
 func _apply_window() -> void:
-	DisplayServer.window_set_position(Vector2i(roundi(win_pos.x), roundi(win_pos.y)))
+	if test_offscreen:
+		DisplayServer.window_set_position(Vector2i(9000, 9000))
+	else:
+		DisplayServer.window_set_position(Vector2i(roundi(win_pos.x), roundi(win_pos.y)))
 	# Kamera pencerenin dunyadaki merkezine bakiyor
 	var center := _px_to_world(win_pos + Vector2(WIN_SIZE) / 2.0)
 	camera.position = Vector3(center.x, center.y, 30)
@@ -416,6 +431,9 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_update_character_screen()
+	if test_anim != "" and character.mode == 0 and character.anim_state != test_anim:
+		character.walk_target = character.bounds.y if test_anim == "walk" else character.root_x
+		character._set_state(test_anim, 999.0)
 	_update_window()
 	_update_mouse_passthrough(delta)
 	_process_shots(delta)

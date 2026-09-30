@@ -2,7 +2,8 @@ extends Node3D
 ## Minecraft karakteri.
 ##
 ## Uc hali var:
-##  ANIMATED   - ayakta; prosedurel animasyonla yuruyor, bakiniyor, fareye bakiyor
+##  ANIMATED   - ayakta; yuruyor, bakiniyor, fareye bakiyor. bin/cem/player.jem
+##               (Fresh Animations) varsa animasyonu o paket uretiyor.
 ##  RAGDOLL    - bir uzvundan tutuldu ya da dusuyor; Godot'nun fizik motoru suruyor
 ##  GETTING_UP - ragdoll bitti; dustugu pozdan ayakta duruşa gecis
 ##
@@ -33,7 +34,7 @@ const LIMBS := {
 }
 
 const BODY_REST_PX := Vector3(0, 18, 0)
-const WALK_SPEED := 1.1
+const WALK_SPEED := 1.4
 const TURN_SPEED := 6.0
 ## Yururken yonune bakis. Yari donuk (0.95 rad) yurudugunde karakter kameraya
 ## dogru yuruyormus gibi gorunuyordu; neredeyse tam profil.
@@ -44,6 +45,29 @@ const SETTLE_ENERGY := 0.12
 const MAX_LYING_TIME := 4.0
 
 enum Mode { ANIMATED, RAGDOLL, GETTING_UP }
+
+const Cem := preload("res://cem.gd")
+## Yururken Minecraft'in limb_speed degeri ve limb_swing'in saniyede artisi.
+## Adim boyu yurume hizina uysun diye secildi (ayaklar kaymasin).
+const CEM_WALK_LIMB_SPEED := 0.45
+const CEM_SWING_RATE := 16.0
+## Minecraft oyuncu modelinde parcalarin donme noktalari (piksel, y asagi)
+const CEM_PIVOT := {
+	"head": Vector3(0, 0, 0),
+	"body": Vector3(0, 0, 0),
+	"right_arm": Vector3(-5, 2, 0),
+	"left_arm": Vector3(5, 2, 0),
+	"right_leg": Vector3(-1.9, 12, 0),
+	"left_leg": Vector3(1.9, 12, 0),
+}
+const CEM_BLEND_TIME := 0.3
+
+var cem: RefCounted = null
+var cem_age := 0.0
+var limb_swing := 0.0
+var limb_speed := 0.0
+var cem_blend := 1.0
+var cem_blend_from := {}
 
 var mode := Mode.ANIMATED
 var bodies := {}
@@ -93,6 +117,20 @@ func _ready() -> void:
 
 	_set_frozen(true)
 	_apply_pose(_animated_pose(0.0), _body_transform(0.0, 0.0))
+	_load_cem()
+
+
+func _load_cem() -> void:
+	var path := OS.get_environment("KEVIN_CEM")
+	if path == "":
+		path = ProjectSettings.globalize_path("res://").path_join("../bin/cem/player.jem").simplify_path()
+	cem = Cem.load_pack(path)
+	if cem == null:
+		print("[kevin] CEM paketi yok (%s), yerlesik animasyonlar" % path)
+		return
+	for w in cem.warnings:
+		push_warning("[kevin] CEM: " + w)
+	print("[kevin] CEM paketi yuklendi: ", path)
 
 
 # =====================================================================
@@ -254,17 +292,81 @@ func _animated_pose(t: float) -> Dictionary:
 			p.right_arm = Vector3(0, 0, -ARM_REST - cos(t * 2.0) * 0.03)
 			p.left_arm = Vector3(0, 0, ARM_REST + cos(t * 2.0) * 0.03)
 
-	# Kafa: bakinma animasyonu ya da fareye bakis (govdeye gore)
-	var head_yaw := look_yaw
-	var head_pitch := look_pitch
-	if anim_state == "look_around":
-		head_yaw = sin(t * 1.5) * 0.7
-		head_pitch = sin(t * 0.8) * 0.12
-	elif anim_state == "walk":
-		head_yaw = sin(t * 2.0) * 0.12
-		head_pitch = 0.0
-	p.head = Vector3(head_pitch, head_yaw, 0)
+	var head := _head_angles(t)
+	p.head = Vector3(head.x, head.y, 0)
 	return p
+
+
+## Kafa: bakinma animasyonu ya da fareye bakis (govdeye gore). x = egim, y = donus
+func _head_angles(t: float) -> Vector2:
+	if anim_state == "look_around":
+		return Vector2(sin(t * 0.8) * 0.12, sin(t * 1.5) * 0.7)
+	if anim_state == "walk":
+		return Vector2(0.0, sin(t * 2.0) * 0.12)
+	return Vector2(look_pitch, look_yaw)
+
+
+# =====================================================================
+# CEM (Fresh Animations): Minecraft'in vanilla pozu hesaplanip pakete veriliyor,
+# paket onun ustune kendi animasyonunu yaziyor - oyundaki gibi.
+# =====================================================================
+
+func _cem_step(delta: float) -> void:
+	cem_age += delta * 20.0
+	var target_speed := CEM_WALK_LIMB_SPEED if anim_state == "walk" else 0.0
+	limb_speed = move_toward(limb_speed, target_speed, delta * 2.0)
+	limb_swing += limb_speed * CEM_SWING_RATE * delta
+
+	var ls := limb_swing * 0.6662
+	var bob_z := cos(cem_age * 0.09) * 0.05 + 0.05
+	var bob_x := sin(cem_age * 0.067) * 0.05
+	var head := _head_angles(anim_t)
+
+	# Minecraft HumanoidModel.setupAnim (model uzayi: y asagi)
+	var pose := {
+		"head_rx": head.x, "head_ry": -head.y,
+		"right_arm_rx": cos(ls + PI) * limb_speed + bob_x, "right_arm_rz": bob_z,
+		"left_arm_rx": cos(ls) * limb_speed - bob_x, "left_arm_rz": -bob_z,
+		"right_leg_rx": cos(ls) * 1.4 * limb_speed,
+		"left_leg_rx": cos(ls + PI) * 1.4 * limb_speed,
+	}
+	for part in CEM_PIVOT:
+		var pv: Vector3 = CEM_PIVOT[part]
+		pose[part + "_tx"] = pv.x
+		pose[part + "_ty"] = pv.y
+		pose[part + "_tz"] = pv.z
+
+	cem.apply(pose, {
+		"age": cem_age, "time": cem_age / 20.0, "frame_time": delta,
+		"limb_swing": limb_swing, "limb_speed": limb_speed,
+		"move_forward": 1.0 if anim_state == "walk" else 0.0,
+		"is_on_ground": 1.0, "id": 7.0, "health": 20.0, "max_health": 20.0,
+	})
+
+	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y, 0))
+	if cem_blend < 1.0:
+		cem_blend = minf(1.0, cem_blend + delta / CEM_BLEND_TIME)
+	var k := ease(cem_blend, -2.0)
+	for part in CEM_PIVOT:
+		var xf := root * _cem_part_transform(part, pose)
+		if k < 1.0 and cem_blend_from.has(part):
+			xf = (cem_blend_from[part] as Transform3D).interpolate_with(xf, k)
+		bodies[part].global_transform = xf
+
+
+## Model uzayi (y asagi, yuz -z) -> karakter uzayi (y yukari, yuz +z): X ekseni
+## etrafinda 180 derece. Bu yuzden rx ayni kalir, ry ve rz ters doner.
+## Minecraft donus sirasi Z*Y*X.
+func _cem_part_transform(part: String, pose: Dictionary) -> Transform3D:
+	var t := Vector3(pose[part + "_tx"], pose[part + "_ty"], pose[part + "_tz"])
+	var basis := Basis(Vector3.BACK, -float(pose.get(part + "_rz", 0.0))) \
+		* Basis(Vector3.UP, -float(pose.get(part + "_ry", 0.0))) \
+		* Basis(Vector3.RIGHT, float(pose.get(part + "_rx", 0.0)))
+	var rest: Vector3 = CEM_PIVOT[part]
+	var rest_world := Vector3(rest.x, 24.0 - rest.y, -rest.z)
+	var offset: Vector3 = (PARTS[part].center - rest_world) * PX
+	var pivot := Vector3(t.x, 24.0 - t.y, -t.z) * PX
+	return Transform3D(basis, pivot + basis * offset)
 
 
 func _walk_bob(t: float) -> float:
@@ -363,7 +465,10 @@ func _physics_process(delta: float) -> void:
 	match mode:
 		Mode.ANIMATED:
 			_update_behaviour(delta)
-			_apply_pose(_animated_pose(anim_t), _body_transform(_walk_bob(anim_t), 0.0))
+			if cem:
+				_cem_step(delta)
+			else:
+				_apply_pose(_animated_pose(anim_t), _body_transform(_walk_bob(anim_t), 0.0))
 		Mode.RAGDOLL:
 			_update_ragdoll(delta)
 		Mode.GETTING_UP:
@@ -436,6 +541,12 @@ func _advance_getup(delta: float) -> void:
 	_apply_pose(local, body_xf)
 
 	if getup_t >= 1.0:
+		# Kalkis eklem tabanli ayakta pozda bitiyor; paketin pozu ondan birkac
+		# piksel farkli, sicramasin diye kisa bir gecisle devraliyor.
+		cem_blend = 0.0
+		limb_speed = 0.0
+		for part in bodies:
+			cem_blend_from[part] = bodies[part].global_transform
 		mode = Mode.ANIMATED
 		anim_t = 0.0
 		_set_state("idle", randf_range(1.5, 3.0))
