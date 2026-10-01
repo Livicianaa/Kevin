@@ -222,27 +222,28 @@ static func animate_in(root: Control, start_delay: float) -> void:
 	var i := 0
 	for p in root.get_children():
 		var kind: String = p.get_meta("anim", "fade")
-		var d := start_delay + i * 0.07
+		# Tek tek, yavas (livi: "asiri hizli geliyor")
+		var d := start_delay + i * 0.32
 		i += 1
 		var tw := p.create_tween().set_parallel(true)
 		p.modulate.a = 0.0
 		match kind:
 			"slam":
 				p.scale = Vector2(1.6, 1.6)
-				tw.tween_property(p, "scale", Vector2.ONE, 0.32).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				tw.tween_property(p, "scale", Vector2.ONE, 0.7).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 			"pop":
 				p.scale = Vector2(0.2, 0.2)
-				tw.tween_property(p, "scale", Vector2.ONE, 0.45).set_delay(d).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+				tw.tween_property(p, "scale", Vector2.ONE, 1.0).set_delay(d).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 			"left":
 				p.position.x = -p.size.x * 0.5
-				tw.tween_property(p, "position:x", 0.0, 0.4).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				tw.tween_property(p, "position:x", 0.0, 0.8).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 			"right":
 				p.position.x = p.size.x * 0.5
-				tw.tween_property(p, "position:x", 0.0, 0.4).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				tw.tween_property(p, "position:x", 0.0, 0.8).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 			"up":
 				p.position.y = p.size.y * 0.3
-				tw.tween_property(p, "position:y", 0.0, 0.45).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(p, "modulate:a", 1.0, 0.18).set_delay(d)
+				tw.tween_property(p, "position:y", 0.0, 0.85).set_delay(d).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(p, "modulate:a", 1.0, 0.4).set_delay(d)
 
 
 static func animate_out(root: Control) -> void:

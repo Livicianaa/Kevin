@@ -801,8 +801,8 @@ func _update_menu(delta: float) -> void:
 # =====================================================================
 
 enum { SPLASH_NONE, SPLASH_WAIT, SPLASH_SHOW, SPLASH_OUT }
-const SPLASH_MIN := 4.0
-const SPLASH_MAX := 7.0
+const SPLASH_MIN := 6.0
+const SPLASH_MAX := 9.0
 const SPLASH_OUT_TIME := 0.55
 var splash_state := SPLASH_NONE
 var splash_rect := Rect2i()
@@ -863,7 +863,7 @@ func _build_splash(vp: Vector2) -> void:
 	splash_layer.add_child(splash_front)
 	splash_front.build(vp)
 	Splash.animate_in(splash_back, 0.0)
-	Splash.animate_in(splash_front, 0.35)
+	Splash.animate_in(splash_front, 1.0)
 
 
 func _splash_camera(vp: Vector2, k: float) -> void:
@@ -894,7 +894,7 @@ func _update_splash(delta: float) -> void:
 	if splash_state == SPLASH_SHOW:
 		splash_t += delta
 		# Kevin yukaridan dusup yerine oturur (hafif sekme)
-		var k := clampf((splash_t - 0.1) / 0.6, 0.0, 1.0)
+		var k := clampf((splash_t - 0.2) / 1.0, 0.0, 1.0)
 		character.menu_lift = splash_lift + 3.0 * (1.0 - ease(k, 0.35)) - sin(k * PI) * 0.15 * (1.0 if k < 1.0 else 0.0)
 		var ready_brain: bool = brain == null or brain.connected
 		var prog := minf(splash_t / SPLASH_MIN, 0.9 if not ready_brain else 1.0)
