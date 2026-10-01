@@ -641,6 +641,7 @@ var menu_rotating := false
 var menu_auto_rotate := false
 var menu_reload := false
 var menu_ground_y := 0.0
+var replay_splash := false
 
 
 func _open_menu() -> void:
@@ -689,6 +690,10 @@ func _finish_close() -> void:
 	if menu_reload:
 		get_tree().reload_current_scene()
 		return
+	if replay_splash:
+		replay_splash = false
+		_start_splash()
+		return
 	get_window().size = WIN_SIZE
 	win_pos = _desired_window_pos()
 	_apply_window()
@@ -722,6 +727,10 @@ func _menu_action(name: String) -> void:
 		"reset":
 			menu_auto_rotate = false
 			character.menu_yaw = 0.0
+		"splash":
+			# Menuden "Acilis ekranini oynat": menu kapaninca
+			replay_splash = true
+			_close_menu()
 		"emote":
 			var pool := "fun" if character.fun_enabled else "idle"
 			character.play_emote(character._random_emote(pool))
@@ -792,7 +801,7 @@ func _update_menu(delta: float) -> void:
 # =====================================================================
 
 enum { SPLASH_NONE, SPLASH_WAIT, SPLASH_SHOW, SPLASH_OUT }
-const SPLASH_MIN := 2.8
+const SPLASH_MIN := 4.0
 const SPLASH_MAX := 7.0
 const SPLASH_OUT_TIME := 0.55
 var splash_state := SPLASH_NONE

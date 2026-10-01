@@ -650,6 +650,9 @@ func _page_about() -> VBoxContainer:
 	v.add_child(_label("Created by Liviciana", 1.0, C_CARAMEL.darkened(0.2), false, 900))
 	v.add_child(_label("Animasyonlar: Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 0.82, C_MUTED, true))
 	v.add_child(_label("Menü: karaktere sağ tık. Karakteri sürükle: döndür. Esc: kapat.", 0.82, C_MUTED, true))
+	var replay := _game_button("Açılış ekranını oynat", C_CARAMEL, 2.0)
+	replay.pressed.connect(func(): action.emit("splash"))
+	v.add_child(replay)
 	return v
 
 

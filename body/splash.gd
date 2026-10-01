@@ -108,23 +108,9 @@ static func make_back(size: Vector2) -> Control:
 	var font := anton()
 	var sf := ui_font(600)
 
-	# Zemin: yuvarlak koseli kart + kareler + yarim ton
+	# Zemin YOK (livi: "gri arka plan olmasin"): parcalar masaustunun ustunde.
+	# Sadece kose yarim ton noktalari.
 	_piece(root, size, size / 2.0, func(ci: CanvasItem):
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = C_BG
-		sb.set_corner_radius_all(int(h * 0.03))
-		sb.border_color = C_PLUM
-		sb.set_border_width_all(4)
-		ci.draw_style_box(sb, Rect2(Vector2.ZERO, size))
-		var step := w / 11.0
-		var x := step
-		while x < w - 4:
-			ci.draw_line(Vector2(x, 6), Vector2(x, h - 6), C_GRID, 1.5)
-			x += step
-		var y := step
-		while y < h - 4:
-			ci.draw_line(Vector2(6, y), Vector2(w - 6, y), C_GRID, 1.5)
-			y += step
 		_halftone(ci, Rect2(14, 14, w * 0.34, h * 0.12), w * 0.022, Color(C_CREAM, 0.85), w * 0.009, Vector2(14, 14))
 		_halftone(ci, Rect2(w * 0.7, h * 0.86, w * 0.29, h * 0.13), w * 0.022, Color(C_CREAM, 0.5), w * 0.008, Vector2(w, h)))
 
