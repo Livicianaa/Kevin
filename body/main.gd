@@ -612,7 +612,8 @@ func _open_menu() -> void:
 	# (livi: "neden tam ekran oluyor")
 	var scr := _screen_at_x(_world_to_px(_character_center()).x)
 	menu_ground_y = (desk_rect.end.y - scr.end.y) / PX_PER_UNIT
-	var sz := Vector2i(roundi(scr.size.x * 0.74), roundi(scr.size.y * 0.82))
+	# Sadece Kevin'in alani + sag sutun kadar genis (arada bosluk kalmasin)
+	var sz := Vector2i(roundi(clampf(scr.size.x * 0.46, 760.0, 1000.0)), roundi(scr.size.y * 0.82))
 	menu_screen = Rect2i(scr.position + (scr.size - sz) / 2, sz)
 	# Normal moddaki siluet tiklama alani menude kalirsa hicbir dugmeye
 	# basilamiyordu
@@ -736,7 +737,8 @@ func _update_menu(delta: float) -> void:
 	var zoom := lerpf(1.0, zoom_final, k)
 	var c0 := _px_to_world(Vector2(menu_screen.get_center()))
 	c0.y = maxf(c0.y, ground + 1.0)
-	var c1 := Vector3(menu_target_x + 0.17 * vp.x / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.06 * vp.y / (PX_PER_UNIT * zoom_final), 0)
+	var stage_x: float = menu_ui.stage_x if menu_ui else vp.x * 0.33
+	var c1 := Vector3(menu_target_x + (0.5 * vp.x - stage_x) / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.06 * vp.y / (PX_PER_UNIT * zoom_final), 0)
 	var c := c0.lerp(c1, k)
 	camera.position = Vector3(c.x, c.y, 30)
 	camera.size = vp.y / (PX_PER_UNIT * zoom)

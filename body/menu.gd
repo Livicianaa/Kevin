@@ -29,8 +29,9 @@ var fs := 15
 
 var column: Control
 var left_bar: Control
-var card: PanelContainer
-var card_title: Label
+var main_view: VBoxContainer
+var detail_view: VBoxContainer
+var detail_head: Button
 var cat_buttons := {}
 var pages := {}
 var current_cat := ""
@@ -62,6 +63,9 @@ var auto_rotate_btn: Button
 
 var original_body := {}
 var view := Vector2.ZERO
+## Kevin'in duracagi yatay nokta (px): main kamerayi buna gore ayarliyor
+var stage_x := 0.0
+var col_w := 260.0
 
 
 func build(size_px: Vector2) -> void:
@@ -76,19 +80,16 @@ func build(size_px: Vector2) -> void:
 	brain_cfg = Settings.load_brain()
 
 	var pad := view.y * 0.03
-	var col_w := clampf(view.x * 0.22, 220.0, 300.0)
+	col_w = clampf(view.x * 0.36, 240.0, 330.0)
 	column = _build_column(Vector2(col_w, view.y - pad * 2))
 	column.position = Vector2(view.x - col_w - pad, pad)
 	add_child(column)
 
-	card = _build_card(Vector2(clampf(view.x * 0.33, 340.0, 480.0), view.y - pad * 2))
-	card.position = Vector2(column.position.x - card.size.x - pad * 0.6, pad)
-	card.visible = false
-	add_child(card)
-
 	left_bar = _build_left_bar()
 	left_bar.position = Vector2(pad, view.y * 0.2)
 	add_child(left_bar)
+	# Kevin sol dugmelerle sag sutun arasinin ortasinda
+	stage_x = (pad + fs * 3.2 + column.position.x) / 2.0
 
 	_animate_in()
 
@@ -253,14 +254,21 @@ func _game_button(text: String, color: Color, height_mul := 2.2) -> Button:
 
 
 # =====================================================================
-# Sag sutun: isim, kategoriler, skin kartlari, Kaydet/Kapat
+# Sag sutun: ana menu (isim, kategoriler, karakterler, Kaydet/Kapat) ve
+# kategori gorunumu. Kategoriye basinca dugme yavasca yukari kayip baslik
+# olur, sutun o kategorinin ayarlarina doner; "Geri" ana menuye dondurur.
 # =====================================================================
 
 func _build_column(size_px: Vector2) -> Control:
-	var v := VBoxContainer.new()
-	v.custom_minimum_size = size_px
-	v.size = size_px
-	v.add_theme_constant_override("separation", int(fs * 0.55))
+	var col := Control.new()
+	col.custom_minimum_size = size_px
+	col.size = size_px
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	main_view = VBoxContainer.new()
+	main_view.size = Vector2(size_px.x, 0)
+	main_view.add_theme_constant_override("separation", int(fs * 0.55))
+	col.add_child(main_view)
 
 	var plate := PanelContainer.new()
 	plate.add_theme_stylebox_override("panel", _box(C_CREAM, 10, C_INK, 3, 4))
@@ -274,38 +282,29 @@ func _build_column(size_px: Vector2) -> Control:
 	_outlined(bl, 0.85)
 	badge.add_child(bl)
 	ph.add_child(badge)
-	var nm := _label(str(brain_cfg.get("name", "Kevin")), 1.35, C_TEXT, false, 900)
-	ph.add_child(nm)
+	ph.add_child(_label(str(brain_cfg.get("name", "Kevin")), 1.35, C_TEXT, false, 900))
 	plate.add_child(ph)
-	v.add_child(plate)
+	main_view.add_child(plate)
 
 	var cats := [["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
 	for c in cats:
 		var b := _game_button(c[1], C_CARAMEL, 2.1)
-		b.toggle_mode = true
-		b.add_theme_stylebox_override("pressed", _box(C_SELECT, 10, C_INK, 3, 1, C_CARAMEL.darkened(0.45)))
-		b.add_theme_stylebox_override("hover_pressed", _box(C_SELECT, 10, C_INK, 3, 1, C_CARAMEL.darkened(0.45)))
-		b.pressed.connect(_toggle_category.bind(c[0], c[1]))
+		b.pressed.connect(_open_category.bind(c[0]))
 		cat_buttons[c[0]] = b
-		v.add_child(b)
+		main_view.add_child(b)
 
-	# Karakterler (skin kartlari)
+	# Karakterler: sadece kartlar kadar yer kaplar (alti bos kalmasin)
 	var skins_box := PanelContainer.new()
-	skins_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	skins_box.add_theme_stylebox_override("panel", _box(C_CREAM, 10, C_INK, 3, 4))
 	var sv := VBoxContainer.new()
 	sv.add_theme_constant_override("separation", int(fs * 0.4))
 	sv.add_child(_label("Karakterler", 0.95, C_TEXT, false, 800))
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	sv.add_child(scroll)
 	skin_grid = GridContainer.new()
-	skin_grid.columns = 3
+	skin_grid.columns = 4
 	skin_grid.add_theme_constant_override("h_separation", int(fs * 0.4))
 	skin_grid.add_theme_constant_override("v_separation", int(fs * 0.4))
-	scroll.add_child(skin_grid)
-	skin_cell = (size_px.x - fs * 3.0) / 3.0
+	sv.add_child(skin_grid)
+	skin_cell = (size_px.x - fs * 3.2) / 4.0
 	for path in Settings.list_skins():
 		_add_skin_card(path)
 	var add := Button.new()
@@ -317,19 +316,100 @@ func _build_column(size_px: Vector2) -> Control:
 	add.pressed.connect(_pick_skin_file)
 	skin_grid.add_child(add)
 	skins_box.add_child(sv)
-	v.add_child(skins_box)
+	main_view.add_child(skins_box)
 	_mark_selected_card()
 
+	main_view.add_child(_footer(false))
+
+	detail_view = _build_detail(size_px)
+	detail_view.visible = false
+	col.add_child(detail_view)
+	return col
+
+
+func _footer(with_back: bool) -> HBoxContainer:
 	var foot := HBoxContainer.new()
 	foot.add_theme_constant_override("separation", int(fs * 0.5))
+	if with_back:
+		var back := _game_button("Geri", C_BROWN, 2.3)
+		back.pressed.connect(_back_to_main)
+		foot.add_child(back)
 	var save := _game_button("Kaydet", C_GREEN, 2.3)
 	save.pressed.connect(_on_save)
 	foot.add_child(save)
-	var close := _game_button("Kapat", C_BROWN, 2.3)
-	close.pressed.connect(func(): close_requested.emit())
-	foot.add_child(close)
-	v.add_child(foot)
+	if not with_back:
+		var close := _game_button("Kapat", C_BROWN, 2.3)
+		close.pressed.connect(func(): close_requested.emit())
+		foot.add_child(close)
+	return foot
+
+
+func _build_detail(size_px: Vector2) -> VBoxContainer:
+	var v := VBoxContainer.new()
+	v.size = size_px
+	v.add_theme_constant_override("separation", int(fs * 0.55))
+	detail_head = _game_button("", C_SELECT, 2.1)
+	detail_head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(detail_head)
+	var box := PanelContainer.new()
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_theme_stylebox_override("panel", _box(C_CREAM, 12, C_INK, 3, 5))
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
+	var holder := VBoxContainer.new()
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(holder)
+	pages["karakter"] = _page_character()
+	pages["yapay_zeka"] = _page_ai()
+	pages["davranis"] = _page_behaviour()
+	pages["hakkinda"] = _page_about()
+	for pg in pages.values():
+		pg.visible = false
+		holder.add_child(pg)
+	v.add_child(box)
+	v.add_child(_footer(true))
 	return v
+
+
+func _open_category(id: String) -> void:
+	if current_cat != "":
+		return
+	current_cat = id
+	var src: Button = cat_buttons[id]
+	for k in pages:
+		pages[k].visible = k == id
+	detail_head.text = src.text
+
+	# Basilan dugmenin bir kopyasi yerinden en uste kayar, sonra kategori
+	# gorunumu acilir
+	var ghost := _game_button(src.text, C_SELECT, 2.1)
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost.size = src.size
+	ghost.position = src.global_position - column.global_position
+	column.add_child(ghost)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(main_view, "modulate:a", 0.0, 0.2)
+	tw.tween_property(ghost, "position:y", 0.0, 0.38).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tw.chain().tween_callback(func():
+		main_view.visible = false
+		detail_view.visible = true
+		detail_view.modulate.a = 0.0
+		ghost.queue_free())
+	tw.chain().tween_property(detail_view, "modulate:a", 1.0, 0.2)
+
+
+func _back_to_main() -> void:
+	if current_cat == "":
+		return
+	current_cat = ""
+	var tw := create_tween()
+	tw.tween_property(detail_view, "modulate:a", 0.0, 0.15)
+	tw.tween_callback(func():
+		detail_view.visible = false
+		main_view.visible = true
+		main_view.modulate.a = 0.0)
+	tw.tween_property(main_view, "modulate:a", 1.0, 0.2)
 
 
 func _add_skin_card(path: String) -> void:
@@ -371,12 +451,13 @@ func _mark_selected_card() -> void:
 
 
 func _pick_skin_file() -> void:
-	# Kevin'in penceresi "hep ustte"; dosya penceresi arkasinda kaliyordu
-	get_window().always_on_top = false
+	# Kevin'in penceresi Hyprland'de igneli ve "hep ustte": dosya penceresi
+	# arkasinda kaliyordu. Dosya penceresi acikken asagi alinir.
+	_window_lowered(true)
 	DisplayServer.file_dialog_show("Skin seç", OS.get_environment("HOME"), "", false,
 		DisplayServer.FILE_DIALOG_MODE_OPEN_FILE, PackedStringArray(["*.png ; Minecraft skin"]),
 		func(ok: bool, paths: PackedStringArray, _f: int):
-			get_window().always_on_top = true
+			_window_lowered(false)
 			if not ok or paths.is_empty():
 				return
 			var target := Settings.import_skin(paths[0])
@@ -387,69 +468,23 @@ func _pick_skin_file() -> void:
 			skin_chosen.emit(target))
 
 
-# =====================================================================
-# Ayar karti (kategoriye basinca dugmelerin solunda)
-# =====================================================================
-
-func _build_card(size_px: Vector2) -> PanelContainer:
-	var p := PanelContainer.new()
-	p.custom_minimum_size = size_px
-	p.size = size_px
-	p.add_theme_stylebox_override("panel", _box(C_CREAM, 12, C_INK, 3, 5))
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.6))
-	p.add_child(v)
-	var head := HBoxContainer.new()
-	card_title = _label("", 1.2, C_TEXT, false, 900)
-	card_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(card_title)
-	var x := Button.new()
-	x.text = "X"
-	x.add_theme_font_override("font", _font(900))
-	x.pressed.connect(func(): _toggle_category(current_cat, ""))
-	head.add_child(x)
-	v.add_child(head)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	v.add_child(scroll)
-	var holder := VBoxContainer.new()
-	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(holder)
-	pages["karakter"] = _page_character()
-	pages["yapay_zeka"] = _page_ai()
-	pages["davranis"] = _page_behaviour()
-	pages["hakkinda"] = _page_about()
-	for pg in pages.values():
-		pg.visible = false
-		holder.add_child(pg)
-	return p
-
-
-func _toggle_category(id: String, title: String) -> void:
-	if id == current_cat or title == "":
-		# Ayni kategoriye tekrar basinca kapanir
-		current_cat = ""
-		for b in cat_buttons.values():
-			b.button_pressed = false
-		var tw := create_tween()
-		tw.tween_property(card, "modulate:a", 0.0, 0.15)
-		tw.tween_callback(func(): card.visible = false)
+func _window_lowered(lowered: bool) -> void:
+	get_window().always_on_top = not lowered
+	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") == "":
 		return
-	current_cat = id
-	for k in cat_buttons:
-		cat_buttons[k].button_pressed = k == id
-	for k in pages:
-		pages[k].visible = k == id
-	card_title.text = title
-	if not card.visible:
-		card.visible = true
-		var final_x := column.position.x - card.size.x - view.y * 0.018
-		card.position.x = final_x + fs * 4
-		card.modulate.a = 0.0
-		var tw := create_tween().set_parallel(true)
-		tw.tween_property(card, "position:x", final_x, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(card, "modulate:a", 1.0, 0.2)
+	var pid := "pid:%d" % OS.get_process_id()
+	var out := []
+	OS.execute("hyprctl", ["clients", "-j"], out)
+	var pinned := false
+	var data = JSON.parse_string(out[0] if not out.is_empty() else "[]")
+	if data is Array:
+		for c in data:
+			if int(c.get("pid", 0)) == OS.get_process_id():
+				pinned = c.get("pinned", false)
+	# "pin" komutu ac/kapa yapiyor: sadece gerekiyorsa cagir
+	if pinned == lowered:
+		OS.execute("hyprctl", ["dispatch", "pin", pid])
+	OS.execute("hyprctl", ["dispatch", "alterzorder", ("bottom," if lowered else "top,") + pid])
 
 
 func _page() -> VBoxContainer:
@@ -598,9 +633,8 @@ func _current_provider() -> String:
 
 ## Test icin: kategoriyi ac
 func _select_tab(id: String) -> void:
-	var titles := {"karakter": "Karakter", "yapay_zeka": "Yapay Zeka", "davranis": "Davranış", "hakkinda": "Hakkında"}
-	if id != current_cat and titles.has(id):
-		_toggle_category(id, titles[id])
+	if pages.has(id) and current_cat == "":
+		_open_category(id)
 
 
 # =====================================================================
@@ -743,7 +777,5 @@ func animate_out(_view: Vector2) -> Tween:
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(column, "position:x", column.position.x + view.x * 0.35, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	tw.tween_property(left_bar, "position:x", -view.x * 0.25, 0.3).set_ease(Tween.EASE_IN)
-	if card.visible:
-		tw.tween_property(card, "position:x", card.position.x + view.x * 0.35, 0.3).set_ease(Tween.EASE_IN)
 	tw.tween_property(self, "modulate:a", 0.0, 0.3)
 	return tw
