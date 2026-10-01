@@ -704,7 +704,7 @@ func _finish_close() -> void:
 
 
 func _build_menu_ui(size_px: Vector2) -> void:
-	# Bulutlu kagit zemin: Kevin'in ARKASINDA (SubViewport -> kameraya bagli duzlem)
+	# Kagit zemin ve ensō: Kevin'in ARKASINDA (SubViewport -> kameraya bagli duzlem)
 	menu_vp = SubViewport.new()
 	menu_vp.size = Vector2i(size_px)
 	menu_vp.transparent_bg = true
@@ -775,8 +775,6 @@ func _update_menu(delta: float) -> void:
 		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu
 		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
 			menu_state = MENU_OPEN
-			# Arka plan yok (livi: "arka plan olmasin"): Kevin ve menu dogrudan
-			# masaustunun ustunde
 			_build_menu_ui(vp)
 		else:
 			return
@@ -796,15 +794,17 @@ func _update_menu(delta: float) -> void:
 	character.root_x = lerpf(menu_from_x if menu_state != MENU_CLOSING else menu_target_x, menu_target_x, k if menu_state != MENU_CLOSING else 1.0)
 	character.menu_lift = sin(PI * clampf(menu_k, 0.0, 1.0)) * 1.1 if menu_state == MENU_OPEN and menu_k < 1.0 else 0.0
 
-	# Kamera: 1:1'den (karakter oldugu yerde) yakin plana; karakter ekranin
-	# solunda (%30), sag panel icin yer kaliyor
+	# Kamera: 1:1'den (karakter oldugu yerde) yakin plana; Kevin menunun
+	# verdigi sahne yerinde (ortasi, ayak hizasi, boyu)
 	var ground := menu_ground_y
-	var zoom_final := 0.42 * vp.y / (2.0 * PX_PER_UNIT)
+	var stage_h: float = menu_ui.stage_h if menu_ui else 0.42 * vp.y
+	var feet_y: float = menu_ui.stage_feet_y if menu_ui else 0.65 * vp.y
+	var zoom_final := stage_h / (2.0 * PX_PER_UNIT)
 	var zoom := lerpf(1.0, zoom_final, k)
 	var c0 := _px_to_world(Vector2(menu_screen.get_center()))
 	c0.y = maxf(c0.y, ground + 1.0)
 	var stage_x: float = menu_ui.stage_x if menu_ui else vp.x * 0.33
-	var c1 := Vector3(menu_target_x + (0.5 * vp.x - stage_x) / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.06 * vp.y / (PX_PER_UNIT * zoom_final), 0)
+	var c1 := Vector3(menu_target_x + (0.5 * vp.x - stage_x) / (PX_PER_UNIT * zoom_final), ground + (feet_y - 0.5 * vp.y) / (PX_PER_UNIT * zoom_final), 0)
 	var c := c0.lerp(c1, k)
 	camera.position = Vector3(c.x, c.y, 30)
 	camera.size = vp.y / (PX_PER_UNIT * zoom)

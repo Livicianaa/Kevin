@@ -1,9 +1,10 @@
 extends Control
-## Kevin'in menusu (karaktere sag tik). Arka plan YOK: Kevin ve arayuz
-## parcalari masaustunun ustunde duruyor (livi: "arka plan olmasin").
-## Sagda alt alta kategori dugmeleri, altinda skin kartlari, en altta
-## Kaydet/Kapat; bir kategoriye basinca ayarlari dugmelerin solunda acilir.
-## Renk: krem tonlari, koyu kahve kenar (referans: oyun karakter ekrani).
+## Kevin'in menusu (karaktere sag tik). Sade Japon tarzi: krem kagit, murekkep
+## siyahi yazi, tek vurgu rengi hanko kirmizisi. Solda Kevin (arkasinda firca
+## darbesi ensō), sagda numarali kategori listesi, altinda karakterler.
+## Kategoriye basinca baslik yukari kayar, sutun o kategorinin ayarlarina doner.
+## Olculer 880x900'luk taslaktan (~/Pictures/kevin-menu-taslak-sade-japon.png)
+## u katsayisiyla olcekleniyor.
 
 signal close_requested
 signal saved(needs_reload: bool)
@@ -12,44 +13,43 @@ signal action(name: String)
 
 const Settings := preload("res://settings.gd")
 
-## Japon tarzi: washi kagidi, altin-kahve cizgi, vermilyon (hanko kirmizisi),
-## murekkep siyahi
-const C_INK := Color("2b2118")
-const C_CREAM := Color("f6eedc")
-const C_CREAM_2 := Color("ece0c4")
-const C_CREAM_3 := Color("d9c59a")
-const C_TEXT := Color("2b2118")
-const C_MUTED := Color("7d6a55")
-const C_GOLD := Color("96764a")
-const C_RED := Color("c4161c")
-const C_CARAMEL := C_RED
-const C_GREEN := C_RED
-const C_BROWN := C_GOLD
-const C_SELECT := C_RED
+const C_PAPER := Color("f4eee2")
+const C_CARD := Color("faf6ee")
+const C_LINE := Color("d9cdb6")
+const C_INK := Color("262019")
+const C_MUTED := Color("8a7d6b")
+const C_RED := Color("b8261f")
+const C_CREAM := Color("f6eee0")
 
-## Kullanicinin verdigi susler (bin/ui, repoda degil): koseler, ust ayrac,
-## dugme plakalari. Yoksa sade cizim.
-const UI_DIR := "../bin/ui"
-## Kategori -> plaka (sabit); koseler ve ust ayrac her acilista rastgele
-const CAT_PLAQUE := {"sohbet": 0, "karakter": 1, "yapay_zeka": 2, "davranis": 3, "hakkinda": 4}
+## Golge icin pencere kenarinda birakilan bosluk (px)
+const EDGE := 12.0
 
 var body_cfg := {}
 var brain_cfg := {}
-var fs := 15
+var u := 1.0
+var view := Vector2.ZERO
+
+## main kamerayi bunlara gore ayarliyor: Kevin'in ortasi (x), ayak hizasi (y)
+## ve boyu (px)
+var stage_x := 0.0
+var stage_feet_y := 0.0
+var stage_h := 0.0
 
 var column: Control
-var left_bar: Control
 var main_view: VBoxContainer
-var detail_scroll: ScrollContainer
 var detail_view: VBoxContainer
-var detail_head: Button
-var detail_head_holder: Control
+var detail_num: Label
+var detail_title: Label
+var detail_scroll: ScrollContainer
+var foot_link: LinkButton
+var footer: HBoxContainer
+var stage_links: HBoxContainer
+var caption: Label
 var cat_buttons := {}
 var pages := {}
 var current_cat := ""
 var skin_grid: GridContainer
 var skin_cards := {}
-var skin_cell := 64.0
 
 var slim_btns := []
 var scale_slider: HSlider
@@ -62,361 +62,452 @@ var key_edit: LineEdit
 var key_row: Control
 var name_edit: LineEdit
 var nick_edit: LineEdit
-var hands_check: CheckButton
+var hands_check: Button
 var session_slider: HSlider
 var session_label: Label
 var persona_edit: TextEdit
 var walk_slider: HSlider
 var emote_slider: HSlider
-var look_check: CheckButton
-var wallsit_check: CheckButton
-var fun_check: CheckButton
-var auto_rotate_btn: Button
+var look_check: Button
+var wallsit_check: Button
+var fun_check: Button
+var rotate_link: LinkButton
 
 var original_body := {}
-var view := Vector2.ZERO
-## Kevin'in duracagi yatay nokta (px): main kamerayi buna gore ayarliyor
-var stage_x := 0.0
-var col_w := 260.0
+
+const CATS := [["sohbet", "Sohbet"], ["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
+
+
+## Taslak olculeri: menu ve arka plan ayni yerlesimi kullaniyor
+static func layout(size_px: Vector2) -> Dictionary:
+	var k := clampf(size_px.y / 900.0, 0.75, 1.5)
+	var col_w := clampf(size_px.x * 0.36, 280.0 * k, 340.0 * k)
+	var col_x := size_px.x - EDGE - 40.0 * k - col_w
+	var feet := size_px.y * 0.765
+	var h := size_px.y * 0.5
+	return {
+		"u": k,
+		"col": Rect2(col_x, EDGE + 52.0 * k, col_w, size_px.y - 2.0 * EDGE - 52.0 * k - 34.0 * k),
+		"stage_x": (EDGE + col_x) / 2.0,
+		"feet": feet,
+		"kevin_h": h,
+		"enso_c": Vector2((EDGE + col_x) / 2.0, feet - h * 0.56),
+		"enso_r": size_px.y * 0.215,
+		"edge": EDGE,
+	}
 
 
 func build(size_px: Vector2) -> void:
 	view = size_px
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fs = int(clampf(view.y / 60.0, 12.0, 18.0))
+	var lay := layout(view)
+	u = lay.u
+	stage_x = lay.stage_x
+	stage_feet_y = lay.feet
+	stage_h = lay.kevin_h
 	theme = _make_theme()
 
 	body_cfg = Settings.load_body()
 	original_body = body_cfg.duplicate()
 	brain_cfg = Settings.load_brain()
 
-	var pad := view.y * 0.03
-	var top := _build_decor(pad)
-	col_w = clampf(view.x * 0.34, 240.0, 320.0)
-	column = _build_column(Vector2(col_w, view.y - top - pad - view.y * 0.08))
-	column.position = Vector2(view.x - col_w - pad * 1.4, top)
-	add_child(column)
+	caption = _text("KEVİN · AYARLAR", 12, C_MUTED, false, 500, 3.8)
+	caption.position = Vector2(EDGE + 26 * u, EDGE + 18 * u)
+	add_child(caption)
 
-	left_bar = _build_left_bar()
-	left_bar.position = Vector2(pad * 1.4, view.y * 0.24)
-	add_child(left_bar)
-	# Kevin sol dugmelerle sag sutun arasinin ortasinda
-	stage_x = (pad + fs * 3.2 + column.position.x) / 2.0
+	var r: Rect2 = lay.col
+	column = Control.new()
+	column.position = r.position
+	column.size = r.size
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(column)
+	footer = _build_footer()
+	column.add_child(footer)
+	var foot_h := footer.get_combined_minimum_size().y
+	footer.position = Vector2(0, r.size.y - foot_h)
+	footer.size = Vector2(r.size.x, foot_h)
+	main_view = _build_main(r.size.x)
+	column.add_child(main_view)
+	detail_view = _build_detail(Vector2(r.size.x, r.size.y - foot_h - 20 * u))
+	detail_view.visible = false
+	column.add_child(detail_view)
+
+	stage_links = _build_stage_links()
+	add_child(stage_links)
+	var sw := stage_links.get_combined_minimum_size()
+	stage_links.position = Vector2(stage_x - sw.x / 2.0, view.y - EDGE - 30 * u - sw.y)
 
 	_animate_in()
 
 
 # =====================================================================
-# Kagit zemin: krem kagit + altin cizgili ugurlu bulutlar (livi'nin verdigi
-# ornegin keskin hali: dusuk cozunurluklu gorsel yerine kodla ciziliyor, her
-# boyutta net). Kevin'in ARKASINDA durmasi icin main bunu SubViewport ile 3B
-# duzleme basiyor.
+# Arka plan: Kevin'in ARKASINDA (main bunu SubViewport ile 3B duzleme basiyor).
+# Kagit panel + ince doku + Kevin'in arkasinda firca darbesi ensō.
 # =====================================================================
 
-class CloudPaper:
+class Paper:
 	extends Control
-	const PAPER := Color("f5f0e6")
-	const GOLD := Color("b8955a")
-	const GOLD_L := Color("dcc69c")
-	var seed_val := 0
+	var lay := {}
 
 	func _draw() -> void:
-		var r := Rect2(Vector2.ZERO, size)
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = PAPER
-		sb.set_corner_radius_all(int(size.y * 0.015))
-		sb.border_color = Color("c9ad7c")
-		sb.set_border_width_all(2)
-		draw_style_box(sb, r)
-		# Kagit dokusu
+		sb.bg_color = Color("f4eee2")
+		sb.border_color = Color("d9cdb6")
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(6)
+		sb.shadow_color = Color(0, 0, 0, 0.22)
+		var e: float = lay.edge
+		sb.shadow_size = int(e * 0.8)
+		sb.shadow_offset = Vector2(0, 3)
+		sb.anti_aliasing = true
+		draw_style_box(sb, Rect2(Vector2.ONE * e, size - Vector2.ONE * e * 2.0))
+		_enso(lay.enso_c, lay.enso_r)
+
+	## Acik kalan firca halkasi: kalinligi degisen, uclari incelen, kenari
+	## hafif titrek tek darbe; icinde kuru firca izleri
+	func _enso(c: Vector2, r: float) -> void:
 		var rng := RandomNumberGenerator.new()
-		rng.seed = 7
-		for i in int(size.x * size.y / 900.0):
-			var p := Vector2(rng.randf() * size.x, rng.randf() * size.y)
-			draw_rect(Rect2(p, Vector2.ONE * rng.randf_range(1.0, 2.2)), Color(0.55, 0.45, 0.3, rng.randf_range(0.02, 0.06)))
-		# Bulut kumeleri (ornekteki gibi sol ust ve sag ust, ortaya uzanan)
-		rng.seed = seed_val
-		var u := size.x / 100.0
-		_cluster(rng, Vector2(size.x * 0.12, size.y * 0.12), u * 1.05, 6)
-		_cluster(rng, Vector2(size.x * 0.78, size.y * 0.09), u * 1.25, 9)
-		_cluster(rng, Vector2(size.x * 0.52, size.y * 0.24), u * 1.0, 7)
-		_wisp(Vector2(size.x * 0.3, size.y * 0.33), Vector2(size.x * 0.48, size.y * 0.28), u)
-		_cluster(rng, Vector2(size.x * 0.2, size.y * 0.86), u * 0.85, 5)
-
-	## Bir kume: taban egrisi boyunca dizilmis kabarciklar, her birinin icinde kivrim
-	func _cluster(rng: RandomNumberGenerator, c: Vector2, scale: float, n: int) -> void:
-		var puffs := []
+		rng.seed = 11
+		var start := -0.55
+		var span := TAU * 0.93
+		var n := 160
+		var w0 := r * 0.058
+		var outer := PackedVector2Array()
+		var inner := PackedVector2Array()
+		var center := PackedVector2Array()
+		var wob := []
+		for i in 6:
+			wob.append([rng.randf_range(1.0, 4.0), rng.randf_range(0.0, TAU), rng.randf_range(0.004, 0.012)])
 		for i in n:
-			var t := float(i) / maxf(1.0, n - 1.0) - 0.5
-			var p := c + Vector2(t * scale * 26.0, -absf(t) * scale * 3.0 + rng.randf_range(-scale * 3.5, scale * 2.5))
-			puffs.append([p, scale * rng.randf_range(2.6, 4.6), rng.randf() < 0.5])
-		# Arkadan one: once dolgu (arkadaki cizgileri ortsun), sonra cizgi
-		puffs.sort_custom(func(a, b): return a[0].y < b[0].y)
-		for pf in puffs:
-			var p: Vector2 = pf[0]
-			var rad: float = pf[1]
-			draw_circle(p, rad, Color(PAPER, 0.96))
-			draw_arc(p, rad, PI * 0.95, PI * 2.6, 28, GOLD, 1.6, true)
-			_spiral(p + Vector2(rad * 0.1, rad * 0.05), rad * 0.72, pf[2])
-			# Ic golge cizgisi (ornekteki cift cizgi hissi)
-			draw_arc(p, rad * 0.86, PI * 1.1, PI * 1.6, 12, GOLD_L, 1.0, true)
-		# Taban: duz akan cizgi, uclari kivrik
-		var a := c + Vector2(-scale * 15.0, scale * 4.5)
-		var b := c + Vector2(scale * 15.0, scale * 4.5)
-		draw_line(a, b, GOLD, 1.4, true)
-		_spiral(a + Vector2(-scale * 1.2, -scale * 1.2), scale * 1.3, true)
-		_spiral(b + Vector2(scale * 1.2, -scale * 1.2), scale * 1.3, false)
+			var t := float(i) / (n - 1)
+			var a := start - span * t
+			var rr := r * (1.0 + 0.05 * sin(t * PI * 1.3 + 0.4) - 0.03 * t)
+			for wb in wob:
+				rr += r * wb[2] * sin(t * TAU * wb[0] + wb[1])
+			var p := c + Vector2(cos(a), sin(a)) * rr
+			var taper := smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.7, 1.0, t) * 0.85)
+			var half := w0 * (0.55 + 0.45 * sin(t * PI)) * taper + 0.6
+			var nrm := Vector2(cos(a), sin(a))
+			outer.append(p + nrm * half)
+			inner.append(p - nrm * half)
+			center.append(p)
+		var poly := outer.duplicate()
+		inner.reverse()
+		poly.append_array(inner)
+		var ink := Color(0.149, 0.125, 0.098, 0.22)
+		draw_colored_polygon(poly, ink)
+		# Uyumluluk render'inda 2B MSAA yok: kenarlari yumusak cizgiyle ort
+		# (fircanin kenarinda biriken murekkep gibi hafif koyu durur)
+		inner.reverse()
+		draw_polyline(outer, Color(ink, ink.a * 0.7), 1.2, true)
+		draw_polyline(inner, Color(ink, ink.a * 0.7), 1.2, true)
+		for k in 4:
+			var streak := PackedVector2Array()
+			var off := rng.randf_range(-0.6, 0.6) * w0
+			var from := int(rng.randf_range(0.05, 0.4) * n)
+			var to := int(rng.randf_range(0.65, 0.95) * n)
+			for i in range(from, to):
+				var a := start - span * float(i) / (n - 1)
+				streak.append(center[i] + Vector2(cos(a), sin(a)) * off)
+			draw_polyline(streak, Color(ink, 0.12), 1.0, true)
 
-	func _spiral(c: Vector2, r: float, ccw: bool) -> void:
-		var pts := PackedVector2Array()
-		var turns := 1.7
-		for i in 40:
-			var t := float(i) / 39.0
-			var ang := (t * turns * TAU) * (-1.0 if ccw else 1.0)
-			pts.append(c + Vector2(cos(ang), sin(ang)) * r * (1.0 - t * 0.85))
-		draw_polyline(pts, GOLD, 1.3, true)
 
-	## Ince uzun duman kuyrugu
-	func _wisp(a: Vector2, b: Vector2, u: float) -> void:
-		for k in 3:
-			var pts := PackedVector2Array()
-			for i in 30:
-				var t := float(i) / 29.0
-				var p := a.lerp(b, t)
-				p.y += sin(t * PI * 2.0 + k) * u * 1.2 + k * u * 0.8
-				pts.append(p)
-			draw_polyline(pts, Color(GOLD, 0.55 - k * 0.12), 1.0, true)
+const GRAIN_SHADER := """
+shader_type canvas_item;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+void fragment() {
+	vec2 px = FRAGCOORD.xy;
+	float g = hash(floor(px)) * 0.6 + hash(floor(px * 0.5) + 7.0) * 0.4;
+	COLOR = vec4(0.45, 0.38, 0.28, g * 0.11);
+}
+"""
 
 
 static func make_background(size_px: Vector2) -> Control:
-	var bg := CloudPaper.new()
-	bg.size = size_px
-	bg.seed_val = randi()
-	return bg
-
-
-# =====================================================================
-# Susler: her acilista rastgele kose (sol ust + sag alt) ve ust ayrac
-# =====================================================================
-
-var _ui_cache := {}
-
-
-func _ui_textures(kind: String) -> Array:
-	if _ui_cache.has(kind):
-		return _ui_cache[kind]
-	var dir := ProjectSettings.globalize_path("res://").path_join(UI_DIR).simplify_path().path_join(kind)
-	var out := []
-	if DirAccess.dir_exists_absolute(dir):
-		var files := Array(DirAccess.get_files_at(dir)).filter(func(f): return f.ends_with(".png"))
-		files.sort()
-		for f in files:
-			var img := Image.load_from_file(dir.path_join(f))
-			if img:
-				out.append(ImageTexture.create_from_image(img))
-	_ui_cache[kind] = out
-	return out
-
-
-## Susleri yerlestir; sutunun baslayacagi y'yi dondurur
-func _build_decor(pad: float) -> float:
-	var corners := _ui_textures("corners")
-	if not corners.is_empty():
-		var tex: Texture2D = corners.pick_random()
-		var ch := view.y * 0.13
-		var cw := ch * tex.get_width() / tex.get_height()
-		# Kaynak kose sol altta dik acili: sol ust icin dikey, sag alt icin yatay cevrilir
-		for spec in [[Vector2(pad * 0.3, pad * 0.3), false, true], [Vector2(view.x - cw - pad * 0.3, view.y - ch - pad * 0.3), true, false]]:
-			var tr := TextureRect.new()
-			tr.texture = tex
-			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			tr.stretch_mode = TextureRect.STRETCH_SCALE
-			tr.size = Vector2(cw, ch)
-			tr.position = spec[0]
-			tr.flip_h = spec[1]
-			tr.flip_v = spec[2]
-			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			add_child(tr)
-	var top := pad
-	var dividers := _ui_textures("dividers")
-	if not dividers.is_empty():
-		var tex: Texture2D = dividers.pick_random()
-		var dw := minf(view.x * 0.5, tex.get_width() * 1.2)
-		var dh := dw * tex.get_height() / tex.get_width()
-		var tr := TextureRect.new()
-		tr.texture = tex
-		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tr.stretch_mode = TextureRect.STRETCH_SCALE
-		tr.size = Vector2(dw, dh)
-		tr.position = Vector2((view.x - dw) / 2.0, pad * 0.35)
-		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(tr)
-		top = maxf(top, pad * 0.35 + dh + pad * 0.5)
-	return top
-
-
-## Plaka dugmesi: kullanicinin verdigi suslu cerceve, ici washi kremi
-func _plaque_button(text: String, plaque: int, height: float) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size.y = height
-	for st in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
-		b.add_theme_stylebox_override(st, StyleBoxEmpty.new())
-	b.add_theme_font_override("font", _font(700))
-	b.add_theme_font_size_override("font_size", int(fs * 1.05))
-	b.add_theme_color_override("font_color", C_INK)
-	b.add_theme_color_override("font_hover_color", C_RED)
-	b.add_theme_color_override("font_pressed_color", C_RED)
-	b.add_theme_color_override("font_hover_pressed_color", C_RED)
-	var plaques := _ui_textures("plaques")
-	# Plakanin ici bos: menunun kagit zemini gorunur (icteki kutular kalkti)
-	if plaques.is_empty():
-		var fill := Panel.new()
-		var fsb := StyleBoxFlat.new()
-		fsb.bg_color = Color(C_CREAM, 0.96)
-		fsb.set_corner_radius_all(3)
-		fsb.border_color = C_GOLD
-		fsb.set_border_width_all(2)
-		fill.add_theme_stylebox_override("panel", fsb)
-		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		fill.show_behind_parent = true
-		fill.set_anchors_preset(Control.PRESET_FULL_RECT)
-		b.add_child(fill)
-	if not plaques.is_empty():
-		var tr := TextureRect.new()
-		tr.texture = plaques[plaque % plaques.size()]
-		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tr.stretch_mode = TextureRect.STRETCH_SCALE
-		tr.set_anchors_preset(Control.PRESET_FULL_RECT)
-		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		tr.show_behind_parent = true
-		b.add_child(tr)
-		b.mouse_entered.connect(func(): tr.modulate = Color(1.45, 0.55, 0.5))
-		b.mouse_exited.connect(func(): tr.modulate = Color.WHITE)
-	return b
-
-
-func _plaque_height() -> float:
-	return col_w / 4.7
+	var root := Control.new()
+	root.size = size_px
+	var paper := Paper.new()
+	paper.size = size_px
+	paper.lay = layout(size_px)
+	root.add_child(paper)
+	var grain := ColorRect.new()
+	grain.position = Vector2.ONE * (EDGE + 6.0)
+	grain.size = size_px - Vector2.ONE * (EDGE + 6.0) * 2.0
+	var mat := ShaderMaterial.new()
+	mat.shader = Shader.new()
+	mat.shader.code = GRAIN_SHADER
+	grain.material = mat
+	root.add_child(grain)
+	return root
 
 
 # =====================================================================
 # Stil
 # =====================================================================
 
-func _font(weight := 800) -> SystemFont:
+var _fonts := {}
+
+
+func _font(serif: bool, weight := 400, spacing := 0.0) -> Font:
+	var key := "%s/%d/%d" % [serif, weight, roundi(spacing)]
+	if _fonts.has(key):
+		return _fonts[key]
 	var f := SystemFont.new()
-	f.font_names = PackedStringArray(["Noto Serif", "Liberation Serif", "DejaVu Serif", "Georgia", "Times New Roman"])
+	f.font_names = PackedStringArray(["Noto Serif", "DejaVu Serif", "Liberation Serif"] if serif else ["Noto Sans", "DejaVu Sans", "Liberation Sans"])
 	f.font_weight = weight
-	return f
+	var out: Font = f
+	if roundi(spacing) != 0:
+		var v := FontVariation.new()
+		v.base_font = f
+		v.spacing_glyph = roundi(spacing)
+		out = v
+	_fonts[key] = out
+	return out
 
 
-## Koyu kahve kalin kenar + alttan "dudak"
-func _box(bg: Color, radius := 10, border := C_INK, bw := 3, lip := 0, lip_color := Color.TRANSPARENT) -> StyleBoxFlat:
-	radius = mini(radius, 4)
-	lip = mini(lip, 2)
+func px(v: float) -> int:
+	return roundi(v * u)
+
+
+## Taslaktaki px boyutuyla etiket; spacing de taslak px'i
+func _text(t: String, size: float, color := C_INK, serif := false, weight := 400, spacing := 0.0, wrap := false) -> Label:
+	var l := Label.new()
+	l.text = t
+	l.add_theme_font_override("font", _font(serif, weight, spacing * u))
+	l.add_theme_font_size_override("font_size", px(size))
+	l.add_theme_color_override("font_color", color)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if wrap:
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		l.custom_minimum_size.x = 60 * u
+	return l
+
+
+func _flat(bg := Color.TRANSPARENT, border := Color.TRANSPARENT, bw := 0, radius := 0) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
 	sb.set_border_width_all(bw)
 	sb.set_corner_radius_all(radius)
-	sb.content_margin_left = fs * 0.7
-	sb.content_margin_right = fs * 0.7
-	sb.content_margin_top = fs * 0.35
-	sb.content_margin_bottom = fs * 0.35
-	if lip > 0:
-		sb.shadow_color = lip_color if lip_color.a > 0.0 else bg.darkened(0.35)
-		sb.shadow_size = 0
-		sb.shadow_offset = Vector2(0, lip)
+	sb.anti_aliasing = radius > 0
 	return sb
 
 
-func _outlined(node: Control, size_mul := 1.0, weight := 800) -> void:
-	node.add_theme_font_override("font", _font(weight))
-	node.add_theme_font_size_override("font_size", int(fs * size_mul))
-	node.add_theme_constant_override("outline_size", 0)
-	node.add_theme_color_override("font_color", C_CREAM)
+## Sadece alt cizgi (girdi kutulari, liste satirlari)
+func _underline(color: Color, w := 1, pad_v := 6.0) -> StyleBoxFlat:
+	var sb := _flat()
+	sb.border_color = color
+	sb.border_width_bottom = w
+	sb.content_margin_left = 0
+	sb.content_margin_right = 0
+	sb.content_margin_top = pad_v * u
+	sb.content_margin_bottom = pad_v * u
+	return sb
+
+
+## Kenari yumusak dolu daire dokusu (kaydirici tutamaci, secili skin noktasi)
+func _dot_tex(d: int, color: Color) -> ImageTexture:
+	var img := Image.create(d, d, false, Image.FORMAT_RGBA8)
+	var r := d / 2.0
+	for y in d:
+		for x in d:
+			var dist := Vector2(x + 0.5 - r, y + 0.5 - r).length()
+			img.set_pixel(x, y, Color(color, clampf(r - dist, 0.0, 1.0) * color.a))
+	return ImageTexture.create_from_image(img)
+
+
+## Asagi bakan ince ok (secim kutusu)
+func _chevron_tex(w: int, color: Color) -> ImageTexture:
+	var h := int(w * 0.6)
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var a := Vector2(1.0, 1.0)
+	var m := Vector2(w / 2.0, h - 1.5)
+	var b := Vector2(w - 1.0, 1.0)
+	for y in h:
+		for x in w:
+			var p := Vector2(x + 0.5, y + 0.5)
+			var d := minf(_seg_dist(p, a, m), _seg_dist(p, m, b))
+			img.set_pixel(x, y, Color(color, clampf(1.4 - d, 0.0, 1.0)))
+	return ImageTexture.create_from_image(img)
+
+
+func _seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var t := clampf((p - a).dot(b - a) / (b - a).length_squared(), 0.0, 1.0)
+	return p.distance_to(a + (b - a) * t)
 
 
 func _make_theme() -> Theme:
 	var t := Theme.new()
-	t.default_font = _font(600)
-	t.default_font_size = fs
-	t.set_color("font_color", "Label", C_TEXT)
-	for cls in ["Button", "OptionButton", "CheckButton"]:
-		t.set_color("font_color", cls, C_TEXT)
-		t.set_color("font_hover_color", cls, C_TEXT)
-		t.set_color("font_pressed_color", cls, C_TEXT)
-		t.set_color("font_focus_color", cls, C_TEXT)
-		t.set_color("font_hover_pressed_color", cls, C_TEXT)
-		t.set_stylebox("normal", cls, _box(C_CREAM, 3, C_GOLD, 1, 0))
-		t.set_stylebox("hover", cls, _box(Color("fffaf0"), 3, C_RED, 1, 0))
-		t.set_stylebox("pressed", cls, _box(C_CREAM_2, 3, C_GOLD, 1, 0))
-		t.set_stylebox("hover_pressed", cls, _box(C_CREAM_2, 3, C_RED, 1, 0))
-		t.set_stylebox("focus", cls, StyleBoxEmpty.new())
-	for cls in ["LineEdit", "TextEdit"]:
-		t.set_stylebox("normal", cls, _box(Color("fffaf0"), 2, C_CREAM_3, 1))
-		t.set_stylebox("focus", cls, _box(Color("fffaf0"), 2, C_RED, 1))
-		t.set_color("font_color", cls, C_TEXT)
-	t.set_color("font_placeholder_color", "LineEdit", C_MUTED)
+	t.default_font = _font(false)
+	t.default_font_size = px(15.5)
+	t.set_color("font_color", "Label", C_INK)
+
+	for cls in ["LineEdit"]:
+		t.set_stylebox("normal", cls, _underline(C_INK))
+		t.set_stylebox("focus", cls, _underline(C_RED, 2))
+		t.set_stylebox("read_only", cls, _underline(C_LINE))
+		t.set_color("font_color", cls, C_INK)
+		t.set_color("font_placeholder_color", cls, C_MUTED)
+		t.set_color("caret_color", cls, C_RED)
+		t.set_color("selection_color", cls, Color(C_RED, 0.22))
+	var te := _flat(Color(C_CARD, 0.6), C_LINE, 1, 2)
+	te.set_content_margin_all(8 * u)
+	t.set_stylebox("normal", "TextEdit", te)
+	var tef := te.duplicate()
+	tef.border_color = C_RED
+	t.set_stylebox("focus", "TextEdit", tef)
+	t.set_color("font_color", "TextEdit", C_INK)
 	t.set_color("font_placeholder_color", "TextEdit", C_MUTED)
-	var track := _box(C_CREAM_3, 2, C_GOLD, 0)
-	track.content_margin_top = 2
-	track.content_margin_bottom = 2
+	t.set_color("caret_color", "TextEdit", C_RED)
+	t.set_color("selection_color", "TextEdit", Color(C_RED, 0.22))
+
+	# Secim kutusu: alt cizgi + ince ok
+	t.set_stylebox("normal", "OptionButton", _underline(C_INK))
+	t.set_stylebox("hover", "OptionButton", _underline(C_RED))
+	t.set_stylebox("pressed", "OptionButton", _underline(C_RED))
+	t.set_stylebox("hover_pressed", "OptionButton", _underline(C_RED))
+	t.set_stylebox("focus", "OptionButton", StyleBoxEmpty.new())
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		t.set_color(c, "OptionButton", C_INK)
+	t.set_icon("arrow", "OptionButton", _chevron_tex(px(11), C_MUTED))
+	t.set_constant("arrow_margin", "OptionButton", 0)
+	var pop := _flat(C_PAPER, C_LINE, 1, 3)
+	pop.set_content_margin_all(6 * u)
+	t.set_stylebox("panel", "PopupMenu", pop)
+	t.set_stylebox("hover", "PopupMenu", _flat(Color(C_RED, 0.1), Color.TRANSPARENT, 0, 2))
+	t.set_color("font_color", "PopupMenu", C_INK)
+	t.set_color("font_hover_color", "PopupMenu", C_RED)
+	t.set_font("font", "PopupMenu", _font(false))
+	t.set_font_size("font_size", "PopupMenu", px(15))
+
+	# Kaydirici: ince murekkep cizgi + kirmizi yuvarlak tutamac
+	var track := _flat(C_INK)
+	track.content_margin_top = 0.5
+	track.content_margin_bottom = 0.5
 	t.set_stylebox("slider", "HSlider", track)
-	t.set_stylebox("grabber_area", "HSlider", _box(C_RED, 2, C_RED, 0))
-	t.set_stylebox("grabber_area_highlight", "HSlider", _box(C_RED.lightened(0.1), 2, C_RED, 0))
-	t.set_stylebox("panel", "PopupMenu", _box(C_CREAM, 6, C_INK, 2))
-	t.set_color("font_color", "PopupMenu", C_TEXT)
+	t.set_stylebox("grabber_area", "HSlider", track)
+	t.set_stylebox("grabber_area_highlight", "HSlider", track)
+	t.set_icon("grabber", "HSlider", _dot_tex(px(13), C_RED))
+	t.set_icon("grabber_highlight", "HSlider", _dot_tex(px(15), C_RED))
+	t.set_icon("grabber_disabled", "HSlider", _dot_tex(px(13), C_LINE))
+
+	var sb_empty := StyleBoxEmpty.new()
+	sb_empty.content_margin_left = 3 * u
+	sb_empty.content_margin_right = 3 * u
+	t.set_stylebox("scroll", "VScrollBar", sb_empty)
+	t.set_stylebox("scroll_focus", "VScrollBar", sb_empty)
+	for spec in [["grabber", C_LINE], ["grabber_highlight", C_MUTED], ["grabber_pressed", C_MUTED]]:
+		var g := _flat(spec[1], Color.TRANSPARENT, 0, 2)
+		g.content_margin_left = 1.5 * u
+		g.content_margin_right = 1.5 * u
+		t.set_stylebox(spec[0], "VScrollBar", g)
+
+	t.set_stylebox("panel", "TooltipPanel", pop)
+	t.set_color("font_color", "TooltipLabel", C_INK)
 	return t
 
 
-func _label(text: String, size_mul := 1.0, color := C_TEXT, wrap := false, weight := 600) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", int(fs * size_mul))
+func _link(t: String, size: float, color := C_INK, serif := true) -> LinkButton:
+	var l := LinkButton.new()
+	l.text = t
+	l.underline = LinkButton.UNDERLINE_MODE_ON_HOVER
+	l.add_theme_font_override("font", _font(serif))
+	l.add_theme_font_size_override("font_size", px(size))
 	l.add_theme_color_override("font_color", color)
-	if weight != 600:
-		l.add_theme_font_override("font", _font(weight))
-	if wrap:
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		l.custom_minimum_size.x = fs * 8
+	l.add_theme_color_override("font_hover_color", C_RED)
+	l.add_theme_color_override("font_pressed_color", C_RED)
+	l.add_theme_color_override("font_hover_pressed_color", C_RED)
+	l.add_theme_color_override("font_focus_color", color)
+	l.focus_mode = Control.FOCUS_NONE
+	l.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	return l
 
 
-func _row(title: String, control: Control, hint := "") -> VBoxContainer:
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.3))
-	v.add_child(_label(title, 0.95, C_TEXT, false, 800))
-	v.add_child(control)
-	if hint != "":
-		v.add_child(_label(hint, 0.78, C_MUTED, true))
-	v.add_child(_divider_line())
-	return v
+func _red_button(t: String) -> Button:
+	var b := Button.new()
+	b.text = t
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.add_theme_font_override("font", _font(true, 500, 2.0 * u))
+	b.add_theme_font_size_override("font_size", px(16))
+	for spec in [["normal", C_RED], ["hover", C_RED.lightened(0.08)], ["pressed", C_RED.darkened(0.15)], ["hover_pressed", C_RED.darkened(0.15)]]:
+		var sb := _flat(spec[1], Color.TRANSPARENT, 0, 2)
+		sb.content_margin_left = 30 * u
+		sb.content_margin_right = 30 * u
+		sb.content_margin_top = 9 * u
+		sb.content_margin_bottom = 9 * u
+		b.add_theme_stylebox_override(spec[0], sb)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(c, C_CREAM)
+	return b
 
 
-## Ince altin cizgi, ortasinda kucuk kirmizi baklava
-class DividerLine:
-	extends Control
+func _rule(top := 22.0, bottom := 6.0) -> Control:
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_top", px(top))
+	m.add_theme_constant_override("margin_bottom", px(bottom))
+	var line := ColorRect.new()
+	line.color = Color(C_INK, 0.75)
+	line.custom_minimum_size.y = 1
+	m.add_child(line)
+	return m
+
+
+## Ac/kapa anahtari: solda yazi, sagda kirmizi hap
+class Switch:
+	extends Button
+	var on_color := Color("b8261f")
+	var off_color := Color("d9cdb6")
+	var knob_color := Color("f6eee0")
+	var pill := Vector2(38, 20)
+	var bottom := 12.0
+	var _k := 0.0
+
+	func _ready() -> void:
+		_k = 1.0 if button_pressed else 0.0
+		toggled.connect(func(on: bool): create_tween().tween_method(_set_k, _k, 1.0 if on else 0.0, 0.15))
+
+	func _set_k(v: float) -> void:
+		_k = v
+		queue_redraw()
+
 	func _draw() -> void:
-		var y := size.y / 2.0
-		var c := Vector2(size.x / 2.0, y)
-		draw_line(Vector2(0, y), Vector2(size.x, y), Color("c8ad7a"), 1.0)
-		var d := 4.0
-		draw_colored_polygon(PackedVector2Array([c + Vector2(0, -d), c + Vector2(d, 0), c + Vector2(0, d), c + Vector2(-d, 0)]), Color("c4161c"))
+		var p := Vector2(size.x - pill.x, (size.y - bottom - pill.y) / 2.0)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = off_color.lerp(on_color, _k)
+		sb.set_corner_radius_all(int(pill.y / 2))
+		sb.anti_aliasing = true
+		draw_style_box(sb, Rect2(p, pill))
+		var kr := pill.y / 2.0 - 3.0
+		draw_circle(p + Vector2(lerpf(pill.y / 2.0, pill.x - pill.y / 2.0, _k), pill.y / 2.0), kr, knob_color, true, -1.0, true)
 
 
-func _divider_line() -> Control:
-	var d := DividerLine.new()
-	d.custom_minimum_size.y = 10
-	d.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	return d
+func _switch(t: String, on: bool) -> Button:
+	var s := Switch.new()
+	s.text = t
+	s.toggle_mode = true
+	s.button_pressed = on
+	s.pill = Vector2(38, 20) * u
+	s.bottom = 12 * u
+	s.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	s.focus_mode = Control.FOCUS_NONE
+	s.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	s.add_theme_font_size_override("font_size", px(15.5))
+	var line := _underline(C_LINE, 1, 0)
+	line.content_margin_bottom = 12 * u
+	line.content_margin_right = 50 * u
+	for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+		s.add_theme_stylebox_override(st, line)
+	s.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		s.add_theme_color_override(c, C_INK)
+	return s
 
 
-## Birlesik secim dugmeleri
+## Alt cizgili sekme secimi (ornek: "Bulut (API)  Yerel (Ollama)")
 func _segment(labels: Array, selected: int, on_pick: Callable) -> Array:
 	var group := ButtonGroup.new()
 	var out := []
@@ -426,22 +517,22 @@ func _segment(labels: Array, selected: int, on_pick: Callable) -> Array:
 		b.toggle_mode = true
 		b.button_group = group
 		b.button_pressed = i == selected
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var first := i == 0
-		var last := i == labels.size() - 1
-		for st in ["normal", "hover", "pressed", "hover_pressed"]:
-			var on: bool = st.contains("pressed")
-			var sb := _box(C_RED if on else (Color("fffaf0") if st == "hover" else C_CREAM), 0, C_GOLD, 1)
-			sb.corner_radius_top_left = 8 if first else 0
-			sb.corner_radius_bottom_left = 8 if first else 0
-			sb.corner_radius_top_right = 8 if last else 0
-			sb.corner_radius_bottom_right = 8 if last else 0
-			if not first:
-				sb.border_width_left = 0
-			b.add_theme_stylebox_override(st, sb)
-		b.add_theme_font_override("font", _font(700))
-		b.add_theme_color_override("font_pressed_color", C_CREAM)
-		b.add_theme_color_override("font_hover_pressed_color", C_CREAM)
+		b.focus_mode = Control.FOCUS_NONE
+		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		b.add_theme_font_override("font", _font(true))
+		b.add_theme_font_size_override("font_size", px(16))
+		var off := _underline(Color.TRANSPARENT, 2, 4)
+		var on := _underline(C_RED, 2, 4)
+		b.add_theme_stylebox_override("normal", off)
+		b.add_theme_stylebox_override("hover", off)
+		b.add_theme_stylebox_override("pressed", on)
+		b.add_theme_stylebox_override("hover_pressed", on)
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_color", C_MUTED)
+		b.add_theme_color_override("font_hover_color", C_INK)
+		b.add_theme_color_override("font_focus_color", C_MUTED)
+		b.add_theme_color_override("font_pressed_color", C_INK)
+		b.add_theme_color_override("font_hover_pressed_color", C_INK)
 		b.pressed.connect(on_pick.bind(i))
 		out.append(b)
 	return out
@@ -449,7 +540,7 @@ func _segment(labels: Array, selected: int, on_pick: Callable) -> Array:
 
 func _segment_box(buttons: Array) -> HBoxContainer:
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 0)
+	h.add_theme_constant_override("separation", px(26))
 	for b in buttons:
 		h.add_child(b)
 	return h
@@ -461,219 +552,200 @@ func _slider(min_v: float, max_v: float, step: float, value: float) -> HSlider:
 	s.max_value = max_v
 	s.step = step
 	s.value = value
-	s.custom_minimum_size.y = fs * 1.3
+	s.custom_minimum_size.y = 18 * u
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	s.focus_mode = Control.FOCUS_NONE
+	s.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	return s
 
 
-func _game_button(text: String, color: Color, height_mul := 2.2) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size.y = fs * height_mul
-	_outlined(b, 1.05, 900)
-	b.add_theme_stylebox_override("normal", _box(color, 10, C_INK, 3, 5, color.darkened(0.45)))
-	b.add_theme_stylebox_override("hover", _box(color.lightened(0.1), 10, C_INK, 3, 5, color.darkened(0.45)))
-	b.add_theme_stylebox_override("pressed", _box(color.darkened(0.1), 10, C_INK, 3, 1, color.darkened(0.45)))
-	b.add_theme_stylebox_override("hover_pressed", _box(color.darkened(0.1), 10, C_INK, 3, 1, color.darkened(0.45)))
-	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
-		b.add_theme_color_override(c, Color.WHITE)
-	return b
+func _slider_row(s: HSlider, value_label: Label) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", px(14))
+	value_label.custom_minimum_size.x = 48 * u
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	h.add_child(s)
+	h.add_child(value_label)
+	return h
+
+
+## Ayar alani: kucuk aralikli baslik, kontrol, istege bagli aciklama
+func _field(title: String, control: Control, hint := "") -> VBoxContainer:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", px(7))
+	v.add_child(_text(title.to_upper(), 11.5, C_MUTED, false, 500, 2.8))
+	v.add_child(control)
+	if hint != "":
+		v.add_child(_text(hint, 12, C_MUTED, false, 400, 0.0, true))
+	return v
 
 
 # =====================================================================
-# Sag sutun: ana menu (isim, kategoriler, karakterler, Kaydet/Kapat) ve
-# kategori gorunumu. Kategoriye basinca dugme yavasca yukari kayip baslik
-# olur, sutun o kategorinin ayarlarina doner; "Geri" ana menuye dondurur.
+# Sag sutun: ana gorunum
 # =====================================================================
 
-func _build_column(size_px: Vector2) -> Control:
-	var col := Control.new()
-	col.custom_minimum_size = size_px
-	col.size = size_px
-	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+func _build_main(w: float) -> VBoxContainer:
+	var v := VBoxContainer.new()
+	v.size = Vector2(w, 0)
+	v.add_theme_constant_override("separation", 0)
 
-	main_view = VBoxContainer.new()
-	main_view.size = Vector2(size_px.x, 0)
-	main_view.add_theme_constant_override("separation", int(fs * 0.25))
-	col.add_child(main_view)
-
-	# Isim: plaka + kirmizi muhur (hanko)
-	var plate := _plaque_button(str(brain_cfg.get("name", "Kevin")), 5, _plaque_height() * 1.15)
-	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	plate.add_theme_font_size_override("font_size", int(fs * 1.45))
-	plate.add_theme_font_override("font", _font(800))
-	var seal := Label.new()
-	seal.text = "AI"
+	var title := HBoxContainer.new()
+	title.add_theme_constant_override("separation", px(14))
+	title.add_child(_text(str(brain_cfg.get("name", "Kevin")), 46, C_INK, true, 600))
+	var seal_box := CenterContainer.new()
+	var seal := _text("AI", 13, C_CREAM, true, 700)
 	seal.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	seal.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	seal.add_theme_font_override("font", _font(800))
-	seal.add_theme_font_size_override("font_size", int(fs * 0.75))
-	seal.add_theme_color_override("font_color", C_CREAM)
-	var ssb := StyleBoxFlat.new()
-	ssb.bg_color = C_RED
-	ssb.set_corner_radius_all(3)
-	seal.add_theme_stylebox_override("normal", ssb)
-	seal.size = Vector2(fs * 1.9, fs * 1.9)
-	seal.position = Vector2(col_w - fs * 3.6, _plaque_height() * 1.15 / 2.0 - fs * 0.95)
-	seal.rotation = 0.08
-	plate.add_child(seal)
-	main_view.add_child(plate)
+	seal.custom_minimum_size = Vector2(30, 30) * u
+	seal.add_theme_stylebox_override("normal", _flat(C_RED, Color.TRANSPARENT, 0, 2))
+	seal.pivot_offset = Vector2(15, 15) * u
+	seal.rotation = deg_to_rad(-4)
+	seal_box.add_child(seal)
+	title.add_child(seal_box)
+	v.add_child(title)
+	v.add_child(_text("masaüstü arkadaşın", 14, C_MUTED, false, 400, 0.6))
+	v.add_child(_rule())
 
-	var cats := [["sohbet", "Sohbet"], ["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
-	for c in cats:
-		var b := _plaque_button(c[1], CAT_PLAQUE[c[0]], _plaque_height())
-		b.pressed.connect(_open_category.bind(c[0]))
-		cat_buttons[c[0]] = b
-		main_view.add_child(b)
+	for i in CATS.size():
+		var b := _item("%02d" % (i + 1), CATS[i][1])
+		b.pressed.connect(_open_category.bind(CATS[i][0]))
+		cat_buttons[CATS[i][0]] = b
+		v.add_child(b)
 
-	# Karakterler: sadece kartlar kadar yer kaplar (alti bos kalmasin)
-	var skins_box := PanelContainer.new()
-	skins_box.add_theme_stylebox_override("panel", _box(Color(1, 1, 1, 0.35), 3, C_GOLD, 1, 0))
-	var sv := VBoxContainer.new()
-	sv.add_theme_constant_override("separation", int(fs * 0.4))
-	sv.add_child(_label("Karakterler", 0.95, C_TEXT, false, 800))
-	sv.add_child(_divider_line())
+	var cap_m := MarginContainer.new()
+	cap_m.add_theme_constant_override("margin_top", px(30))
+	cap_m.add_theme_constant_override("margin_bottom", px(12))
+	cap_m.add_child(_text("KARAKTERLER", 12, C_MUTED, false, 500, 3.4))
+	v.add_child(cap_m)
+
 	skin_grid = GridContainer.new()
-	skin_grid.columns = 4
-	skin_grid.add_theme_constant_override("h_separation", int(fs * 0.4))
-	skin_grid.add_theme_constant_override("v_separation", int(fs * 0.4))
-	sv.add_child(skin_grid)
-	skin_cell = (size_px.x - fs * 3.2) / 4.0
+	var cell := 56.0 * u
+	var gap := 12.0 * u
+	skin_grid.columns = maxi(1, int((w + gap) / (cell + gap)))
+	skin_grid.add_theme_constant_override("h_separation", int(gap))
+	skin_grid.add_theme_constant_override("v_separation", int(gap * 1.4))
 	for path in Settings.list_skins():
 		_add_skin_card(path)
 	var add := Button.new()
 	add.text = "+"
-	add.custom_minimum_size = Vector2(skin_cell, skin_cell)
-	add.add_theme_font_size_override("font_size", int(fs * 1.8))
-	add.add_theme_font_override("font", _font(900))
+	add.custom_minimum_size = Vector2(cell, cell)
+	add.focus_mode = Control.FOCUS_NONE
+	add.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	add.tooltip_text = "Skin ekle (png)"
+	add.add_theme_font_override("font", _font(true))
+	add.add_theme_font_size_override("font_size", px(22))
+	add.add_theme_color_override("font_color", C_MUTED)
+	add.add_theme_color_override("font_hover_color", C_RED)
+	add.add_theme_color_override("font_pressed_color", C_RED)
+	add.add_theme_stylebox_override("normal", _flat(C_CARD, C_LINE, 1))
+	add.add_theme_stylebox_override("hover", _flat(C_CARD, C_RED, 1))
+	add.add_theme_stylebox_override("pressed", _flat(C_CARD, C_RED, 1))
+	add.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	add.pressed.connect(_pick_skin_file)
 	skin_grid.add_child(add)
-	skins_box.add_child(sv)
-	main_view.add_child(skins_box)
+	v.add_child(skin_grid)
 	_mark_selected_card()
-
-	main_view.add_child(_footer(false))
-
-	detail_view = _build_detail(size_px)
-	detail_view.visible = false
-	col.add_child(detail_view)
-	return col
-
-
-func _footer(with_back: bool) -> HBoxContainer:
-	var foot := HBoxContainer.new()
-	foot.add_theme_constant_override("separation", int(fs * 0.5))
-	if with_back:
-		var back := _game_button("Geri", C_BROWN, 2.3)
-		back.pressed.connect(_back_to_main)
-		foot.add_child(back)
-	var save := _game_button("Kaydet", C_GREEN, 2.3)
-	save.pressed.connect(_on_save)
-	foot.add_child(save)
-	if not with_back:
-		var close := _game_button("Kapat", C_BROWN, 2.3)
-		close.pressed.connect(func(): close_requested.emit())
-		foot.add_child(close)
-	return foot
-
-
-func _build_detail(size_px: Vector2) -> VBoxContainer:
-	var v := VBoxContainer.new()
-	v.size = size_px
-	v.add_theme_constant_override("separation", int(fs * 0.55))
-	detail_head_holder = Control.new()
-	detail_head_holder.custom_minimum_size.y = _plaque_height()
-	v.add_child(detail_head_holder)
-	var box := PanelContainer.new()
-	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var outer := _box(Color(1, 1, 1, 0.4), 3, C_GOLD, 1, 0)
-	outer.content_margin_left = 4
-	outer.content_margin_right = 4
-	outer.content_margin_top = 4
-	outer.content_margin_bottom = 4
-	box.add_theme_stylebox_override("panel", outer)
-	var inner := PanelContainer.new()
-	inner.add_theme_stylebox_override("panel", _box(Color(0, 0, 0, 0), 2, C_CREAM_3, 1, 0))
-	box.add_child(inner)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	inner.add_child(scroll)
-	detail_scroll = scroll
-	var holder := VBoxContainer.new()
-	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(holder)
-	pages["sohbet"] = _page_chat()
-	pages["karakter"] = _page_character()
-	pages["yapay_zeka"] = _page_ai()
-	pages["davranis"] = _page_behaviour()
-	pages["hakkinda"] = _page_about()
-	for pg in pages.values():
-		pg.visible = false
-		holder.add_child(pg)
-	v.add_child(box)
-	v.add_child(_footer(true))
 	return v
 
 
-func _open_category(id: String) -> void:
-	if current_cat != "":
-		return
-	current_cat = id
-	if id == "sohbet":
-		_fill_chat()
-	var src: Button = cat_buttons[id]
-	for k in pages:
-		pages[k].visible = k == id
-	# Baslik: tiklanan kategorinin plakasi
-	for c in detail_head_holder.get_children():
-		c.queue_free()
-	detail_head = _plaque_button(src.text, CAT_PLAQUE[id], _plaque_height())
-	detail_head.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	detail_head.add_theme_color_override("font_color", C_RED)
-	detail_head.set_anchors_preset(Control.PRESET_FULL_RECT)
-	detail_head_holder.add_child(detail_head)
+## Liste satiri: kirmizi numara, serif ad, sagda ok; uzerine gelince kirmizi
+## ve solunda ince cubuk
+func _item(num: String, label: String) -> Button:
+	var b := Button.new()
+	b.custom_minimum_size.y = 50 * u
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var line := _underline(C_LINE, 1, 0)
+	for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+		b.add_theme_stylebox_override(st, line)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var h := HBoxContainer.new()
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_theme_constant_override("separation", 0)
+	b.add_child(h)
+	h.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var n := _text(num, 13, C_RED, false, 400, 0.8)
+	n.custom_minimum_size.x = 42 * u
+	var t := _text(label, 19, C_INK, true)
+	var arr := _text("›", 16, C_MUTED, true)
+	arr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	arr.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	for l in [n, t, arr]:
+		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		h.add_child(l)
+	var bar := ColorRect.new()
+	bar.color = C_RED
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.size = Vector2(3, 22) * u
+	bar.position = Vector2(-14 * u, (50 - 22) / 2.0 * u)
+	bar.modulate.a = 0.0
+	b.add_child(bar)
+	b.mouse_entered.connect(func():
+		t.add_theme_color_override("font_color", C_RED)
+		arr.add_theme_color_override("font_color", C_RED)
+		create_tween().tween_property(bar, "modulate:a", 1.0, 0.12))
+	b.mouse_exited.connect(func():
+		t.add_theme_color_override("font_color", C_INK)
+		arr.add_theme_color_override("font_color", C_MUTED)
+		create_tween().tween_property(bar, "modulate:a", 0.0, 0.18))
+	b.set_meta("label", t)
+	return b
 
-	# Basilan dugmenin bir kopyasi yerinden en uste kayar, sonra kategori
-	# gorunumu acilir
-	var ghost := _plaque_button(src.text, CAT_PLAQUE[id], _plaque_height())
-	ghost.add_theme_color_override("font_color", C_RED)
-	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ghost.size = src.size
-	ghost.position = src.global_position - column.global_position
-	column.add_child(ghost)
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(main_view, "modulate:a", 0.0, 0.2)
-	tw.tween_property(ghost, "position:y", 0.0, 0.38).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tw.chain().tween_callback(func():
-		main_view.visible = false
-		detail_view.visible = true
-		detail_view.modulate.a = 0.0
-		ghost.queue_free())
-	tw.chain().tween_property(detail_view, "modulate:a", 1.0, 0.2)
+
+func _build_footer() -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.alignment = BoxContainer.ALIGNMENT_END
+	h.add_theme_constant_override("separation", px(26))
+	foot_link = _link("Kapat", 16)
+	foot_link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
+	foot_link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	foot_link.pressed.connect(func():
+		if current_cat == "":
+			close_requested.emit()
+		else:
+			_back_to_main())
+	h.add_child(foot_link)
+	var save := _red_button("Kaydet")
+	save.pressed.connect(_on_save)
+	h.add_child(save)
+	return h
 
 
-func _back_to_main() -> void:
-	if current_cat == "":
-		return
-	current_cat = ""
-	var tw := create_tween()
-	tw.tween_property(detail_view, "modulate:a", 0.0, 0.15)
-	tw.tween_callback(func():
-		detail_view.visible = false
-		main_view.visible = true
-		main_view.modulate.a = 0.0)
-	tw.tween_property(main_view, "modulate:a", 1.0, 0.2)
+func _build_stage_links() -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", px(8))
+	rotate_link = _link("Döndür", 13, C_MUTED, false)
+	rotate_link.toggle_mode = true
+	rotate_link.toggled.connect(func(on):
+		rotate_link.add_theme_color_override("font_color", C_INK if on else C_MUTED)
+		rotate_link.add_theme_font_override("font", _font(false, 600 if on else 400))
+		action.emit("auto_rotate_on" if on else "auto_rotate_off"))
+	h.add_child(rotate_link)
+	h.add_child(_text("·", 13, C_MUTED))
+	var em := _link("Emote", 13, C_MUTED, false)
+	em.pressed.connect(func(): action.emit("emote"))
+	h.add_child(em)
+	h.add_child(_text("·", 13, C_MUTED))
+	var rs := _link("Sıfırla", 13, C_MUTED, false)
+	rs.pressed.connect(func():
+		rotate_link.button_pressed = false
+		action.emit("reset"))
+	h.add_child(rs)
+	h.add_child(_text("  —  karakteri sürükleyerek çevir", 13, C_MUTED, false, 400, 0.6))
+	return h
 
 
 func _add_skin_card(path: String) -> void:
+	var cell := 56.0 * u
 	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(skin_cell, skin_cell)
+	btn.custom_minimum_size = Vector2(cell, cell)
 	btn.tooltip_text = path.get_file().get_basename()
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	var tex := Settings.load_skin(path)
+	var face := cell * 0.6
 	for region in [Rect2(8, 8, 8, 8), Rect2(40, 8, 8, 8)]:
 		var at := AtlasTexture.new()
 		at.atlas = tex
@@ -683,9 +755,15 @@ func _add_skin_card(path: String) -> void:
 		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		tr.position = Vector2(skin_cell * 0.17, skin_cell * 0.17)
-		tr.size = Vector2(skin_cell * 0.66, skin_cell * 0.66)
+		tr.position = Vector2.ONE * (cell - face) / 2.0
+		tr.size = Vector2(face, face)
 		btn.add_child(tr)
+	var dot := TextureRect.new()
+	dot.texture = _dot_tex(px(5), C_RED)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dot.position = Vector2((cell - px(5)) / 2.0, cell + 5 * u)
+	btn.add_child(dot)
+	btn.set_meta("dot", dot)
 	btn.pressed.connect(func():
 		body_cfg.skin = path
 		_mark_selected_card()
@@ -701,9 +779,11 @@ func _add_skin_card(path: String) -> void:
 func _mark_selected_card() -> void:
 	for p in skin_cards:
 		var sel: bool = p == str(body_cfg.skin)
-		var sb := _box(C_SELECT if sel else C_CREAM_2, 8, C_INK, 3 if sel else 2, 3)
-		for st in ["normal", "hover", "pressed"]:
-			skin_cards[p].add_theme_stylebox_override(st, sb)
+		var card: Button = skin_cards[p]
+		card.add_theme_stylebox_override("normal", _flat(C_CARD, C_RED if sel else C_LINE, 2 if sel else 1))
+		card.add_theme_stylebox_override("hover", _flat(C_CARD, C_RED, 2 if sel else 1))
+		card.add_theme_stylebox_override("pressed", _flat(C_CARD, C_RED, 2))
+		(card.get_meta("dot") as Control).visible = sel
 
 
 func _pick_skin_file() -> void:
@@ -743,21 +823,120 @@ func _window_lowered(lowered: bool) -> void:
 	OS.execute("hyprctl", ["dispatch", "alterzorder", ("bottom," if lowered else "top,") + pid])
 
 
+# =====================================================================
+# Sag sutun: kategori gorunumu
+# =====================================================================
+
+func _build_detail(size_px: Vector2) -> VBoxContainer:
+	var v := VBoxContainer.new()
+	v.size = size_px
+	v.add_theme_constant_override("separation", 0)
+	var back := _link("‹ geri", 15, C_MUTED)
+	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	back.pressed.connect(_back_to_main)
+	v.add_child(back)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", px(12))
+	detail_num = _text("", 16, C_RED, true)
+	detail_title = _text("", 34, C_INK, true, 600)
+	detail_num.size_flags_vertical = Control.SIZE_SHRINK_END
+	detail_num.add_theme_constant_override("line_spacing", 0)
+	head.add_child(detail_num)
+	head.add_child(detail_title)
+	var head_m := MarginContainer.new()
+	head_m.add_theme_constant_override("margin_top", px(8))
+	head_m.add_child(head)
+	v.add_child(head_m)
+	v.add_child(_rule(18, 18))
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_scroll = scroll
+	var holder := MarginContainer.new()
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_theme_constant_override("margin_right", px(10))
+	holder.add_theme_constant_override("margin_bottom", px(6))
+	scroll.add_child(holder)
+	pages["sohbet"] = _page_chat()
+	pages["karakter"] = _page_character()
+	pages["yapay_zeka"] = _page_ai()
+	pages["davranis"] = _page_behaviour()
+	pages["hakkinda"] = _page_about()
+	for pg in pages.values():
+		pg.visible = false
+		holder.add_child(pg)
+	v.add_child(scroll)
+	return v
+
+
+func _open_category(id: String) -> void:
+	if current_cat != "":
+		return
+	current_cat = id
+	if id == "sohbet":
+		_fill_chat()
+	for k in pages:
+		pages[k].visible = k == id
+	var idx := 0
+	for i in CATS.size():
+		if CATS[i][0] == id:
+			idx = i
+	detail_num.text = "%02d" % (idx + 1)
+	detail_title.text = CATS[idx][1]
+	detail_scroll.scroll_vertical = 0
+	foot_link.text = "Geri"
+
+	# Tiklanan satirin adi yerinden baslik yerine kayip buyur, sonra sayfa
+	# acilir. Baslik yerini olcmek icin sayfa gorunmez halde bir kare yerlesir.
+	var src: Button = cat_buttons[id]
+	var src_label: Label = src.get_meta("label")
+	var ghost := _text(CATS[idx][1], 19, C_RED, true)
+	ghost.position = src_label.global_position - column.global_position
+	column.add_child(ghost)
+	detail_view.visible = true
+	detail_view.modulate.a = 0.0
+	await get_tree().process_frame
+	var target := detail_title.global_position - column.global_position
+	var grow := 34.0 / 19.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(main_view, "modulate:a", 0.0, 0.2)
+	tw.tween_property(ghost, "position", target, 0.42).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(ghost, "scale", Vector2.ONE * grow, 0.42).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(func(c: Color): ghost.add_theme_color_override("font_color", c), C_RED, C_INK, 0.42)
+	tw.chain().tween_callback(func():
+		main_view.visible = false
+		ghost.queue_free())
+	tw.chain().tween_property(detail_view, "modulate:a", 1.0, 0.22)
+
+
+func _back_to_main() -> void:
+	if current_cat == "":
+		return
+	current_cat = ""
+	foot_link.text = "Kapat"
+	var tw := create_tween()
+	tw.tween_property(detail_view, "modulate:a", 0.0, 0.15)
+	tw.tween_callback(func():
+		detail_view.visible = false
+		main_view.visible = true
+		main_view.modulate.a = 0.0)
+	tw.tween_property(main_view, "modulate:a", 1.0, 0.22)
+
+
 func _page() -> VBoxContainer:
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.65))
+	v.add_theme_constant_override("separation", px(22))
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return v
 
 
 var chat_list: VBoxContainer
-var chat_scroll: ScrollContainer
 
 
 func _page_chat() -> VBoxContainer:
 	var v := _page()
 	chat_list = VBoxContainer.new()
-	chat_list.add_theme_constant_override("separation", int(fs * 0.45))
+	chat_list.add_theme_constant_override("separation", px(14))
 	chat_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(chat_list)
 	return v
@@ -769,19 +948,19 @@ func _fill_chat() -> void:
 		c.queue_free()
 	var items := Settings.load_history()
 	if items.is_empty():
-		chat_list.add_child(_label("Henüz konuşma yok. \"Kevin\" diye seslen ya da Kevin'e orta tıkla.", 0.85, C_MUTED, true))
+		chat_list.add_child(_text("Henüz konuşma yok. \"Kevin\" diye seslen ya da Kevin'e orta tıkla.", 14, C_MUTED, false, 400, 0.0, true))
 		return
 	for m in items:
 		var mine: bool = m.get("role", "") == "user"
-		var bubble := PanelContainer.new()
-		bubble.add_theme_stylebox_override("panel", _box(Color("fffaf0") if mine else C_CREAM_2, 10, C_INK, 2, 2))
-		bubble.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var bv := VBoxContainer.new()
-		bv.add_theme_constant_override("separation", 0)
-		bv.add_child(_label("Sen" if mine else "Kevin", 0.72, C_CARAMEL.darkened(0.25) if not mine else C_MUTED, false, 800))
-		bv.add_child(_label(str(m.get("content", "")), 0.88, C_TEXT, true))
-		bubble.add_child(bv)
-		chat_list.add_child(bubble)
+		var e := VBoxContainer.new()
+		e.add_theme_constant_override("separation", px(3))
+		e.add_child(_text("SEN" if mine else "KEVİN", 10.5, C_MUTED if mine else C_RED, false, 500, 2.6))
+		e.add_child(_text(str(m.get("content", "")), 14.5, C_INK, false, 400, 0.0, true))
+		var line := ColorRect.new()
+		line.color = C_LINE
+		line.custom_minimum_size.y = 1
+		e.add_child(line)
+		chat_list.add_child(e)
 	# En yeni mesaj gorunsun
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -793,20 +972,15 @@ func _page_character() -> VBoxContainer:
 	var v := _page()
 	slim_btns = _segment(["Klasik (4 px)", "İnce (3 px)"], 1 if body_cfg.slim else 0,
 		func(i): body_cfg.slim = i == 1)
-	v.add_child(_row("Kol modeli", _segment_box(slim_btns)))
-	var scale_box := HBoxContainer.new()
+	v.add_child(_field("Kol modeli", _segment_box(slim_btns)))
 	scale_slider = _slider(0.6, 2.0, 0.05, float(body_cfg.scale))
-	scale_label = _label("", 0.95, C_TEXT, false, 800)
-	scale_label.custom_minimum_size.x = fs * 3.4
-	scale_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	scale_label = _text("", 14)
 	scale_slider.value_changed.connect(func(val):
 		body_cfg.scale = val
 		scale_label.text = "%%%d" % roundi(val * 100))
 	scale_label.text = "%%%d" % roundi(float(body_cfg.scale) * 100)
-	scale_box.add_child(scale_slider)
-	scale_box.add_child(scale_label)
-	v.add_child(_row("Boyut", scale_box, "Kol modeli ve boyut Kaydet'e basınca uygulanır."))
-	v.add_child(_label("Skin: sağdaki Karakterler'den seç, + ile kendi png'ni ekle (64x64 Minecraft skin).", 0.8, C_MUTED, true))
+	v.add_child(_field("Boyut", _slider_row(scale_slider, scale_label), "Kol modeli ve boyut Kaydet'e basınca uygulanır."))
+	v.add_child(_text("Skin: ana menüdeki Karakterler'den seç, + ile kendi png'ni ekle (64x64 Minecraft skin).", 12.5, C_MUTED, false, 400, 0.0, true))
 	return v
 
 
@@ -814,9 +988,11 @@ func _page_ai() -> VBoxContainer:
 	var v := _page()
 	var local: bool = Settings.PROVIDERS.get(str(brain_cfg.get("provider", "groq")), {}).get("local", false)
 	mode_btns = _segment(["Bulut (API)", "Yerel (Ollama)"], 1 if local else 0, _on_mode)
-	v.add_child(_row("Çalışma şekli", _segment_box(mode_btns), "Bulut: hızlı, internet ve anahtar ister. Yerel: bilgisayarında çalışır, Ollama kurulu olmalı."))
+	v.add_child(_field("Çalışma şekli", _segment_box(mode_btns), "Bulut: hızlı, internet ve anahtar ister. Yerel: bilgisayarında çalışır, Ollama kurulu olmalı."))
 
 	provider_opt = OptionButton.new()
+	provider_opt.focus_mode = Control.FOCUS_NONE
+	provider_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	for id in Settings.PROVIDERS:
 		if not Settings.PROVIDERS[id].get("local", false):
 			provider_opt.add_item(Settings.PROVIDERS[id].label)
@@ -824,52 +1000,44 @@ func _page_ai() -> VBoxContainer:
 			if id == str(brain_cfg.get("provider", "")):
 				provider_opt.select(provider_opt.item_count - 1)
 	provider_opt.item_selected.connect(func(_i): _update_model_placeholder())
-	provider_row = _row("Sağlayıcı", provider_opt)
+	provider_row = _field("Sağlayıcı", provider_opt)
 	v.add_child(provider_row)
 
 	model_edit = LineEdit.new()
 	model_edit.text = str(brain_cfg.get("model", ""))
-	v.add_child(_row("Model", model_edit, "Boş bırakırsan sağlayıcının varsayılanı."))
+	v.add_child(_field("Model", model_edit, "Boş bırakırsan sağlayıcının varsayılanı."))
 
 	key_edit = LineEdit.new()
 	key_edit.secret = true
-	key_edit.placeholder_text = "Kayıtlı anahtar var (değiştirmek için yaz)" if str(brain_cfg.get("apiKey", "")) != "" else "API anahtarını yapıştır"
-	key_row = _row("API anahtarı", key_edit, "Sadece bu bilgisayarda, ayar dosyasında durur.")
+	key_edit.placeholder_text = "•••••••• kayıtlı (değiştirmek için yaz)" if str(brain_cfg.get("apiKey", "")) != "" else "API anahtarını yapıştır"
+	key_row = _field("API anahtarı", key_edit, "Sadece bu bilgisayarda saklanır.")
 	v.add_child(key_row)
 
 	name_edit = LineEdit.new()
 	name_edit.text = str(brain_cfg.get("name", "Kevin"))
-	v.add_child(_row("İsim", name_edit, "Bu isimle seslenince uyanır."))
+	v.add_child(_field("İsim", name_edit, "Bu isimle seslenince uyanır."))
 
 	nick_edit = LineEdit.new()
 	nick_edit.text = ", ".join(PackedStringArray(brain_cfg.get("nicknames", [])))
 	nick_edit.placeholder_text = "kev, kevo"
-	v.add_child(_row("Lakaplar", nick_edit, "Virgülle ayır."))
+	v.add_child(_field("Lakaplar", nick_edit, "Virgülle ayır."))
 
-	hands_check = CheckButton.new()
-	hands_check.text = "Eller serbest dinleme"
-	hands_check.button_pressed = brain_cfg.get("handsFree", true) != false
+	hands_check = _switch("Eller serbest dinleme", brain_cfg.get("handsFree", true) != false)
 	v.add_child(hands_check)
 
-	var sess_box := HBoxContainer.new()
 	var sess_s := float(brain_cfg.get("voiceSessionMs", 20000)) / 1000.0
 	session_slider = _slider(5, 60, 1, sess_s)
-	session_label = _label("%d sn" % int(sess_s), 0.95, C_TEXT, false, 800)
-	session_label.custom_minimum_size.x = fs * 3.4
-	session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	session_label = _text("%d sn" % int(sess_s), 14)
 	session_slider.value_changed.connect(func(val): session_label.text = "%d sn" % int(val))
-	sess_box.add_child(session_slider)
-	sess_box.add_child(session_label)
-	v.add_child(_row("Sohbet süresi", sess_box, "Adını söyledikten sonra ne kadar dinlesin."))
+	v.add_child(_field("Sohbet süresi", _slider_row(session_slider, session_label), "Adını söyledikten sonra ne kadar dinlesin."))
 
 	persona_edit = TextEdit.new()
 	persona_edit.text = str(brain_cfg.get("persona", ""))
 	persona_edit.placeholder_text = "Boş: varsayılan kişilik (esprili, samimi, Türkçe)."
-	persona_edit.custom_minimum_size.y = fs * 6
+	persona_edit.custom_minimum_size.y = 96 * u
 	persona_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	v.add_child(_row("Kişilik", persona_edit))
+	v.add_child(_field("Kişilik", persona_edit))
 
-	v.add_child(_label("Not: beyin (ses, sohbet, araçlar) henüz bu gövdeye bağlı değil; ayarlar kaydediliyor, bağlantı sıradaki adım.", 0.78, C_MUTED, true))
 	_on_mode(1 if local else 0)
 	return v
 
@@ -877,31 +1045,34 @@ func _page_ai() -> VBoxContainer:
 func _page_behaviour() -> VBoxContainer:
 	var v := _page()
 	walk_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.walk))
-	v.add_child(_row("Yürüme sıklığı", walk_slider))
+	var walk_label := _text("", 14)
+	walk_slider.value_changed.connect(func(val): walk_label.text = "x%.1f" % val)
+	walk_label.text = "x%.1f" % walk_slider.value
+	v.add_child(_field("Yürüme sıklığı", _slider_row(walk_slider, walk_label)))
 	emote_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.emotes))
-	v.add_child(_row("Emote sıklığı", emote_slider))
-	look_check = CheckButton.new()
-	look_check.text = "Fareyi arada merak edip baksın"
-	look_check.button_pressed = body_cfg.look
-	v.add_child(look_check)
-	wallsit_check = CheckButton.new()
-	wallsit_check.text = "Kenara yaslanıp otursun"
-	wallsit_check.button_pressed = body_cfg.wall_sit
-	v.add_child(wallsit_check)
-	fun_check = CheckButton.new()
-	fun_check.text = "Eğlenceli emote'lar (dans vb.)"
-	fun_check.button_pressed = body_cfg.fun
-	v.add_child(fun_check)
+	var emote_label := _text("", 14)
+	emote_slider.value_changed.connect(func(val): emote_label.text = "x%.1f" % val)
+	emote_label.text = "x%.1f" % emote_slider.value
+	v.add_child(_field("Emote sıklığı", _slider_row(emote_slider, emote_label)))
+	var toggles := VBoxContainer.new()
+	toggles.add_theme_constant_override("separation", px(14))
+	look_check = _switch("Fareyi arada merak edip baksın", body_cfg.look)
+	wallsit_check = _switch("Kenara yaslanıp otursun", body_cfg.wall_sit)
+	fun_check = _switch("Eğlenceli emote'lar (dans vb.)", body_cfg.fun)
+	for s in [look_check, wallsit_check, fun_check]:
+		toggles.add_child(s)
+	v.add_child(toggles)
 	return v
 
 
 func _page_about() -> VBoxContainer:
 	var v := _page()
-	v.add_child(_label("Masaüstünde yaşayan, konuşan ve bilgisayarını kullanabilen yapay zeka arkadaşı.", 0.95, C_TEXT, true))
-	v.add_child(_label("Created by Liviciana", 1.0, C_CARAMEL.darkened(0.2), false, 900))
-	v.add_child(_label("Animasyonlar: Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 0.82, C_MUTED, true))
-	v.add_child(_label("Menü: karaktere sağ tık. Karakteri sürükle: döndür. Esc: kapat.", 0.82, C_MUTED, true))
-	var replay := _game_button("Açılış ekranını oynat", C_CARAMEL, 2.0)
+	v.add_child(_text("Masaüstünde yaşayan, konuşan ve bilgisayarını kullanabilen yapay zeka arkadaşı.", 15.5, C_INK, true, 400, 0.0, true))
+	v.add_child(_text("Created by Liviciana", 17, C_RED, true, 600))
+	v.add_child(_field("Animasyonlar", _text("Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 13.5, C_INK, false, 400, 0.0, true)))
+	v.add_child(_field("Kullanım", _text("Menü: karaktere sağ tık. Karakteri sürükle: döndür. Esc: kapat. Orta tık: Kevin'i uyandır.", 13.5, C_INK, false, 400, 0.0, true)))
+	var replay := _link("Açılış ekranını oynat  ›", 16, C_RED)
+	replay.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	replay.pressed.connect(func(): action.emit("splash"))
 	v.add_child(replay)
 	return v
@@ -936,97 +1107,6 @@ func _select_tab(id: String) -> void:
 
 
 # =====================================================================
-# Sol yuvarlak dugmeler: daire + cizilmis ikon + altina tasan etiket
-# =====================================================================
-
-class RoundIcon:
-	extends Control
-	var kind := ""
-	func _draw() -> void:
-		var c := size / 2.0
-		var r := minf(size.x, size.y) * 0.22
-		var ink := Color("c4161c")
-		var fill := Color("fffaf0")
-		match kind:
-			"rotate":
-				draw_arc(c, r, 0.4, TAU - 0.6, 24, ink, r * 0.55)
-				draw_arc(c, r, 0.4, TAU - 0.6, 24, fill, r * 0.3)
-				var tip := c + Vector2(cos(-0.6), sin(-0.6)) * r
-				var head := PackedVector2Array([tip + Vector2(-r * 0.45, -r * 0.35), tip + Vector2(r * 0.45, -r * 0.1), tip + Vector2(-r * 0.05, r * 0.45)])
-				draw_colored_polygon(head, fill)
-				var outline := head.duplicate()
-				outline.append(head[0])
-				draw_polyline(outline, ink, 2.0)
-			"emote":
-				var pts := PackedVector2Array()
-				for i in 10:
-					var a := -PI / 2 + i * TAU / 10.0
-					var rr := r * (1.2 if i % 2 == 0 else 0.5)
-					pts.append(c + Vector2(cos(a), sin(a)) * rr)
-				draw_colored_polygon(pts, fill)
-				var outline := pts.duplicate()
-				outline.append(pts[0])
-				draw_polyline(outline, ink, 2.5)
-			"reset":
-				draw_circle(c, r * 1.05, ink)
-				draw_circle(c, r * 0.8, fill)
-				draw_line(c, c + Vector2(0, -r * 0.6), ink, 2.5)
-				draw_line(c, c + Vector2(r * 0.45, 0), ink, 2.5)
-
-
-func _round_button(text: String, icon: String) -> Control:
-	var size_px := fs * 2.9
-	var holder := Control.new()
-	holder.custom_minimum_size = Vector2(size_px, size_px + fs * 1.3)
-	var b := Button.new()
-	b.custom_minimum_size = Vector2(size_px, size_px)
-	b.size = Vector2(size_px, size_px)
-	var r := int(size_px / 2)
-	for spec in [["normal", C_CREAM, C_GOLD], ["hover", Color("fffaf0"), C_RED], ["pressed", C_CREAM_2, C_RED], ["hover_pressed", C_CREAM_2, C_RED]]:
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = spec[1]
-		sb.border_color = spec[2]
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(r)
-		b.add_theme_stylebox_override(spec[0], sb)
-	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	holder.add_child(b)
-	var ic := RoundIcon.new()
-	ic.kind = icon
-	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ic.size = Vector2(size_px, size_px)
-	holder.add_child(ic)
-	# Etiket (kagit zeminin ustunde)
-	var l := _label(text, 0.72, C_INK, false, 700)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.size = Vector2(size_px + fs, fs * 1.2)
-	l.position = Vector2(-fs * 0.5, size_px + fs * 0.1)
-	holder.add_child(l)
-	holder.set_meta("button", b)
-	return holder
-
-
-func _build_left_bar() -> Control:
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.8))
-	var rot := _round_button("Döndür", "rotate")
-	auto_rotate_btn = rot.get_meta("button")
-	auto_rotate_btn.toggle_mode = true
-	auto_rotate_btn.toggled.connect(func(on): action.emit("auto_rotate_on" if on else "auto_rotate_off"))
-	v.add_child(rot)
-	var em := _round_button("Emote", "emote")
-	(em.get_meta("button") as Button).pressed.connect(func(): action.emit("emote"))
-	v.add_child(em)
-	var reset := _round_button("Sıfırla", "reset")
-	(reset.get_meta("button") as Button).pressed.connect(func():
-		auto_rotate_btn.button_pressed = false
-		action.emit("reset"))
-	v.add_child(reset)
-	return v
-
-
-# =====================================================================
 # Kaydet
 # =====================================================================
 
@@ -1056,27 +1136,27 @@ func _on_save() -> void:
 
 
 # =====================================================================
-# Giris / cikis: yanlardan
+# Giris / cikis: sakin kayma + belirme, satirlar sirayla
 # =====================================================================
 
 func _animate_in() -> void:
-	var items := [
-		[column, Vector2(view.x * 0.35, 0), 0.1],
-		[left_bar, Vector2(-view.x * 0.25, 0), 0.18],
-	]
-	for it in items:
-		var node: Control = it[0]
-		var final := node.position
-		node.position = final + it[1]
-		node.modulate.a = 0.0
+	var items: Array = [caption, stage_links, footer]
+	items.append_array(main_view.get_children())
+	var i := 0
+	for node in items:
+		var c: Control = node
+		c.modulate.a = 0.0
+		var delay := 0.12 + i * 0.045
 		var tw := create_tween().set_parallel(true)
-		tw.tween_property(node, "position", final, 0.5).set_delay(it[2]).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(node, "modulate:a", 1.0, 0.25).set_delay(it[2])
+		tw.tween_property(c, "modulate:a", 1.0, 0.35).set_delay(delay)
+		i += 1
+	var final := column.position
+	column.position = final + Vector2(24 * u, 0)
+	create_tween().tween_property(column, "position", final, 0.55).set_delay(0.1).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
 func animate_out(_view: Vector2) -> Tween:
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(column, "position:x", column.position.x + view.x * 0.35, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	tw.tween_property(left_bar, "position:x", -view.x * 0.25, 0.3).set_ease(Tween.EASE_IN)
+	tw.tween_property(column, "position:x", column.position.x + 24 * u, 0.3).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	tw.tween_property(self, "modulate:a", 0.0, 0.3)
 	return tw
