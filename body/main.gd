@@ -641,6 +641,7 @@ var menu_rotating := false
 var menu_auto_rotate := false
 var menu_reload := false
 var menu_ground_y := 0.0
+var menu_vp: SubViewport
 var replay_splash := false
 
 
@@ -684,6 +685,9 @@ func _finish_close() -> void:
 		menu_layer = null
 		menu_ui = null
 	menu_bg.visible = false
+	if menu_vp:
+		menu_vp.queue_free()
+		menu_vp = null
 	character.exit_menu()
 	# Kamera menude yakinlastirilmisti; geri alinmazsa Kevin minicik kaliyordu
 	camera.size = WIN_SIZE.y / PX_PER_UNIT
@@ -700,6 +704,21 @@ func _finish_close() -> void:
 
 
 func _build_menu_ui(size_px: Vector2) -> void:
+	# Bulutlu kagit zemin: Kevin'in ARKASINDA (SubViewport -> kameraya bagli duzlem)
+	menu_vp = SubViewport.new()
+	menu_vp.size = Vector2i(size_px)
+	menu_vp.transparent_bg = true
+	menu_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	add_child(menu_vp)
+	menu_vp.add_child(Menu.make_background(size_px))
+	var bg_mat := StandardMaterial3D.new()
+	bg_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bg_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bg_mat.albedo_texture = menu_vp.get_texture()
+	bg_mat.albedo_color = Color(1, 1, 1, 0)
+	menu_bg.material_override = bg_mat
+	menu_bg.visible = true
+
 	menu_layer = CanvasLayer.new()
 	add_child(menu_layer)
 	menu_ui = Menu.new()
@@ -790,9 +809,9 @@ func _update_menu(delta: float) -> void:
 	camera.position = Vector3(c.x, c.y, 30)
 	camera.size = vp.y / (PX_PER_UNIT * zoom)
 	(menu_bg.mesh as QuadMesh).size = Vector2(camera.size * vp.x / vp.y, camera.size)
-	var mat := menu_bg.material_override as ShaderMaterial
-	mat.set_shader_parameter("alpha", clampf(menu_k * 1.5, 0.0, 1.0))
-	mat.set_shader_parameter("rect_px", vp)
+	var mat := menu_bg.material_override as StandardMaterial3D
+	if mat:
+		mat.albedo_color.a = clampf(menu_k * 1.5, 0.0, 1.0)
 
 
 # =====================================================================

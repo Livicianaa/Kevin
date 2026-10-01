@@ -108,6 +108,95 @@ func build(size_px: Vector2) -> void:
 
 
 # =====================================================================
+# Kagit zemin: krem kagit + altin cizgili ugurlu bulutlar (livi'nin verdigi
+# ornegin keskin hali: dusuk cozunurluklu gorsel yerine kodla ciziliyor, her
+# boyutta net). Kevin'in ARKASINDA durmasi icin main bunu SubViewport ile 3B
+# duzleme basiyor.
+# =====================================================================
+
+class CloudPaper:
+	extends Control
+	const PAPER := Color("f5f0e6")
+	const GOLD := Color("b8955a")
+	const GOLD_L := Color("dcc69c")
+	var seed_val := 0
+
+	func _draw() -> void:
+		var r := Rect2(Vector2.ZERO, size)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = PAPER
+		sb.set_corner_radius_all(int(size.y * 0.015))
+		sb.border_color = Color("c9ad7c")
+		sb.set_border_width_all(2)
+		draw_style_box(sb, r)
+		# Kagit dokusu
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 7
+		for i in int(size.x * size.y / 900.0):
+			var p := Vector2(rng.randf() * size.x, rng.randf() * size.y)
+			draw_rect(Rect2(p, Vector2.ONE * rng.randf_range(1.0, 2.2)), Color(0.55, 0.45, 0.3, rng.randf_range(0.02, 0.06)))
+		# Bulut kumeleri (ornekteki gibi sol ust ve sag ust, ortaya uzanan)
+		rng.seed = seed_val
+		var u := size.x / 100.0
+		_cluster(rng, Vector2(size.x * 0.12, size.y * 0.12), u * 1.05, 6)
+		_cluster(rng, Vector2(size.x * 0.78, size.y * 0.09), u * 1.25, 9)
+		_cluster(rng, Vector2(size.x * 0.52, size.y * 0.24), u * 1.0, 7)
+		_wisp(Vector2(size.x * 0.3, size.y * 0.33), Vector2(size.x * 0.48, size.y * 0.28), u)
+		_cluster(rng, Vector2(size.x * 0.2, size.y * 0.86), u * 0.85, 5)
+
+	## Bir kume: taban egrisi boyunca dizilmis kabarciklar, her birinin icinde kivrim
+	func _cluster(rng: RandomNumberGenerator, c: Vector2, scale: float, n: int) -> void:
+		var puffs := []
+		for i in n:
+			var t := float(i) / maxf(1.0, n - 1.0) - 0.5
+			var p := c + Vector2(t * scale * 26.0, -absf(t) * scale * 3.0 + rng.randf_range(-scale * 3.5, scale * 2.5))
+			puffs.append([p, scale * rng.randf_range(2.6, 4.6), rng.randf() < 0.5])
+		# Arkadan one: once dolgu (arkadaki cizgileri ortsun), sonra cizgi
+		puffs.sort_custom(func(a, b): return a[0].y < b[0].y)
+		for pf in puffs:
+			var p: Vector2 = pf[0]
+			var rad: float = pf[1]
+			draw_circle(p, rad, Color(PAPER, 0.96))
+			draw_arc(p, rad, PI * 0.95, PI * 2.6, 28, GOLD, 1.6, true)
+			_spiral(p + Vector2(rad * 0.1, rad * 0.05), rad * 0.72, pf[2])
+			# Ic golge cizgisi (ornekteki cift cizgi hissi)
+			draw_arc(p, rad * 0.86, PI * 1.1, PI * 1.6, 12, GOLD_L, 1.0, true)
+		# Taban: duz akan cizgi, uclari kivrik
+		var a := c + Vector2(-scale * 15.0, scale * 4.5)
+		var b := c + Vector2(scale * 15.0, scale * 4.5)
+		draw_line(a, b, GOLD, 1.4, true)
+		_spiral(a + Vector2(-scale * 1.2, -scale * 1.2), scale * 1.3, true)
+		_spiral(b + Vector2(scale * 1.2, -scale * 1.2), scale * 1.3, false)
+
+	func _spiral(c: Vector2, r: float, ccw: bool) -> void:
+		var pts := PackedVector2Array()
+		var turns := 1.7
+		for i in 40:
+			var t := float(i) / 39.0
+			var ang := (t * turns * TAU) * (-1.0 if ccw else 1.0)
+			pts.append(c + Vector2(cos(ang), sin(ang)) * r * (1.0 - t * 0.85))
+		draw_polyline(pts, GOLD, 1.3, true)
+
+	## Ince uzun duman kuyrugu
+	func _wisp(a: Vector2, b: Vector2, u: float) -> void:
+		for k in 3:
+			var pts := PackedVector2Array()
+			for i in 30:
+				var t := float(i) / 29.0
+				var p := a.lerp(b, t)
+				p.y += sin(t * PI * 2.0 + k) * u * 1.2 + k * u * 0.8
+				pts.append(p)
+			draw_polyline(pts, Color(GOLD, 0.55 - k * 0.12), 1.0, true)
+
+
+static func make_background(size_px: Vector2) -> Control:
+	var bg := CloudPaper.new()
+	bg.size = size_px
+	bg.seed_val = randi()
+	return bg
+
+
+# =====================================================================
 # Susler: her acilista rastgele kose (sol ust + sag alt) ve ust ayrac
 # =====================================================================
 
@@ -182,23 +271,19 @@ func _plaque_button(text: String, plaque: int, height: float) -> Button:
 	b.add_theme_color_override("font_pressed_color", C_RED)
 	b.add_theme_color_override("font_hover_pressed_color", C_RED)
 	var plaques := _ui_textures("plaques")
-	var fill := Panel.new()
-	var fsb := StyleBoxFlat.new()
-	fsb.bg_color = Color(C_CREAM, 0.96)
-	fsb.set_corner_radius_all(3)
+	# Plakanin ici bos: menunun kagit zemini gorunur (icteki kutular kalkti)
 	if plaques.is_empty():
+		var fill := Panel.new()
+		var fsb := StyleBoxFlat.new()
+		fsb.bg_color = Color(C_CREAM, 0.96)
+		fsb.set_corner_radius_all(3)
 		fsb.border_color = C_GOLD
 		fsb.set_border_width_all(2)
-	fill.add_theme_stylebox_override("panel", fsb)
-	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fill.show_behind_parent = true
-	fill.set_anchors_preset(Control.PRESET_FULL_RECT)
-	if not plaques.is_empty():
-		fill.offset_left = height * 0.22
-		fill.offset_right = -height * 0.22
-		fill.offset_top = height * 0.14
-		fill.offset_bottom = -height * 0.14
-	b.add_child(fill)
+		fill.add_theme_stylebox_override("panel", fsb)
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		fill.show_behind_parent = true
+		fill.set_anchors_preset(Control.PRESET_FULL_RECT)
+		b.add_child(fill)
 	if not plaques.is_empty():
 		var tr := TextureRect.new()
 		tr.texture = plaques[plaque % plaques.size()]
@@ -445,7 +530,7 @@ func _build_column(size_px: Vector2) -> Control:
 
 	# Karakterler: sadece kartlar kadar yer kaplar (alti bos kalmasin)
 	var skins_box := PanelContainer.new()
-	skins_box.add_theme_stylebox_override("panel", _box(Color(C_CREAM, 0.96), 3, C_GOLD, 2, 0))
+	skins_box.add_theme_stylebox_override("panel", _box(Color(1, 1, 1, 0.35), 3, C_GOLD, 1, 0))
 	var sv := VBoxContainer.new()
 	sv.add_theme_constant_override("separation", int(fs * 0.4))
 	sv.add_child(_label("Karakterler", 0.95, C_TEXT, false, 800))
@@ -504,7 +589,7 @@ func _build_detail(size_px: Vector2) -> VBoxContainer:
 	v.add_child(detail_head_holder)
 	var box := PanelContainer.new()
 	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var outer := _box(Color(C_CREAM, 0.97), 3, C_GOLD, 2, 0)
+	var outer := _box(Color(1, 1, 1, 0.4), 3, C_GOLD, 1, 0)
 	outer.content_margin_left = 4
 	outer.content_margin_right = 4
 	outer.content_margin_top = 4
@@ -911,16 +996,10 @@ func _round_button(text: String, icon: String) -> Control:
 	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ic.size = Vector2(size_px, size_px)
 	holder.add_child(ic)
-	# Etiket: masaustu ustunde okunsun diye kucuk krem serit uzerinde
+	# Etiket (kagit zeminin ustunde)
 	var l := _label(text, 0.72, C_INK, false, 700)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var lsb := StyleBoxFlat.new()
-	lsb.bg_color = Color(C_CREAM, 0.95)
-	lsb.border_color = C_CREAM_3
-	lsb.set_border_width_all(1)
-	lsb.set_corner_radius_all(2)
-	l.add_theme_stylebox_override("normal", lsb)
 	l.size = Vector2(size_px + fs, fs * 1.2)
 	l.position = Vector2(-fs * 0.5, size_px + fs * 0.1)
 	holder.add_child(l)
