@@ -144,7 +144,9 @@ const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
 const WHISPER_BIN = path.join(WHISPER_DIR, 'whisper-cli');
 const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small-q5_1.bin');
-const WHISPER_THREADS = '10';
+// Islemci sayisina gore (her acilista): sabit 10 is parcacigi az cekirdekli
+// makinede butun sistemi yavaslatir
+const WHISPER_THREADS = String(Math.max(2, Math.min(10, os.cpus().length - 2)));
 
 function runCommand(cmd, args, { env, input } = {}) {
   return new Promise((resolve, reject) => {
@@ -202,7 +204,11 @@ function buildPersona(cfg) {
   const isim = cfg.name || 'Kevin';
   const dil = langs.lang(cfg).prompt;
   const base = (cfg.persona && cfg.persona.trim()) || DEFAULT_PERSONA;
-  return `${base.replace(/\{isim\}/g, isim).replace(/\{dil\}/g, dil)}\n${akil.personaBlock()}\nCevaplarini SADECE ${dil} dilinde ver (etiketler haric).`;
+  const typing = cfg.liveTyping !== false
+    ? '\nKOD/YAZI: Kullanici kod, betik ya da uzun bir metin yazmani isterse onu SESLI OKUMA. write_file ile '
+      + '~/Kevin/ altina uygun uzantili bir dosyaya yaz (ekranda harf harf yazilarak gosterilecek), sonra tek cumleyle ne yazdigini soyle.'
+    : '';
+  return `${base.replace(/\{isim\}/g, isim).replace(/\{dil\}/g, dil)}\n${akil.personaBlock()}${typing}\nCevaplarini SADECE ${dil} dilinde ver (etiketler haric).`;
 }
 
 const PROVIDERS = {
@@ -540,6 +546,41 @@ const WRITE_FILE_TOOL = {
   },
 };
 
+// Kevin bir dosya yazinca (ayarda aciksa) kendi editor penceresinde harf harf
+// yazarak gosterir. Dosya diske hemen yaziliyor; pencere sadece gosteriyor.
+function liveType(filePath, content) {
+  const cfg = loadConfig();
+  if (cfg.liveTyping === false || !content) return;
+  const typer = new BrowserWindow({
+    width: 860,
+    height: 620,
+    title: `Kevin - ${path.basename(filePath)}`,
+    backgroundColor: '#f4eee2',
+    autoHideMenuBar: true,
+    show: false,
+    // Baska calisma alanina gecilince de yazmaya devam etsin
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, backgroundThrottling: false },
+  });
+  typer.loadURL('kevin://app/renderer/typer.html');
+  if (process.env.KEVIN_TYPER_SHOT) {
+    // Gelistirme: pencereyi gostermeden yazma aninin goruntusunu al
+    setTimeout(async () => {
+      fs.writeFileSync(process.env.KEVIN_TYPER_SHOT, (await typer.webContents.capturePage()).toPNG());
+      app.quit();
+    }, 4000);
+  } else {
+    typer.once('ready-to-show', () => typer.show());
+  }
+  typer.webContents.once('did-finish-load', () => {
+    typer.webContents.send('typer-start', {
+      file: filePath,
+      content,
+      lang: langs.langCode(cfg),
+      speed: Number(cfg.typingSpeed) || 1,
+    });
+  });
+}
+
 async function writeFileTool(args) {
   const target = resolveUserPath(args.path);
   assertWritable(target);
@@ -550,6 +591,7 @@ async function writeFileTool(args) {
   }
   if (args.append) fs.appendFileSync(target, args.content, 'utf8');
   else fs.writeFileSync(target, args.content, 'utf8');
+  liveType(target, args.content);
 
   return `${target} yazildi (${Buffer.byteLength(args.content)} bayt)`;
 }
@@ -1091,6 +1133,7 @@ const BASIC_TOOL_KEYWORDS = [
   'tarayici', 'tarayıcı', 'browser', 'sekmede', 'sitede',
   'kamera', 'tanı', 'tani', 'tanıyor', 'taniyor', 'görüyor', 'goruyor', 'yüzüm', 'yuzum',
   'elimde', 'elimdeki', 'hatırla', 'hatirla', 'camera',
+  'kod', 'script', 'betik', 'program', 'fonksiyon', 'code',
 ];
 
 const SCREEN_CONTROL_KEYWORDS = [
@@ -1457,15 +1500,43 @@ ipcMain.handle('music-status', async () => {
       '{{playerName}}\t{{status}}\t{{xesam:url}}\t{{xesam:album}}\t{{mpris:length}}\t{{xesam:title}}',
     ]);
 
+    // anyPlaying: sarki ya da video, hoparlorden ses geliyor (mikrofona da
+    // giriyor; Kevin videodaki konusmayi kullanicininki sanmasin)
+    let music = null;
+    let anyPlaying = false;
     for (const line of stdout.split('\n')) {
       const [player = '', status = '', url = '', album = '', lengthUs = '', title = ''] = line.split('\t');
       if (status !== 'Playing') continue;
-      if (looksLikeMusic({ player, url, album, title, lengthUs })) return { playing: true, player, title };
+      anyPlaying = true;
+      if (!music && looksLikeMusic({ player, url, album, title, lengthUs })) music = { player, title };
     }
-    return { playing: false };
+    return { playing: Boolean(music), anyPlaying, ...(music || {}) };
   } catch {
     return { playing: false };
   }
+});
+
+// Kevin'e seslenilince calan video/muzik duraklar, konusma bitince devam eder
+let pausedPlayers = [];
+
+ipcMain.handle('media-pause', async () => {
+  if (!platform.isLinux) return false;
+  try {
+    const { stdout } = await runCommand('playerctl', ['-a', 'metadata', '--format', '{{playerName}}\t{{status}}\t{{playerInstance}}']);
+    const playing = stdout.split('\n').map((l) => l.split('\t')).filter((p) => p[1] === 'Playing').map((p) => p[2]);
+    for (const inst of playing) await runCommand('playerctl', ['-p', inst, 'pause']).catch(() => {});
+    pausedPlayers = playing;
+    return playing.length > 0;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('media-resume', async () => {
+  const list = pausedPlayers;
+  pausedPlayers = [];
+  for (const inst of list) await runCommand('playerctl', ['-p', inst, 'play']).catch(() => {});
+  return list.length > 0;
 });
 
 app.whenReady().then(async () => {
@@ -1476,6 +1547,10 @@ app.whenReady().then(async () => {
   });
 
   if (BRAIN_MODE) startBodyBridge();
+  if (process.env.KEVIN_TYPER_SHOT) {
+    liveType('/home/kevin/ornek.py', 'import random\n\n# Zar at\ndef zar(kac=2):\n    return [random.randint(1, 6) for _ in range(kac)]\n\nif __name__ == "__main__":\n    print("Zarlar:", zar())\n'.repeat(3));
+    return;
+  }
 
   // Kurallar pencereden ONCE yuklenmeli: windowrule pencere acilirken uygulaniyor.
   if (hypr.available() && !BRAIN_MODE) {

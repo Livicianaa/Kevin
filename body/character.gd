@@ -91,6 +91,11 @@ const EMOTE_POOLS := {
 	"social": ["meeting", "hug", "hearthands", "heart", "bow1", "bow2", "F", "make_gestures", "grace", "nervous", "hunchback", "dab", "jumping jacks", "take the l"],
 	"brain": ["think", "nod", "fold_arms", "shake"],
 }
+## Yerde yatma/oturma tam karsidan anlasilmiyordu (ayaklar kameraya dogru),
+## tam yandan da oyle: bunlar caprazdan (3/4) oynuyor, yuzu ekranin icine
+## dogru (livi: "biraz capraz durabilirler")
+const DIAGONAL_EMOTES := ["lay_down5", "cool_sit", "campfire_sit1", "sit", "sitting", "bend_sit", "lejat", "meditation_fly", "sit_lean_wall"]
+const DIAGONAL_YAW := 0.8
 ## Dongulu emote'larin suresi (saniye) havuza gore
 const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(3.0, 5.0), "dance": Vector2(10.0, 16.0), "social": Vector2(2.5, 4.0), "brain": Vector2(999.0, 999.0), "extra": Vector2(3.0, 5.0)}
 ## Duygu -> o duyguyu gosteren hareketler (beyin cevabin basina [duygu]
@@ -349,6 +354,9 @@ func play_emote(emote_name: String, seconds := -1.0) -> bool:
 	emote_until = seconds if seconds > 0.0 else randf_range(range.x, range.y)
 	if not emote.looped:
 		emote_until = emote.length_seconds()
+	if emote_name in DIAGONAL_EMOTES:
+		var mid := (bounds.x + bounds.y) / 2.0
+		emote_facing = DIAGONAL_YAW * (1.0 if root_x < mid else -1.0)
 	_set_state("emote", 0.0)
 	return true
 
@@ -758,8 +766,8 @@ func _go_wall_sit() -> void:
 		left = not left
 	walk_target = bounds.x if left else bounds.y
 	after_walk = "wall_sit"
-	# Sirti kenara: yuzu ekranin icine
-	wall_sit_facing = FACE_SIDE if left else -FACE_SIDE
+	# Sirti kenara, caprazdan: yuzu ekranin icine ve hafif kameraya
+	wall_sit_facing = DIAGONAL_YAW if left else -DIAGONAL_YAW
 	_set_state("walk", 0.0)
 
 

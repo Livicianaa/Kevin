@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kevin</title>
+<style>
+  :root {
+    --paper: #f4eee2; --line: #d9cdb6; --ink: #262019; --muted: #8a7d6b; --red: #b8261f;
+    --str: #3d6b4f; --num: #8a4f1e; --com: #9a8c78;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--paper); color: var(--ink); }
+  body { display: flex; flex-direction: column; font-family: "Noto Sans", sans-serif; }
+  header {
+    display: flex; align-items: baseline; gap: 14px; padding: 14px 22px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  header .who { font-family: "Noto Serif", serif; font-weight: 600; font-size: 18px; }
+  header .file { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  header .state { color: var(--red); font-size: 12px; letter-spacing: .2em; text-transform: uppercase; }
+  main { flex: 1; overflow: auto; padding: 16px 0 40px; }
+  pre { font-family: "JetBrains Mono", "Fira Code", "Noto Sans Mono", "DejaVu Sans Mono", monospace; font-size: 14px; line-height: 1.6; counter-reset: ln; }
+  .ln { display: block; padding: 0 22px 0 0; white-space: pre-wrap; word-break: break-word; }
+  .ln::before {
+    counter-increment: ln; content: counter(ln); display: inline-block; width: 52px; padding-right: 16px;
+    text-align: right; color: var(--line); user-select: none;
+  }
+  .kw { color: var(--red); }
+  .st { color: var(--str); }
+  .nu { color: var(--num); }
+  .co { color: var(--com); font-style: italic; }
+  .caret { display: inline-block; width: 2px; height: 1.15em; background: var(--red); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+  .done .caret { display: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="who">Kevin</span>
+  <span class="file" id="file"></span>
+  <span class="state" id="state"></span>
+</header>
+<main id="scroll"><pre id="code"></pre></main>
+<script>
+// Kevin bir dosya yazinca bu pencere acilir ve icerik harf harf yazilir
+// (livi: "yazdigi her seyi harf harf gozumun onunde yapsin"). Dosya diske
+// zaten yazilmis oluyor; bu pencere sadece gosteriyor.
+const KEYWORDS = new Set(('if else elif for while do return function func def class const let var import from export ' +
+  'extends new try catch except finally throw raise async await yield in of is not and or true false null None True False ' +
+  'self this static public private protected void int float bool string match case break continue switch default with as pass lambda struct enum').split(' '));
+
+const STATE = { tr: ['yazıyor', 'bitti'], en: ['typing', 'done'], es: ['escribiendo', 'listo'], fr: ['écrit', 'terminé'],
+  de: ['schreibt', 'fertig'], pt: ['escrevendo', 'pronto'], ru: ['пишет', 'готово'], ar: ['يكتب', 'تم'],
+  hi: ['लिख रहा है', 'हो गया'], ur: ['لکھ رہا ہے', 'ہو گیا'], id: ['menulis', 'selesai'] };
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Basit renklendirme: yorum, metin, sayi, anahtar kelime
+function highlight(line) {
+  const re = /(\/\/.*$|#.*$|--.*$)|("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|`[^`]*`?)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_]\w*)/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    out += esc(line.slice(last, m.index));
+    if (m[1]) out += `<span class="co">${esc(m[1])}</span>`;
+    else if (m[2]) out += `<span class="st">${esc(m[2])}</span>`;
+    else if (m[3]) out += `<span class="nu">${esc(m[3])}</span>`;
+    else out += KEYWORDS.has(m[4]) ? `<span class="kw">${esc(m[4])}</span>` : esc(m[4]);
+    last = m.index + m[0].length;
+  }
+  return out + esc(line.slice(last));
+}
+
+const codeEl = document.getElementById('code');
+const scrollEl = document.getElementById('scroll');
+
+function render(text, done) {
+  const lines = text.split('\n');
+  codeEl.innerHTML = lines.map((l, i) =>
+    `<span class="ln">${highlight(l)}${!done && i === lines.length - 1 ? '<span class="caret"></span>' : ''}​</span>`).join('');
+  scrollEl.scrollTop = scrollEl.scrollHeight;
+}
+
+window.kevinAPI.onTyperStart(async ({ file, content, lang, speed }) => {
+  const words = STATE[lang] || STATE.tr;
+  document.getElementById('file').textContent = file;
+  document.getElementById('state').textContent = words[0];
+  // Uzun dosya da makul surede bitsin: en az ~45 harf/sn, en fazla ~25 sn
+  const cps = Math.max(45, content.length / 25) * (speed || 1);
+  let shown = 0;
+  let last = performance.now();
+  await new Promise((resolve) => {
+    function step(now) {
+      const dt = (now - last) / 1000;
+      last = now;
+      const prev = shown;
+      shown = Math.min(content.length, shown + Math.max(1, Math.round(cps * dt)));
+      // Satir sonunda kisa dusunme molasi
+      if (content.slice(prev, shown).includes('\n') && Math.random() < 0.3) last += 120;
+      render(content.slice(0, shown), false);
+      if (shown >= content.length) return resolve();
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+  document.body.classList.add('done');
+  document.getElementById('state').textContent = words[1];
+  render(content, true);
+});
+</script>
+</body>
+</html>

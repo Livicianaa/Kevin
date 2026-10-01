@@ -20,12 +20,20 @@ const BODY_DEFAULTS := {
 }
 
 ## Beynin sagladigi saglayicilar (main.js PROVIDERS ile ayni)
+## url: OpenAI uyumlu adres (model listesi buradan), keys: anahtar alinan sayfa
 const PROVIDERS := {
-	"groq": {"label": "Groq", "model": "qwen/qwen3.8-27b"},
-	"gemini": {"label": "Gemini", "model": "gemini-2.5-flash"},
-	"nvidia": {"label": "NVIDIA", "model": "meta/llama-3.3-70b-instruct"},
-	"ollama": {"label": "Ollama (yerel)", "model": "qwen3:8b", "local": true},
+	"groq": {"label": "Groq", "note": "provider_groq", "model": "qwen/qwen3.8-27b",
+		"url": "https://api.groq.com/openai/v1", "keys": "https://console.groq.com/keys"},
+	"gemini": {"label": "Gemini", "note": "provider_gemini", "model": "gemini-2.5-flash",
+		"url": "https://generativelanguage.googleapis.com/v1beta/openai", "keys": "https://aistudio.google.com/apikey"},
+	"nvidia": {"label": "NVIDIA", "note": "provider_nvidia", "model": "meta/llama-3.3-70b-instruct",
+		"url": "https://integrate.api.nvidia.com/v1", "keys": "https://build.nvidia.com/settings/api-keys"},
+	"ollama": {"label": "Ollama (yerel)", "model": "qwen3:8b", "local": true,
+		"url": "http://127.0.0.1:11434/v1", "keys": "https://ollama.com/download"},
 }
+
+## Sohbet modeli olmayanlar (ses, guvenlik, gomme...) listede gorunmesin
+const NON_CHAT_MODELS := ["whisper", "guard", "tts", "orpheus", "embed", "rerank", "reward", "audio", "playai", "distil", "parse", "safety", "allam", "vision", "image", "imagen", "veo", "aqa", "learnlm", "nemoretriever", "clip", "deplot", "kosmos", "paligemma", "neva", "vila", "fuyu", "cosmos", "nv-yolox", "ocdrnet", "bge", "arctic-embed"]
 
 
 ## Electron'un userData klasoruyle ayni yer

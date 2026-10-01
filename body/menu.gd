@@ -13,6 +13,7 @@ signal action(name: String)
 
 const Settings := preload("res://settings.gd")
 const I18n := preload("res://i18n.gd")
+const SysProfile := preload("res://sysprofile.gd")
 
 const C_PAPER := Color("f4eee2")
 const C_CARD := Color("faf6ee")
@@ -59,7 +60,13 @@ var scale_label: Label
 var mode_btns := []
 var provider_opt: OptionButton
 var provider_row: Control
-var model_edit: LineEdit
+var model_opt: OptionButton
+var model_status: Label
+var models_http: HTTPRequest
+var key_timer: Timer
+var ollama_link: LinkButton
+var pause_media_check: Button
+var live_typing_check: Button
 var key_edit: LineEdit
 var key_row: Control
 var name_edit: LineEdit
@@ -1039,29 +1046,65 @@ func _page_ai() -> VBoxContainer:
 	mode_btns = _segment([_tx("mode_cloud"), _tx("mode_local")], 1 if local else 0, _on_mode)
 	v.add_child(_field(_tx("mode"), _segment_box(mode_btns), _tx("mode_hint")))
 
+	# Bulut: saglayici + anahtar (anahtar al baglantisi ve adimlar)
+	var cloud := VBoxContainer.new()
+	cloud.add_theme_constant_override("separation", px(22))
 	provider_opt = OptionButton.new()
 	provider_opt.focus_mode = Control.FOCUS_NONE
 	provider_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	for id in Settings.PROVIDERS:
 		if not Settings.PROVIDERS[id].get("local", false):
-			provider_opt.add_item(Settings.PROVIDERS[id].label)
+			provider_opt.add_item(_tx(Settings.PROVIDERS[id].note))
 			provider_opt.set_item_metadata(provider_opt.item_count - 1, id)
 			if id == str(brain_cfg.get("provider", "")):
 				provider_opt.select(provider_opt.item_count - 1)
-	provider_opt.item_selected.connect(func(_i): _update_model_placeholder())
-	provider_row = _field(_tx("provider"), provider_opt)
-	v.add_child(provider_row)
-
-	model_edit = LineEdit.new()
-	model_edit.text = str(brain_cfg.get("model", ""))
-	v.add_child(_field(_tx("model"), model_edit, _tx("model_hint")))
+	provider_opt.item_selected.connect(func(_i): _fetch_models())
+	cloud.add_child(_field(_tx("provider"), provider_opt))
+	provider_row = cloud
 
 	key_edit = LineEdit.new()
 	key_edit.secret = true
 	key_edit.placeholder_text = _tx("key_saved") if _has_key() else _tx("key_new")
-	key_edit.text_changed.connect(func(_t): _update_key_notice())
-	key_row = _field(_tx("api_key"), key_edit, _tx("key_hint"))
-	v.add_child(key_row)
+	var key_box := VBoxContainer.new()
+	key_box.add_theme_constant_override("separation", px(8))
+	key_box.add_child(key_edit)
+	var get_key := _link(_tx("get_key"), 14, C_RED)
+	get_key.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	get_key.pressed.connect(func(): OS.shell_open(str(Settings.PROVIDERS[_current_provider()].keys)))
+	key_box.add_child(get_key)
+	key_row = _field(_tx("api_key"), key_box, _tx("key_steps") + " " + _tx("key_hint"))
+	cloud.add_child(key_row)
+	v.add_child(cloud)
+
+	# Model: elle yazilmiyor, saglayicidan gelen listeden secilir (anahtar
+	# yapistirilinca liste kendiliginden gelir, anahtar da boylece denenmis olur)
+	model_opt = OptionButton.new()
+	model_opt.focus_mode = Control.FOCUS_NONE
+	model_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	model_status = _text("", 13, C_MUTED, false, 500, 0.0, true)
+	ollama_link = _link(_tx("get_ollama"), 14, C_RED)
+	ollama_link.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	ollama_link.visible = false
+	ollama_link.pressed.connect(func(): OS.shell_open(str(Settings.PROVIDERS.ollama.keys)))
+	var model_box := VBoxContainer.new()
+	model_box.add_theme_constant_override("separation", px(8))
+	model_box.add_child(model_opt)
+	model_box.add_child(model_status)
+	model_box.add_child(ollama_link)
+	v.add_child(_field(_tx("model"), model_box, _tx("model_hint2")))
+
+	models_http = HTTPRequest.new()
+	models_http.timeout = 8.0
+	add_child(models_http)
+	models_http.request_completed.connect(_on_models)
+	key_timer = Timer.new()
+	key_timer.one_shot = true
+	key_timer.wait_time = 0.8
+	add_child(key_timer)
+	key_timer.timeout.connect(_fetch_models)
+	key_edit.text_changed.connect(func(_t):
+		_update_key_notice()
+		key_timer.start())
 
 	name_edit = LineEdit.new()
 	name_edit.text = str(brain_cfg.get("name", "Kevin"))
@@ -1072,8 +1115,15 @@ func _page_ai() -> VBoxContainer:
 	nick_edit.placeholder_text = "kev, kevo"
 	v.add_child(_field(_tx("nicknames"), nick_edit, _tx("nick_hint")))
 
+	var voice := VBoxContainer.new()
+	voice.add_theme_constant_override("separation", px(14))
 	hands_check = _switch(_tx("hands_free"), brain_cfg.get("handsFree", true) != false)
-	v.add_child(hands_check)
+	pause_media_check = _switch(_tx("pause_media"), brain_cfg.get("pauseMedia", true) != false)
+	live_typing_check = _switch(_tx("live_typing"), brain_cfg.get("liveTyping", true) != false)
+	for sw in [hands_check, pause_media_check, live_typing_check]:
+		voice.add_child(sw)
+	voice.add_child(_text(_tx("live_typing_hint"), 12, C_MUTED, false, 400, 0.0, true))
+	v.add_child(voice)
 
 	var sess_s := float(brain_cfg.get("voiceSessionMs", 20000)) / 1000.0
 	session_slider = _slider(5, 60, 1, sess_s)
@@ -1111,6 +1161,81 @@ func _page_ai() -> VBoxContainer:
 
 	_on_mode(1 if local else 0)
 	return v
+
+
+## Saglayicinin model listesini cek: anahtar dogru mu, internet var mi, Ollama
+## kurulu mu; sonuc modelin altinda yaziyor
+func _fetch_models() -> void:
+	if models_http == null:
+		return
+	var prov := _current_provider()
+	var p: Dictionary = Settings.PROVIDERS[prov]
+	var local: bool = p.get("local", false)
+	var key := key_edit.text.strip_edges()
+	if key == "" and prov == str(brain_cfg.get("provider", "")):
+		key = str(brain_cfg.get("apiKey", ""))
+	ollama_link.visible = false
+	models_http.cancel_request()
+	if not local and key == "":
+		_set_model_status(_tx("st_nokey"), C_RED)
+		_fill_models([])
+		return
+	_set_model_status(_tx("st_checking"), C_MUTED)
+	var headers := PackedStringArray() if local else PackedStringArray(["Authorization: Bearer " + key])
+	if models_http.request(str(p.url) + "/models", headers) != OK:
+		_set_model_status(_tx("st_net"), C_RED)
+
+
+func _on_models(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var local: bool = Settings.PROVIDERS[_current_provider()].get("local", false)
+	if result != HTTPRequest.RESULT_SUCCESS:
+		_set_model_status(_tx("st_ollama_none") if local else _tx("st_net"), C_RED)
+		ollama_link.visible = local
+		_fill_models([])
+		return
+	if code == 401 or code == 403 or code == 400:
+		_set_model_status(_tx("st_badkey"), C_RED)
+		_fill_models([])
+		return
+	if code != 200:
+		_set_model_status("HTTP %d" % code, C_RED)
+		_fill_models([])
+		return
+	var data = JSON.parse_string(body.get_string_from_utf8())
+	var ids := []
+	if data is Dictionary and data.get("data") is Array:
+		for m in data.data:
+			var id := str(m.get("id", "")).trim_prefix("models/")
+			var low := id.to_lower()
+			if id != "" and not Settings.NON_CHAT_MODELS.any(func(w): return low.contains(w)):
+				ids.append(id)
+	ids.sort()
+	_set_model_status((_tx("st_ollama_ok") if local else _tx("st_ok")) % ids.size(), C_INK)
+	_fill_models(ids)
+
+
+func _set_model_status(t: String, color: Color) -> void:
+	model_status.text = t
+	model_status.add_theme_color_override("font_color", color)
+
+
+## Kayitli model listede varsa o, yoksa onerilen secili; onerilen en ustte
+func _fill_models(ids: Array) -> void:
+	var prov := _current_provider()
+	var rec := str(Settings.PROVIDERS[prov].model)
+	var saved := str(brain_cfg.get("model", "")) if prov == str(brain_cfg.get("provider", "")) else ""
+	var list := ids.duplicate()
+	if list.is_empty():
+		list = [saved if saved != "" else rec]
+	if rec in list:
+		list.erase(rec)
+		list.push_front(rec)
+	model_opt.clear()
+	for id in list:
+		model_opt.add_item("%s  (%s)" % [id, _tx("recommended")] if id == rec else id)
+		model_opt.set_item_metadata(model_opt.item_count - 1, id)
+	var pick := list.find(saved) if saved in list else 0
+	model_opt.select(pick)
 
 
 func _has_key() -> bool:
@@ -1155,6 +1280,10 @@ func _page_about() -> VBoxContainer:
 	v.add_child(_text("Created by Liviciana", 17, C_RED, true, 600))
 	v.add_child(_field(_tx("animations"), _text("Fresh Animations, Emotecraft (CC0), Quaternius Universal Animation Library 2 (CC0).", 13.5, C_INK, false, 400, 0.0, true)))
 	v.add_child(_field(_tx("usage"), _text(_tx("usage_text"), 13.5, C_INK, false, 400, 0.0, true)))
+	# Her acilista olculen sistem ve secilen calisma duzeyi
+	var sp := SysProfile.detect()
+	var sys_line := "%d CPU · %s GB RAM · %s · %d %s, %d Hz\n%s · %d fps" % [sp.cores, str(sp.ram_gb), sp.gpu, sp.screens, "ekran" if lang == "tr" else "display", sp.refresh, _tx("perf_" + str(sp.tier)), Engine.max_fps]
+	v.add_child(_field(_tx("system"), _text(sys_line, 13.5, C_INK, false, 400, 0.0, true), _tx("system_hint")))
 	var replay := _link(_tx("replay_splash") + "  ›", 16, C_RED)
 	replay.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	replay.pressed.connect(func(): action.emit("splash"))
@@ -1166,15 +1295,8 @@ func _on_mode(i: int) -> void:
 	var local := i == 1
 	if provider_row:
 		provider_row.visible = not local
-	if key_row:
-		key_row.visible = not local
-	_update_model_placeholder()
 	_update_key_notice()
-
-
-func _update_model_placeholder() -> void:
-	if model_edit:
-		model_edit.placeholder_text = Settings.PROVIDERS.get(_current_provider(), {}).get("model", "")
+	_fetch_models()
 
 
 func _current_provider() -> String:
@@ -1226,7 +1348,7 @@ func _on_save() -> void:
 
 	var brain := {
 		"provider": _current_provider(),
-		"model": model_edit.text.strip_edges(),
+		"model": str(model_opt.get_item_metadata(model_opt.selected)) if model_opt.selected >= 0 else "",
 		"name": name_edit.text.strip_edges() if name_edit.text.strip_edges() != "" else "Kevin",
 		"nicknames": Array(nick_edit.text.split(",", false)).map(func(s): return s.strip_edges()).filter(func(s): return s != ""),
 		"handsFree": hands_check.button_pressed,
@@ -1235,6 +1357,8 @@ func _on_save() -> void:
 		"speechRate": speech_slider.value,
 		"camera": camera_check.button_pressed,
 		"cameraGreet": camera_greet_check.button_pressed,
+		"pauseMedia": pause_media_check.button_pressed,
+		"liveTyping": live_typing_check.button_pressed,
 		"nightSleepy": night_check.button_pressed,
 		"sleepAfterMin": int(sleep_slider.value),
 	}

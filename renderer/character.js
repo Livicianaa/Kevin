@@ -327,11 +327,27 @@ function setVoiceState(next) {
   refreshKevinState();
 }
 
+// Seslenince duraklatilan video/muzik (konusma bitince devam eder)
+let mediaPausedByUs = false;
+
+async function mediaPlaying() {
+  try {
+    const st = await window.kevinAPI.musicStatus();
+    return Boolean(st && st.anyPlaying);
+  } catch {
+    return false;
+  }
+}
+
 function endVoiceSession() {
   clearTimeout(voiceSessionTimer);
   voiceSessionTimer = null;
   setBusy(null);
   setVoiceState(VOICE_IDLE);
+  if (mediaPausedByUs) {
+    mediaPausedByUs = false;
+    window.kevinAPI.mediaResume();
+  }
 }
 
 function touchVoiceSession(ms) {
@@ -353,21 +369,25 @@ function editDistance(a, b) {
 }
 
 function normalizeWord(w) {
-  return w.toLocaleLowerCase('tr').replace(/['’`]/g, '').replace(/[^a-zçğıöşü0-9]/g, '')
+  return w.toLocaleLowerCase('tr').replace(/['’`]/g, '').replace(/[^\p{L}\p{N}]/gu, '')
     .replace(/ı/g, 'i');
 }
 
-// Uyanma kelimesinin bittigi karakter konumu; yoksa -1
-function findWake(text, wakeWords) {
+// Uyanma kelimesinin bittigi karakter konumu; yoksa -1. strict: video/muzik
+// calarken hoparlorden gelen konusma yanlislikla uyandirmasin diye sadece
+// tam isim ve cumlenin basinda.
+function findWake(text, wakeWords, strict = false) {
   const re = /\S+/g;
   let m;
   let index = 0;
   const wakes = wakeWords.map(normalizeWord).filter(Boolean);
   while ((m = re.exec(text)) !== null) {
     const w = normalizeWord(m[0]);
+    if (strict && index >= 3) break;
     for (const wake of wakes) {
       if (!w) continue;
-      const tol = index < 2 && wake.length >= 4 && w[0] === wake[0] ? 2 : (wake.length >= 5 ? 1 : 0);
+      let tol = index < 2 && wake.length >= 4 && w[0] === wake[0] ? 2 : (wake.length >= 5 ? 1 : 0);
+      if (strict) tol = 0;
       // "kevine", "kevinim" gibi ekler: kelimenin basi yeterli
       const head = w.slice(0, Math.max(wake.length, 3));
       if (w === wake || editDistance(head, wake) <= tol || (w.length >= 3 && editDistance(w, wake) <= tol)) {
@@ -467,7 +487,11 @@ async function handleVoice(text) {
   voiceBusySince = Date.now();
   try {
     if (voiceState === VOICE_IDLE) {
-      if (findWake(text, wakeWords) < 0) return;
+      // Video/muzik caliyorsa hoparlorden gelen konusmayi kullanicininki
+      // sanmasin: tam isim gerekli, sonra medya duraklatilir
+      const media = await mediaPlaying();
+      if (findWake(text, wakeWords, media) < 0) return;
+      if (media && cfg.pauseMedia !== false) mediaPausedByUs = await window.kevinAPI.mediaPause();
 
       markInteraction();
       const rest = stripWakeWord(text, wakeWords);
@@ -490,7 +514,9 @@ async function handleVoice(text) {
       return;
     }
 
-    // Oturum acik: soylenen her sey Kevin'e
+    // Oturum acik: soylenen her sey Kevin'e. Ama medya hala caliyorsa
+    // (duraklatma kapali) sadece adiyla seslenilen cumleler.
+    if (!mediaPausedByUs && await mediaPlaying() && findWake(text, wakeWords, true) < 0) return;
     markInteraction();
     await voiceReply(text, cfg);
   } finally {

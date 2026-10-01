@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   speak: (text) => ipcRenderer.invoke('speak', text),
   listModels: (provider, apiKey) => ipcRenderer.invoke('list-models', { provider, apiKey }),
   musicStatus: () => ipcRenderer.invoke('music-status'),
+  mediaPause: () => ipcRenderer.invoke('media-pause'),
+  mediaResume: () => ipcRenderer.invoke('media-resume'),
   resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
   setAnchor: (x, y) => ipcRenderer.send('set-anchor', x, y),
   worldInfo: () => ipcRenderer.invoke('world-info'),
@@ -20,6 +22,9 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   historyAdd: (entry) => ipcRenderer.send('history-add', entry),
   onBodyCommand: (callback) => {
     ipcRenderer.on('body-command', (_e, data) => callback(data));
+  },
+  onTyperStart: (callback) => {
+    ipcRenderer.on('typer-start', (_e, data) => callback(data));
   },
   onAgentActivity: (callback) => {
     ipcRenderer.on('agent-activity', (_e, data) => callback(data));

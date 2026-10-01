@@ -13,6 +13,7 @@ const Menu := preload("res://menu.gd")
 const Brain := preload("res://brain.gd")
 const Splash := preload("res://splash.gd")
 const I18n := preload("res://i18n.gd")
+const SysProfile := preload("res://sysprofile.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
 var PX_PER_UNIT := 118.0
@@ -68,9 +69,13 @@ var test_throw := false
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0, 0, 0, 0))
 	get_viewport().transparent_bg = true
-	# Donen kutularin kenarlari merdiven/cizgi gibi gorunuyordu
-	get_viewport().msaa_3d = Viewport.MSAA_4X
-	Engine.max_fps = 60
+	# Donen kutularin kenarlari merdiven/cizgi gibi gorunuyordu (MSAA asagida)
+	# Bilgisayarin gucune gore kare hizi ve hareketlilik (her acilista)
+	sys_profile = SysProfile.detect()
+	Engine.max_fps = SysProfile.max_fps(sys_profile)
+	# Zayif makinede kenar yumusatma daha hafif
+	get_viewport().msaa_3d = Viewport.MSAA_2X if sys_profile.tier == SysProfile.TIER_LOW else Viewport.MSAA_4X
+	print("[kevin] sistem: %d cekirdek, %.1f GB, %s, %d ekran %d Hz -> %s, %d fps" % [sys_profile.cores, sys_profile.ram_gb, sys_profile.gpu, sys_profile.screens, sys_profile.refresh, sys_profile.tier, Engine.max_fps])
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--grab="):
@@ -150,6 +155,7 @@ func _ready() -> void:
 
 
 var body_settings := {}
+var sys_profile := {}
 
 
 func testing_flags() -> bool:
@@ -164,8 +170,9 @@ func _notification(what: int) -> void:
 
 
 func _apply_behaviour(cfg: Dictionary) -> void:
-	character.walk_factor = float(cfg.walk)
-	character.emote_factor = float(cfg.emotes)
+	var activity := SysProfile.activity(sys_profile) if not sys_profile.is_empty() else 1.0
+	character.walk_factor = float(cfg.walk) * activity
+	character.emote_factor = float(cfg.emotes) * activity
 	character.look_enabled = cfg.look
 	character.wall_sit_enabled = cfg.wall_sit
 	character.fun_enabled = cfg.fun
@@ -182,6 +189,32 @@ func _strip_decorations() -> void:
 # =====================================================================
 # Masaustu <-> dunya donusumu
 # =====================================================================
+
+var edge_nodes: Array[Node] = []
+var screen_check_t := 0.0
+var screen_signature := ""
+
+
+## Ekran takilip cikarilinca, cozunurluk/olcek degisince ya da pencereler
+## acilip kapaninca (kullanilabilir alan) her birkac saniyede bir yeniden bak.
+## Degistiyse zemin ve duvarlar yeniden kurulur; Kevin yeni duzene uyar.
+func _check_screens(delta: float) -> void:
+	screen_check_t += delta
+	if screen_check_t < 4.0 or holding or character.is_ragdoll():
+		return
+	screen_check_t = 0.0
+	_read_screens()
+	if usable_right <= usable_left:
+		usable_left = desk_rect.position.x
+		usable_right = desk_rect.end.x
+	var sig := "%s|%s|%s|%s" % [str(screens), str(usable), usable_left, usable_right]
+	if sig == screen_signature:
+		return
+	if screen_signature != "":
+		print("[kevin] ekran duzeni degisti, yeniden kuruluyor")
+		_build_world_edges()
+	screen_signature = sig
+
 
 func _read_screens() -> void:
 	screens.clear()
@@ -367,6 +400,9 @@ func _build_lights() -> void:
 ## Her ekranin alt kenari bir zemin; masaustunun dis kenarlari ve tavani duvar.
 ## Ekranlar farkli yukseklikteyse her biri kendi zeminini aliyor.
 func _build_world_edges() -> void:
+	for n in edge_nodes:
+		n.queue_free()
+	edge_nodes.clear()
 	# Her ekranin zemini masaustunun en altina kadar DOLU bir blok: alcak ekranin
 	# (laptop, alti 720'de) altinda ekrani olmayan bos alan var, karakter oraya
 	# dusup gorunmez olmasin. Yan yana farkli yukseklikte ekranlar arasinda bu
@@ -383,6 +419,7 @@ func _build_world_edges() -> void:
 		body.add_child(shape)
 		body.position = Vector3(r.position.x / PX_PER_UNIT + width / 2.0, floor_y - depth / 2.0, 0)
 		add_child(body)
+		edge_nodes.append(body)
 
 	# Yan duvarlar ekranin fiziksel kenarinda degil, panellerin (caelestia bari
 	# solda 0-82 arasi) bittigi yerde: karakter barin arkasina girmesin.
@@ -398,6 +435,7 @@ func _build_world_edges() -> void:
 		wall.add_child(ws)
 		wall.position = e[0]
 		add_child(wall)
+		edge_nodes.append(wall)
 
 
 # =====================================================================
@@ -633,8 +671,13 @@ func _physics_process(delta: float) -> void:
 # kamera yaklasir, menu ustten ve yanlardan gelir.
 # =====================================================================
 
-enum { MENU_CLOSED, MENU_RESIZING, MENU_OPEN, MENU_CLOSING }
+enum { MENU_CLOSED, MENU_FLYING, MENU_RESIZING, MENU_OPEN, MENU_CLOSING }
 const MENU_FLY_TIME := 0.9
+## Kevin kendi kucuk penceresiyle menunun ortasina ucma suresi
+const MENU_TRAVEL_TIME := 1.0
+var menu_travel_t := 0.0
+## Menunun ortasina gelince (1:1 boyutta) ayaklarinin yerden yuksekligi
+var menu_fly_lift := 0.0
 var menu_state := MENU_CLOSED
 var menu_screen := Rect2i()
 var menu_k := 0.0
@@ -665,18 +708,19 @@ func _open_menu() -> void:
 	# Normal moddaki siluet tiklama alani menude kalirsa hicbir dugmeye
 	# basilamiyordu
 	DisplayServer.window_set_mouse_passthrough(PackedVector2Array())
-	menu_state = MENU_RESIZING
+	# Once Kevin kendi penceresiyle menunun ortasina gercekten ucar, menu
+	# orada acilir (livi: "menuye gelirken gercekten oraya gitsin")
+	menu_state = MENU_FLYING
+	menu_travel_t = 0.0
 	menu_k = 0.0
 	menu_from_x = character.root_x
 	menu_target_x = _px_to_world_x(menu_screen.get_center().x)
+	menu_fly_lift = maxf(0.0, _px_to_world(Vector2(menu_screen.get_center())).y - character.ground_y - 1.0)
 	menu_reload = false
 	character.enter_menu()
 	# Menudeyken Kevin duymasin (ayar yaparken konusulanlar ona gitmesin)
 	if brain:
 		brain.send({"type": "menu", "open": true})
-	get_window().size = menu_screen.size
-	DisplayServer.window_set_position(menu_screen.position)
-	DisplayServer.window_move_to_foreground()
 
 
 func _close_menu() -> void:
@@ -698,18 +742,26 @@ func _finish_close() -> void:
 	if menu_vp:
 		menu_vp.queue_free()
 		menu_vp = null
-	character.exit_menu()
 	if brain:
 		brain.send({"type": "menu", "open": false})
 	# Kamera menude yakinlastirilmisti; geri alinmazsa Kevin minicik kaliyordu
 	camera.size = WIN_SIZE.y / PX_PER_UNIT
 	if menu_reload:
+		character.exit_menu()
 		get_tree().reload_current_scene()
 		return
 	if replay_splash:
 		replay_splash = false
+		character.exit_menu()
 		_start_splash()
 		return
+	# Menunun ortasinda havada: acilis ekranindaki gibi oradan masaustune
+	# duser, sonra kalkar (livi: "girisdeki gibi oradan asagi dussun")
+	character.emote = null
+	character.hold_pose = false
+	character.menu_yaw = 0.0
+	character.start_ragdoll()
+	character.menu_lift = 0.0
 	get_window().size = WIN_SIZE
 	win_pos = _desired_window_pos()
 	_apply_window()
@@ -790,9 +842,30 @@ func _menu_input(event: InputEvent) -> void:
 
 func _update_menu(delta: float) -> void:
 	var vp := get_viewport().get_visible_rect().size
+	if menu_state == MENU_FLYING:
+		# Kucuk pencere Kevin'le birlikte yay cizerek menunun ortasina gider
+		menu_travel_t += delta
+		var t := clampf(menu_travel_t / MENU_TRAVEL_TIME, 0.0, 1.0)
+		var e := smoothstep(0.0, 1.0, t)
+		character.root_x = lerpf(menu_from_x, menu_target_x, e)
+		character.menu_lift = menu_fly_lift * e + sin(t * PI) * 1.2
+		character.menu_yaw = signf(menu_target_x - menu_from_x) * 0.8 * sin(t * PI)
+		win_pos = _desired_window_pos()
+		_apply_window()
+		if t >= 1.0:
+			character.menu_yaw = 0.0
+			menu_state = MENU_RESIZING
+			get_window().size = menu_screen.size
+			DisplayServer.window_set_position(menu_screen.position)
+			DisplayServer.window_move_to_foreground()
+		return
 	if menu_state == MENU_RESIZING:
 		# Pencere boyutu Hyprland'de gecikmeli degisiyor; ekran boyutuna
-		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu
+		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu.
+		# Bu arada kamera 1:1 ve menunun ortasinda: Kevin yerinden kipirdamaz.
+		var mid := _px_to_world(Vector2(menu_screen.get_center()))
+		camera.position = Vector3(mid.x, mid.y, 30)
+		camera.size = vp.y / PX_PER_UNIT
 		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
 			menu_state = MENU_OPEN
 			_build_menu_ui(vp)
@@ -813,9 +886,10 @@ func _update_menu(delta: float) -> void:
 		character.menu_yaw += delta * 0.9
 
 	var k := smoothstep(0.0, 1.0, menu_k)
-	# Kevin ekranin ortasina ucuyor (yay cizerek)
-	character.root_x = lerpf(menu_from_x if menu_state != MENU_CLOSING else menu_target_x, menu_target_x, k if menu_state != MENU_CLOSING else 1.0)
-	character.menu_lift = sin(PI * clampf(menu_k, 0.0, 1.0)) * 1.1 if menu_state == MENU_OPEN and menu_k < 1.0 else 0.0
+	# Kevin menunun ortasindan sahnedeki yerine iner (kamera yaklasirken);
+	# kapanirken tersi: ortaya yukselir, sonra oradan duser
+	character.root_x = menu_target_x
+	character.menu_lift = menu_fly_lift * (1.0 - k)
 
 	# Kamera: 1:1'den (karakter oldugu yerde) yakin plana; Kevin menunun
 	# verdigi sahne yerinde (ortasi, ayak hizasi, boyu)
@@ -825,7 +899,6 @@ func _update_menu(delta: float) -> void:
 	var zoom_final := stage_h / (2.0 * PX_PER_UNIT)
 	var zoom := lerpf(1.0, zoom_final, k)
 	var c0 := _px_to_world(Vector2(menu_screen.get_center()))
-	c0.y = maxf(c0.y, ground + 1.0)
 	var stage_x: float = menu_ui.stage_x if menu_ui else vp.x * 0.33
 	var c1 := Vector3(menu_target_x + (0.5 * vp.x - stage_x) / (PX_PER_UNIT * zoom_final), ground + (feet_y - 0.5 * vp.y) / (PX_PER_UNIT * zoom_final), 0)
 	var c := c0.lerp(c1, k)
@@ -1000,7 +1073,7 @@ func _process(delta: float) -> void:
 			_open_menu()
 		if menu_ui and test_menu_clock > 1.5:
 			menu_ui._select_tab(test_menu)
-		if test_menu_clock > 3.0 and test_menu_clock < 3.1:
+		if test_menu_clock > 5.0 and test_menu_clock < 5.1:
 			_close_menu()
 		if test_diag and Engine.get_process_frames() % 20 == 0:
 			print("MENU t=%.2f durum=%d k=%.2f vp=%s mod=%d" % [test_menu_clock, menu_state, menu_k, str(get_viewport().get_visible_rect().size), character.mode])
@@ -1010,6 +1083,7 @@ func _process(delta: float) -> void:
 		return
 	if onboard_tab != "" and character.mode == 0:
 		_open_menu()
+	_check_screens(delta)
 	_update_character_screen()
 	if test_emote == "wall_sit" and character.mode == 0 and character.after_walk == "" and character.anim_state != "emote":
 		character._go_wall_sit()
