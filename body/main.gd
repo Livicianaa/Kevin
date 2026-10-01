@@ -897,7 +897,7 @@ func _update_splash(delta: float) -> void:
 		character.menu_lift = splash_lift + 3.0 * (1.0 - ease(k, 0.35)) - sin(k * PI) * 0.15 * (1.0 if k < 1.0 else 0.0)
 		var ready_brain: bool = brain == null or brain.connected
 		var prog := minf(splash_t / SPLASH_MIN, 0.9 if not ready_brain else 1.0)
-		splash_front.set_progress(prog, "Hazır!" if ready_brain and splash_t >= SPLASH_MIN else "Beyin bağlanıyor")
+		splash_front.set_progress(prog, "Hazırım!" if ready_brain and splash_t >= SPLASH_MIN else "Hazırlanıyorum...")
 		if (ready_brain and splash_t >= SPLASH_MIN) or splash_t >= SPLASH_MAX:
 			_end_splash()
 		_splash_camera(vp, 0.0)

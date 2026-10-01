@@ -20,7 +20,7 @@ var H := 925.0
 var big: Font
 var small: Font
 var bar_progress := 0.0
-var bar_text := "Beyin bağlanıyor"
+var bar_text := "Hazırlanıyorum..."
 var bar_piece: Control
 var pieces := []
 
@@ -108,12 +108,6 @@ static func make_back(size: Vector2) -> Control:
 	var font := anton()
 	var sf := ui_font(600)
 
-	# Zemin YOK (livi: "gri arka plan olmasin"): parcalar masaustunun ustunde.
-	# Sadece kose yarim ton noktalari.
-	_piece(root, size, size / 2.0, func(ci: CanvasItem):
-		_halftone(ci, Rect2(14, 14, w * 0.34, h * 0.12), w * 0.022, Color(C_CREAM, 0.85), w * 0.009, Vector2(14, 14))
-		_halftone(ci, Rect2(w * 0.7, h * 0.86, w * 0.29, h * 0.13), w * 0.022, Color(C_CREAM, 0.5), w * 0.008, Vector2(w, h)))
-
 	# Mint paralelkenar (sol orta)
 	_piece(root, size, Vector2(w * 0.25, h * 0.45), func(ci: CanvasItem):
 		ci.draw_colored_polygon(PackedVector2Array([
@@ -141,30 +135,6 @@ static func make_back(size: Vector2) -> Control:
 		_big_text(ci, font, "KEVİN", Vector2(w * 0.05, h * 0.36), int(h * 0.2), C_PLUM, C_CREAM, int(h * 0.009), -0.16, -0.06))
 	title.set_meta("anim", "slam")
 
-	# Baglanti cizgileri (cerceve) + daire dugumler + kucuk yazilar
-	var wires := _piece(root, size, size / 2.0, func(ci: CanvasItem):
-		var a := Vector2(w * 0.07, h * 0.18)
-		var b := Vector2(w * 0.93, h * 0.73)
-		var col := Color(C_CREAM, 0.75)
-		ci.draw_line(Vector2(a.x, a.y), Vector2(b.x, a.y), col, 1.5)
-		ci.draw_line(Vector2(b.x, a.y), Vector2(b.x, b.y), col, 1.5)
-		ci.draw_line(Vector2(a.x, b.y), Vector2(b.x, b.y), col, 1.5)
-		ci.draw_line(Vector2(a.x, a.y), Vector2(a.x, b.y), col, 1.5)
-		for p in [a, Vector2(b.x, a.y), b, Vector2(a.x, b.y), Vector2(w * 0.5, b.y), Vector2(b.x, h * 0.45)]:
-			ci.draw_circle(p, w * 0.012, C_CREAM)
-			ci.draw_arc(p, w * 0.012, 0, TAU, 16, C_PLUM, 1.5)
-		var fs := int(h * 0.016)
-		# Kucuk yazilar: mint alanda ve krem patlamanin ustunde okunsun diye koyu
-		ci.draw_string(sf, Vector2(w * 0.1, h * 0.45), "ODAK//", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_string(sf, Vector2(w * 0.1, h * 0.47), "ZEKA//", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_string(sf, Vector2(w * 0.1, h * 0.49), "DOSTLUK//", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_arc(Vector2(w * 0.075, h * 0.467), w * 0.016, 0, TAU, 24, C_PLUM, 2.0)
-		ci.draw_line(Vector2(w * 0.059, h * 0.467), Vector2(w * 0.091, h * 0.467), C_PLUM, 1.5)
-		ci.draw_string(sf, Vector2(w * 0.66, h * 0.05), "Masaüstünde yaşayan", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_string(sf, Vector2(w * 0.66, h * 0.072), "yapay zeka arkadaşın.", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_string(sf, Vector2(w * 0.74, h * 0.215), "SÜRÜM 0.2", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PLUM)
-		ci.draw_string(sf, Vector2(w * 0.74, h * 0.235), "ÇIKTI!", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_PINK))
-	wires.set_meta("anim", "fade")
 	return root
 
 
@@ -183,7 +153,7 @@ func build(sz: Vector2) -> void:
 	var h := H
 
 	var hello := _piece(self, sz, Vector2(w * 0.2, h * 0.1), func(ci: CanvasItem):
-		_big_text(ci, big, "MERHABA,", Vector2(w * 0.05, h * 0.135), int(h * 0.085), C_MINT, C_PLUM, int(h * 0.006), -0.2, -0.04))
+		_big_text(ci, big, "SELAM, BEN", Vector2(w * 0.05, h * 0.135), int(h * 0.085), C_MINT, C_PLUM, int(h * 0.006), -0.2, -0.04))
 	hello.set_meta("anim", "left")
 
 	# Pembe unlem cizgileri (kafanin yaninda)
@@ -207,18 +177,19 @@ func build(sz: Vector2) -> void:
 		sb.border_color = C_PLUM
 		sb.set_border_width_all(2)
 		ci.draw_style_box(sb, r)
-		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.024), "AI ARKADAŞ", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.019), C_PLUM)
-		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.048), "「Created by Liviciana」", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.014), C_PLUM))
+		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.024), "KEVİN v0.2", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.019), C_PLUM)
+		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.048), "Created by Liviciana", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.014), C_PLUM))
 	tag.set_meta("anim", "pop")
 
 	# Koyu konusma patlamasi (sol alt)
 	var speech := _piece(self, sz, Vector2(w * 0.19, h * 0.68), func(ci: CanvasItem):
 		var c := Vector2(w * 0.19, h * 0.68)
 		_star(ci, c, w * 0.2, w * 0.15, 12, C_PLUM, C_CREAM, 2.5, 0.1)
-		var tr := Transform2D(-0.14, Vector2.ONE, -0.12, c + Vector2(-w * 0.13, -h * 0.01))
+		var tr := Transform2D(-0.14, Vector2.ONE, -0.12, c + Vector2(-w * 0.11, -h * 0.03))
 		ci.draw_set_transform_matrix(tr)
-		ci.draw_string(big, Vector2.ZERO, "Kevin'e seslen,", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.032), C_CREAM)
-		ci.draw_string(big, Vector2(0, h * 0.04), "gerisini o halleder", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.032), C_CREAM)
+		ci.draw_string(big, Vector2.ZERO, "Adımı söyle,", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.034), C_CREAM)
+		ci.draw_string(big, Vector2(0, h * 0.042), "gerisini ben", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.034), C_CREAM)
+		ci.draw_string(big, Vector2(0, h * 0.084), "hallederim", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.034), C_CREAM)
 		ci.draw_set_transform_matrix(Transform2D.IDENTITY))
 	speech.set_meta("anim", "pop")
 
@@ -235,7 +206,7 @@ func build(sz: Vector2) -> void:
 		ci.draw_rect(Rect2(c - Vector2(w * 0.014, w * 0.035), Vector2(w * 0.028, w * 0.05)), C_PLUM)
 		ci.draw_arc(c + Vector2(0, w * 0.005), w * 0.028, 0.0, PI, 16, C_PLUM, 3.0)
 		ci.draw_line(c + Vector2(0, w * 0.033), c + Vector2(0, w * 0.045), C_PLUM, 3.0)
-		ci.draw_string(small, r.position + Vector2(w * 0.025, r.size.y - w * 0.02), "SES AÇIK", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.016), C_PLUM)
+		ci.draw_string(small, r.position + Vector2(w * 0.012, r.size.y - w * 0.02), "SENİ DİNLİYORUM", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.0115), C_PLUM)
 		var cur := Vector2(w * 0.935, h * 0.635)
 		var arrow := PackedVector2Array([cur, cur + Vector2(0, w * 0.07), cur + Vector2(w * 0.018, w * 0.052), cur + Vector2(w * 0.032, w * 0.08),
 			cur + Vector2(w * 0.042, w * 0.075), cur + Vector2(w * 0.028, w * 0.047), cur + Vector2(w * 0.05, w * 0.045)])
@@ -257,7 +228,7 @@ func build(sz: Vector2) -> void:
 		sb.bg_color = C_PLUM
 		sb.set_corner_radius_all(8)
 		ci.draw_style_box(sb, r)
-		ci.draw_string(small, r.position + Vector2(w * 0.02, h * 0.03), "SESLEN: KEVİN  ·  ORTA TIK: ÇAĞIR  ·  SAĞ TIK: MENÜ", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.0145), C_CREAM))
+		ci.draw_string(small, r.position + Vector2(w * 0.02, h * 0.03), "\"Kevin\" de: konuşalım  ·  Sağ tık: menü", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.0145), C_CREAM))
 	hint.set_meta("anim", "fade")
 
 	# Yukleniyor cubugu (referanstaki "<<<< Dopamine detox")
@@ -278,15 +249,6 @@ func build(sz: Vector2) -> void:
 			ci.draw_polyline(PackedVector2Array([Vector2(x + w * 0.01, cy - h * 0.011), Vector2(x, cy), Vector2(x + w * 0.01, cy + h * 0.011)]), C_CREAM, 3.0)
 		ci.draw_string(small, Vector2(r.position.x + w * 0.09, r.get_center().y + h * 0.007), bar_text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.017), C_CREAM))
 	bar_piece.set_meta("anim", "right")
-
-	# Alt kose yazilari
-	var corners := _piece(self, sz, sz / 2.0, func(ci: CanvasItem):
-		var fs := int(h * 0.013)
-		ci.draw_string(small, Vector2(w * 0.04, h * 0.975), "© Created by Liviciana  /  Kevin", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_CREAM)
-		ci.draw_string(small, Vector2(w * 0.8, h * 0.962), "KEVİN v0.2", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_CREAM)
-		ci.draw_string(small, Vector2(w * 0.8, h * 0.98), "Masaüstü arkadaşı  >", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_CREAM))
-	corners.set_meta("anim", "fade")
-
 
 func set_progress(p: float, text: String) -> void:
 	bar_progress = clampf(p, 0.0, 1.0)
