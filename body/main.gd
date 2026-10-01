@@ -11,6 +11,7 @@ const Character := preload("res://character.gd")
 const Settings := preload("res://settings.gd")
 const Menu := preload("res://menu.gd")
 const Brain := preload("res://brain.gd")
+const Splash := preload("res://splash.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
 var PX_PER_UNIT := 118.0
@@ -53,6 +54,7 @@ var test_anim := ""
 ## Test: acilista bu emote oynasin
 var test_emote := ""
 var test_led := false
+var test_splash := false
 ## Test: 1. saniyede menuyu ac (deger: acilacak sekme)
 var test_menu := ""
 var test_menu_clock := 0.0
@@ -78,6 +80,8 @@ func _ready() -> void:
 			shot_prefix = arg.substr(7)
 		elif arg.begins_with("--menu"):
 			test_menu = arg.substr(7) if arg.length() > 6 else "karakter"
+		elif arg == "--splash":
+			test_splash = true
 		elif arg == "--led":
 			test_led = true
 		elif arg == "--throw":
@@ -124,6 +128,9 @@ func _ready() -> void:
 	win_pos = _desired_window_pos()
 	_apply_window()
 
+	if (not testing_flags() or test_splash) and OS.get_environment("KEVIN_NO_SPLASH") == "":
+		_start_splash()
+
 	# Beyin (ses, sohbet): testlerde baslatma
 	var testing := test_offscreen or test_grab != "" or test_diag or shot_prefix != "" or test_menu != "" or test_emote != "" or test_anim != ""
 	if not testing and OS.get_environment("KEVIN_NO_BRAIN") == "":
@@ -141,6 +148,10 @@ func _ready() -> void:
 
 
 var body_settings := {}
+
+
+func testing_flags() -> bool:
+	return test_offscreen or test_grab != "" or test_diag or shot_prefix != "" or test_menu != "" or test_emote != "" or test_anim != ""
 var brain: Node = null
 
 
@@ -471,6 +482,10 @@ var led_speed := 0.0
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if splash_state != SPLASH_NONE:
+		if event is InputEventMouseButton and event.pressed and splash_state == SPLASH_SHOW:
+			_end_splash()
+		return
 	if menu_state != MENU_CLOSED:
 		_menu_input(event)
 		return
@@ -771,7 +786,156 @@ func _update_menu(delta: float) -> void:
 	mat.set_shader_parameter("rect_px", vp)
 
 
+# =====================================================================
+# Acilis ekrani (poster): Kevin ortada kollarini kavusturmus, parcalar
+# carparak gelir; beyin hazir olunca poster dagilir, Kevin masaustune duser.
+# =====================================================================
+
+enum { SPLASH_NONE, SPLASH_WAIT, SPLASH_SHOW, SPLASH_OUT }
+const SPLASH_MIN := 2.8
+const SPLASH_MAX := 7.0
+const SPLASH_OUT_TIME := 0.55
+var splash_state := SPLASH_NONE
+var splash_rect := Rect2i()
+var splash_t := 0.0
+var splash_out_t := 0.0
+var splash_lift := 0.0
+var splash_layer: CanvasLayer
+var splash_front: Control
+var splash_back: Control
+var splash_vp: SubViewport
+var splash_bg: MeshInstance3D
+
+
+func _start_splash() -> void:
+	var scr := _screen_at_x(_world_to_px(_character_center()).x)
+	var h := roundi(scr.size.y * 0.86)
+	var sz := Vector2i(roundi(h * 0.8), h)
+	splash_rect = Rect2i(scr.position + (scr.size - sz) / 2, sz)
+	character.ground_y = (desk_rect.end.y - scr.end.y) / PX_PER_UNIT
+	character.root_x = _px_to_world_x(splash_rect.get_center().x)
+	character.enter_menu()
+	character.menu_yaw = 0.0
+	# Kevin ekranin (posterin) ortasinda havada: sonunda buradan masaustune duser
+	splash_lift = _px_to_world(Vector2(splash_rect.get_center())).y - character.ground_y - 1.0
+	character.menu_lift = splash_lift + 3.0
+	character.play_emote("fold_arms", 999.0)
+	DisplayServer.window_set_mouse_passthrough(PackedVector2Array())
+	get_window().size = splash_rect.size
+	DisplayServer.window_set_position(splash_rect.position)
+	splash_state = SPLASH_WAIT
+
+
+func _build_splash(vp: Vector2) -> void:
+	# Arka katman: SubViewport -> Kevin'in arkasinda 3B duzlem
+	splash_vp = SubViewport.new()
+	splash_vp.size = Vector2i(vp)
+	splash_vp.transparent_bg = true
+	splash_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(splash_vp)
+	splash_back = Splash.make_back(vp)
+	splash_vp.add_child(splash_back)
+	splash_bg = MeshInstance3D.new()
+	splash_bg.mesh = QuadMesh.new()
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = splash_vp.get_texture()
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	splash_bg.material_override = mat
+	splash_bg.position = Vector3(0, 0, -40)
+	camera.add_child(splash_bg)
+
+	# On katman
+	splash_layer = CanvasLayer.new()
+	add_child(splash_layer)
+	splash_front = Splash.new()
+	splash_layer.add_child(splash_front)
+	splash_front.build(vp)
+	Splash.animate_in(splash_back, 0.0)
+	Splash.animate_in(splash_front, 0.35)
+
+
+func _splash_camera(vp: Vector2, k: float) -> void:
+	# Kevin posterin ortasinda, boyunun %60'i kadar
+	var zoom_final := 0.6 * vp.y / (2.0 * PX_PER_UNIT)
+	var zoom := lerpf(zoom_final, 1.0, k)
+	var p := Vector3(character.root_x, character.ground_y + splash_lift + 1.0, 0)
+	var c1 := Vector3(p.x, p.y + 0.05 * vp.y / (PX_PER_UNIT * zoom_final), 0)
+	var c0 := _px_to_world(Vector2(splash_rect.get_center()))
+	var c := c1.lerp(c0, k)
+	camera.position = Vector3(c.x, c.y, 30)
+	camera.size = vp.y / (PX_PER_UNIT * zoom)
+	if splash_bg:
+		# Poster dunyada sabit boyutta: kamera uzaklastikca kuculup kaybolur
+		(splash_bg.mesh as QuadMesh).size = Vector2(vp.x, vp.y) / (PX_PER_UNIT * zoom_final)
+
+
+func _update_splash(delta: float) -> void:
+	var vp := get_viewport().get_visible_rect().size
+	if splash_state == SPLASH_WAIT:
+		if absf(vp.x - splash_rect.size.x) < 4 and absf(vp.y - splash_rect.size.y) < 4:
+			_build_splash(vp)
+			splash_state = SPLASH_SHOW
+			splash_t = 0.0
+		else:
+			return
+
+	if splash_state == SPLASH_SHOW:
+		splash_t += delta
+		# Kevin yukaridan dusup yerine oturur (hafif sekme)
+		var k := clampf((splash_t - 0.1) / 0.6, 0.0, 1.0)
+		character.menu_lift = splash_lift + 3.0 * (1.0 - ease(k, 0.35)) - sin(k * PI) * 0.15 * (1.0 if k < 1.0 else 0.0)
+		var ready_brain: bool = brain == null or brain.connected
+		var prog := minf(splash_t / SPLASH_MIN, 0.9 if not ready_brain else 1.0)
+		splash_front.set_progress(prog, "Hazır!" if ready_brain and splash_t >= SPLASH_MIN else "Beyin bağlanıyor")
+		if (ready_brain and splash_t >= SPLASH_MIN) or splash_t >= SPLASH_MAX:
+			_end_splash()
+		_splash_camera(vp, 0.0)
+	elif splash_state == SPLASH_OUT:
+		splash_out_t += delta
+		var k := smoothstep(0.0, 1.0, splash_out_t / SPLASH_OUT_TIME)
+		_splash_camera(vp, k)
+		(splash_bg.material_override as StandardMaterial3D).albedo_color.a = 1.0 - k
+		if splash_out_t >= SPLASH_OUT_TIME:
+			_finish_splash()
+
+
+func _end_splash() -> void:
+	if splash_state != SPLASH_SHOW:
+		return
+	splash_state = SPLASH_OUT
+	splash_out_t = 0.0
+	Splash.animate_out(splash_front)
+	Splash.animate_out(splash_back)
+
+
+func _finish_splash() -> void:
+	splash_state = SPLASH_NONE
+	if splash_layer:
+		splash_layer.queue_free()
+	if splash_vp:
+		splash_vp.queue_free()
+	if splash_bg:
+		splash_bg.queue_free()
+	splash_layer = null
+	splash_vp = null
+	splash_bg = null
+	# Kevin poster yerinde havada: oradan masaustune duser, sonra kalkar
+	character.emote = null
+	character.start_ragdoll()
+	character.menu_lift = 0.0
+	get_window().size = WIN_SIZE
+	camera.size = WIN_SIZE.y / PX_PER_UNIT
+	win_pos = _desired_window_pos()
+	_apply_window()
+
+
 func _process(delta: float) -> void:
+	if splash_state != SPLASH_NONE:
+		_update_splash(delta)
+		_process_shots(delta)
+		return
 	if test_menu != "":
 		test_menu_clock += delta
 		if test_menu_clock > 1.0 and test_menu_clock < 2.0 and menu_state == MENU_CLOSED and character.mode == 0:

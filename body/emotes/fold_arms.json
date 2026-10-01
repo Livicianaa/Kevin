@@ -1,0 +1,76 @@
+{
+ "name": "Kollar kavusturulmus",
+ "author": "Kevin (Liviciana)",
+ "description": "Quaternius Idle_FoldArms (CC0) durusundan omuz->el yonleri",
+ "emote": {
+  "beginTick": 0,
+  "endTick": 80,
+  "stopTick": 88,
+  "isLoop": "true",
+  "returnTick": 6,
+  "degrees": false,
+  "moves": [
+   {
+    "tick": 6,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -1.24,
+     "yaw": -0.78,
+     "roll": 0.05
+    }
+   },
+   {
+    "tick": 6,
+    "easing": "EASEINOUTSINE",
+    "leftArm": {
+     "pitch": -1.36,
+     "yaw": 0.7,
+     "roll": -0.05
+    }
+   },
+   {
+    "tick": 6,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.06,
+     "yaw": 0.1,
+     "roll": 0.1
+    }
+   },
+   {
+    "tick": 6,
+    "easing": "EASEINOUTSINE",
+    "rightLeg": {
+     "pitch": -0.05,
+     "roll": 0.07
+    }
+   },
+   {
+    "tick": 6,
+    "easing": "EASEINOUTSINE",
+    "leftLeg": {
+     "pitch": 0.05,
+     "roll": -0.07
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.1,
+     "yaw": 0.14,
+     "roll": 0.13
+    }
+   },
+   {
+    "tick": 80,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.06,
+     "yaw": 0.1,
+     "roll": 0.1
+    }
+   }
+  ]
+ }
+}

@@ -84,7 +84,7 @@ const EMOTE_POOLS := {
 	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
 		"jump", "jumping jacks", "selfie", "headspin", "tpose"],
 	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
-	"brain": ["think", "nod"],
+	"brain": ["think", "nod", "fold_arms"],
 }
 ## Dongulu emote'larin suresi (saniye) havuza gore
 const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0), "brain": Vector2(999.0, 999.0)}
