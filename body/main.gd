@@ -829,6 +829,7 @@ func _start_splash() -> void:
 	splash_lift = _px_to_world(Vector2(splash_rect.get_center())).y - character.ground_y - 1.0
 	character.menu_lift = splash_lift + 3.0
 	character.play_emote("fold_arms", 999.0)
+	character.hold_pose = true
 	DisplayServer.window_set_mouse_passthrough(PackedVector2Array())
 	get_window().size = splash_rect.size
 	DisplayServer.window_set_position(splash_rect.position)
@@ -932,6 +933,7 @@ func _finish_splash() -> void:
 	splash_bg = null
 	# Kevin poster yerinde havada: oradan masaustune duser, sonra kalkar
 	character.emote = null
+	character.hold_pose = false
 	character.start_ragdoll()
 	character.menu_lift = 0.0
 	get_window().size = WIN_SIZE

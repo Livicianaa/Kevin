@@ -239,6 +239,8 @@ const BRAIN_PLAY_EMOTE := {"wave": "meeting", "wake": "meeting", "nod-yes": "nod
 
 var brain_state := "idle"
 var brain_emote := ""
+## Acilis ekraninda poz (kollar kavusturulmus) beyin olaylariyla bozulmasin
+var hold_pose := false
 
 
 func brain_busy() -> bool:
@@ -249,7 +251,10 @@ func on_brain_state(state: String) -> void:
 	if OS.is_debug_build() and state != brain_state:
 		print("[kevin] beyin: ", state)
 	brain_state = state
-	if mode != Mode.ANIMATED and mode != Mode.MENU:
+	if hold_pose or (mode != Mode.ANIMATED and mode != Mode.MENU):
+		return
+	# Menude muzik/uyku tepkisi yok (menude dans etmeye basliyordu)
+	if mode == Mode.MENU and state in ["dance", "sleep", "night-sleepy"]:
 		return
 	# Onceki durumun emote'unu birak
 	if brain_emote != "" and emote and emote.name == brain_emote:
@@ -269,7 +274,7 @@ func on_brain_state(state: String) -> void:
 
 
 func on_brain_play(name: String) -> void:
-	if mode != Mode.ANIMATED and mode != Mode.MENU:
+	if hold_pose or (mode != Mode.ANIMATED and mode != Mode.MENU):
 		return
 	var e: String = BRAIN_PLAY_EMOTE.get(name, "")
 	if e == "" or not emotes.has(e):
