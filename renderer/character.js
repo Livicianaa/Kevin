@@ -113,6 +113,22 @@ function worldFrozen() {
   return Boolean(busyState || conversationActive || sleeping || voiceActive());
 }
 
+// Menudeki ayarlar (uyku suresi, gece uykusu) dosyadan; birkac saniyede bir
+let liveCfg = {};
+async function refreshLiveCfg() {
+  try {
+    liveCfg = await window.kevinAPI.getConfig();
+  } catch {}
+}
+refreshLiveCfg();
+setInterval(refreshLiveCfg, 5000);
+
+function sleepAfterMs() {
+  const min = Number(liveCfg.sleepAfterMin);
+  if (liveCfg.sleepAfterMin === undefined || Number.isNaN(min)) return SLEEP_AFTER_MS;
+  return min <= 0 ? Infinity : min * 60 * 1000;
+}
+
 function refreshKevinState() {
   if (forcedAnim) return;
   if (busyState) return window.KevinSkin.setState(busyState);
@@ -121,7 +137,7 @@ function refreshKevinState() {
   if (conversationActive) return window.KevinSkin.setState('idle');
 
   // Uyku sadece karakter zeminde bostayken; tirmanirken uyuyup dusmesin.
-  sleeping = Date.now() - lastInteraction > SLEEP_AFTER_MS && (!world || world.mode === 'idle');
+  sleeping = Date.now() - lastInteraction > sleepAfterMs() && (!world || world.mode === 'idle');
   if (sleeping) return window.KevinSkin.setState('sleep');
 
   if (world && world.mode !== 'idle') return window.KevinSkin.setState(world.animation);
@@ -130,7 +146,7 @@ function refreshKevinState() {
   if (musicPlaying) return window.KevinSkin.setState('dance');
 
   const hour = new Date().getHours();
-  if (hour >= NIGHT_START && hour < NIGHT_END) return window.KevinSkin.setState('night-sleepy');
+  if (liveCfg.nightSleepy !== false && hour >= NIGHT_START && hour < NIGHT_END) return window.KevinSkin.setState('night-sleepy');
   window.KevinSkin.setState('idle');
 }
 
@@ -391,9 +407,10 @@ async function voiceReply(text, cfg) {
     trimHistory();
   } catch (err) {
     conversationHistory.pop();
-    reply = err.message === 'zaman asimi'
-      ? 'Bu biraz uzun surdu, tekrar sorar misin?'
-      : 'Bir sorun cikti, tekrar soyler misin?';
+    const L = await window.kevinAPI.langPack();
+    if (err.message === 'zaman asimi') reply = L.slow;
+    else if (String(err.message).includes('NO_KEY')) reply = L.noKey;
+    else reply = L.error;
     console.error('[kevin] sohbet hatasi:', err.message);
   }
 
@@ -408,8 +425,21 @@ async function voiceReply(text, cfg) {
   touchVoiceSession(cfg.voiceSessionMs);
 }
 
+// Govdenin menusu acikken duymuyor
+let bodyMenuOpen = false;
+
 if (BRAIN) {
   window.kevinAPI.onBodyCommand(async (msg) => {
+    if (msg.type === 'lang') {
+      // Yeni dilin sesini simdiden indirmeye basla
+      window.kevinAPI.langPack();
+      return;
+    }
+    if (msg.type === 'menu') {
+      bodyMenuOpen = Boolean(msg.open);
+      if (bodyMenuOpen && voiceActive() && !voiceBusy) endVoiceSession();
+      return;
+    }
     if (msg.type === 'wake') {
       // Karaktere tiklandi: adi soylenmis gibi
       const cfg = await window.kevinAPI.getConfig();
@@ -419,6 +449,7 @@ if (BRAIN) {
 }
 
 async function handleVoice(text) {
+  if (bodyMenuOpen) return;
   if (BRAIN) window.kevinAPI.bodyEvent({ type: 'heard', text });
   // Bir sey takildiysa kilitli kalmayalim: uzun suredir mesgulse sifirla.
   if (voiceBusy && Date.now() - voiceBusySince > VOICE_STUCK_MS) {
@@ -448,7 +479,8 @@ async function handleVoice(text) {
       }
 
       // Sadece cagirdi: donup karsilik ver
-      const replies = (cfg.wakeReplies && cfg.wakeReplies.length ? cfg.wakeReplies : DEFAULT_WAKE_REPLIES);
+      const L = await window.kevinAPI.langPack();
+      const replies = (cfg.wakeReplies && cfg.wakeReplies.length ? cfg.wakeReplies : (L.wake || DEFAULT_WAKE_REPLIES));
       const answer = replies[Math.floor(Math.random() * replies.length)];
       setVoiceState(VOICE_SPEAKING);
       showBubble(answer);
@@ -596,7 +628,7 @@ if (new URLSearchParams(window.location.search).get('selftest')) {
       } else {
         console.log('SELFTEST kullanilabilir modeller:', (list.models || []).join(', ').slice(0, 400));
       }
-      const reply = await window.kevinAPI.chat([{ role: 'user', content: 'Tek kelimeyle selam ver.' }]);
+      const reply = await window.kevinAPI.chat([{ role: 'user', content: 'Selam, benim adım Liviciana. Bunu aklında tut.' }]);
       console.log('SELFTEST LLM cevabi:', JSON.stringify(reply).slice(0, 160));
       const audio = await window.kevinAPI.speak(reply);
       console.log('SELFTEST TTS uretildi:', audio.length, 'bayt base64');

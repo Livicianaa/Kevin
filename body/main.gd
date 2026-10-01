@@ -12,6 +12,7 @@ const Settings := preload("res://settings.gd")
 const Menu := preload("res://menu.gd")
 const Brain := preload("res://brain.gd")
 const Splash := preload("res://splash.gd")
+const I18n := preload("res://i18n.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
 var PX_PER_UNIT := 118.0
@@ -138,6 +139,7 @@ func _ready() -> void:
 		add_child(brain)
 		brain.state_changed.connect(character.on_brain_state)
 		brain.played.connect(character.on_brain_play)
+		brain.mood.connect(character.on_brain_mood)
 		brain.said.connect(func(t): print("[kevin] diyor: ", t))
 		brain.heard.connect(func(t): print("[kevin] duydu: ", t))
 
@@ -167,6 +169,9 @@ func _apply_behaviour(cfg: Dictionary) -> void:
 	character.look_enabled = cfg.look
 	character.wall_sit_enabled = cfg.wall_sit
 	character.fun_enabled = cfg.fun
+	character.walk_speed_factor = float(cfg.walk_speed)
+	character.dance_enabled = cfg.dance
+	character.mood_enabled = cfg.mood
 
 
 func _strip_decorations() -> void:
@@ -643,6 +648,8 @@ var menu_reload := false
 var menu_ground_y := 0.0
 var menu_vp: SubViewport
 var replay_splash := false
+## Menu acilinca kendiliginden acilacak sayfa (ilk kurulum)
+var onboard_tab := ""
 
 
 func _open_menu() -> void:
@@ -664,6 +671,9 @@ func _open_menu() -> void:
 	menu_target_x = _px_to_world_x(menu_screen.get_center().x)
 	menu_reload = false
 	character.enter_menu()
+	# Menudeyken Kevin duymasin (ayar yaparken konusulanlar ona gitmesin)
+	if brain:
+		brain.send({"type": "menu", "open": true})
 	get_window().size = menu_screen.size
 	DisplayServer.window_set_position(menu_screen.position)
 	DisplayServer.window_move_to_foreground()
@@ -689,6 +699,8 @@ func _finish_close() -> void:
 		menu_vp.queue_free()
 		menu_vp = null
 	character.exit_menu()
+	if brain:
+		brain.send({"type": "menu", "open": false})
 	# Kamera menude yakinlastirilmisti; geri alinmazsa Kevin minicik kaliyordu
 	camera.size = WIN_SIZE.y / PX_PER_UNIT
 	if menu_reload:
@@ -704,7 +716,7 @@ func _finish_close() -> void:
 
 
 func _build_menu_ui(size_px: Vector2) -> void:
-	# Kagit zemin ve ensō: Kevin'in ARKASINDA (SubViewport -> kameraya bagli duzlem)
+	# Kagit zemin ve logo: Kevin'in ARKASINDA (SubViewport -> kameraya bagli duzlem)
 	menu_vp = SubViewport.new()
 	menu_vp.size = Vector2i(size_px)
 	menu_vp.transparent_bg = true
@@ -751,8 +763,16 @@ func _menu_action(name: String) -> void:
 			replay_splash = true
 			_close_menu()
 		"emote":
-			var pool := "fun" if character.fun_enabled else "idle"
-			character.play_emote(character._random_emote(pool))
+			character.play_emote(character._random_emote(["fun", "social", "dance"].pick_random()))
+		"relang":
+			# Dil degisti: menu yeni dilde yeniden kurulur, ayni sayfada kalir;
+			# beyin yeni dilin sesini indirmeye baslar
+			if brain:
+				brain.send({"type": "lang"})
+			menu_layer.queue_free()
+			menu_vp.queue_free()
+			_build_menu_ui(get_viewport().get_visible_rect().size)
+			menu_ui.open_instant("yapay_zeka")
 
 
 func _menu_input(event: InputEvent) -> void:
@@ -780,6 +800,9 @@ func _update_menu(delta: float) -> void:
 			return
 	elif menu_state == MENU_OPEN:
 		menu_k = minf(1.0, menu_k + delta / MENU_FLY_TIME)
+		if onboard_tab != "" and menu_k >= 1.0 and menu_ui:
+			menu_ui._select_tab(onboard_tab)
+			onboard_tab = ""
 	elif menu_state == MENU_CLOSING:
 		menu_k = maxf(0.0, menu_k - delta / 0.6)
 		if menu_k <= 0.0:
@@ -862,6 +885,7 @@ func _build_splash(vp: Vector2) -> void:
 	splash_vp.transparent_bg = true
 	splash_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(splash_vp)
+	Splash.lang = I18n.code_of(Settings.load_brain())
 	splash_back = Splash.make_back(vp)
 	splash_vp.add_child(splash_back)
 	splash_bg = MeshInstance3D.new()
@@ -882,7 +906,7 @@ func _build_splash(vp: Vector2) -> void:
 	splash_layer.add_child(splash_front)
 	splash_front.build(vp)
 	Splash.animate_in(splash_back, 0.0)
-	Splash.animate_in(splash_front, 1.0)
+	Splash.animate_in(splash_front, 0.0)
 
 
 func _splash_camera(vp: Vector2, k: float) -> void:
@@ -917,7 +941,7 @@ func _update_splash(delta: float) -> void:
 		character.menu_lift = splash_lift + 3.0 * (1.0 - ease(k, 0.35)) - sin(k * PI) * 0.15 * (1.0 if k < 1.0 else 0.0)
 		var ready_brain: bool = brain == null or brain.connected
 		var prog := minf(splash_t / SPLASH_MIN, 0.9 if not ready_brain else 1.0)
-		splash_front.set_progress(prog, "Hazırım!" if ready_brain and splash_t >= SPLASH_MIN else "Hazırlanıyorum...")
+		splash_front.set_progress(prog, Splash.tx("splash_ready") if ready_brain and splash_t >= SPLASH_MIN else Splash.tx("splash_loading"))
 		if (ready_brain and splash_t >= SPLASH_MIN) or splash_t >= SPLASH_MAX:
 			_end_splash()
 		_splash_camera(vp, 0.0)
@@ -959,6 +983,10 @@ func _finish_splash() -> void:
 	camera.size = WIN_SIZE.y / PX_PER_UNIT
 	win_pos = _desired_window_pos()
 	_apply_window()
+	# Ilk kurulum: API anahtari yoksa (ve yerel model secili degilse) Kevin
+	# kalkinca menu Yapay Zeka sayfasinda acilir; herkes kendi anahtarini girer
+	if brain and Menu.brain_needs_key(Settings.load_brain()):
+		onboard_tab = "yapay_zeka"
 
 
 func _process(delta: float) -> void:
@@ -980,6 +1008,8 @@ func _process(delta: float) -> void:
 		_update_menu(delta)
 		_process_shots(delta)
 		return
+	if onboard_tab != "" and character.mode == 0:
+		_open_menu()
 	_update_character_screen()
 	if test_emote == "wall_sit" and character.mode == 0 and character.after_walk == "" and character.anim_state != "emote":
 		character._go_wall_sit()

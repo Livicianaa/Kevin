@@ -14,6 +14,9 @@ const BODY_DEFAULTS := {
 	"look": true,
 	"wall_sit": true,
 	"fun": true,
+	"walk_speed": 1.0,
+	"dance": true,
+	"mood": true,
 }
 
 ## Beynin sagladigi saglayicilar (main.js PROVIDERS ile ayni)
@@ -127,3 +130,35 @@ static func import_skin(source: String) -> String:
 	var target := skins_dir().path_join(source.get_file())
 	DirAccess.copy_absolute(source, target)
 	return target
+
+
+## Kevin'in hafizasi (beyin yaziyor: akil.js). Menude gosterilip siliniyor.
+static func load_memory() -> Dictionary:
+	var m := _read("memory.json")
+	if not (m.get("facts") is Array):
+		m["facts"] = []
+	return m
+
+
+static func save_memory(data: Dictionary) -> void:
+	_write("memory.json", data)
+
+
+static func forget_fact(text: String) -> void:
+	var m := load_memory()
+	m.facts = (m.facts as Array).filter(func(f): return str(f.get("text", "")) != text)
+	save_memory(m)
+
+
+## Kameradan tanidigi yuzler (faces/<isim>.jpg)
+static func list_faces() -> Array:
+	var dir := config_dir().path_join("faces")
+	if not DirAccess.dir_exists_absolute(dir):
+		return []
+	return Array(DirAccess.get_files_at(dir)).filter(func(f): return f.ends_with(".jpg")).map(func(f): return f.get_basename())
+
+
+static func forget_faces() -> void:
+	var dir := config_dir().path_join("faces")
+	for name in list_faces():
+		DirAccess.remove_absolute(dir.path_join(name + ".jpg"))

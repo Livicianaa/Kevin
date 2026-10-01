@@ -8,6 +8,8 @@ const { pathToFileURL } = require('url');
 const hypr = require('./hypr.js');
 const platform = require('./platform.js');
 const browser = require('./browser.js');
+const langs = require('./langs.js');
+const { createAkil } = require('./akil.js');
 
 // Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
 // karakterin yuruyus hizi buna kurban gidiyordu.
@@ -135,7 +137,8 @@ function findPiperVoice() {
   }
 }
 
-const PIPER_VOICE = findPiperVoice();
+// Ortam degiskeniyle zorlanan ses; yoksa dile gore (langs.js)
+const PIPER_VOICE = process.env.KEVIN_VOICE ? findPiperVoice() : null;
 const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 
 const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
@@ -161,6 +164,8 @@ function runCommand(cmd, args, { env, input } = {}) {
     }
   });
 }
+
+const akil = createAkil({ userData: app.getPath('userData'), runCommand });
 
 const DEFAULT_PERSONA = [
   'Sen {isim}sin. Kullanicinin masaustunde yasayan bir arkadassin, asistan degil.',
@@ -195,9 +200,9 @@ const DEFAULT_PERSONA = [
 
 function buildPersona(cfg) {
   const isim = cfg.name || 'Kevin';
-  const dil = cfg.language || 'Turkce';
+  const dil = langs.lang(cfg).prompt;
   const base = (cfg.persona && cfg.persona.trim()) || DEFAULT_PERSONA;
-  return base.replace(/\{isim\}/g, isim).replace(/\{dil\}/g, dil);
+  return `${base.replace(/\{isim\}/g, isim).replace(/\{dil\}/g, dil)}\n${akil.personaBlock()}\nCevaplarini SADECE ${dil} dilinde ver (etiketler haric).`;
 }
 
 const PROVIDERS = {
@@ -232,7 +237,8 @@ function isLocal(provider) {
 function whisperPrompt(cfg) {
   const name = cfg.name || 'Kevin';
   const nicks = (cfg.nicknames || []).join(', ');
-  return `${name}${nicks ? `, ${nicks}` : ''}. ${name}, bana yardim eder misin?`;
+  const tail = langs.langCode(cfg) === 'tr' ? ` ${name}, bana yardim eder misin?` : '';
+  return `${name}${nicks ? `, ${nicks}` : ''}.${tail}`;
 }
 
 function loadConfig() {
@@ -369,40 +375,94 @@ async function lookAtScreen(question) {
 }
 
 async function describeImageBase64(image, question) {
-  try {
-    const prompt = question && question.trim()
-      ? question.trim()
-      : 'Bu ekranda ne var? Kisa ve somut anlat.';
-
-    const response = await fetch(VISION_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        stream: false,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: `${prompt}\nTurkce cevapla, en fazla 4 cumle.` },
-              { type: 'image_url', image_url: { url: `data:image/png;base64,${image}` } },
-            ],
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      return `vision modeli yanit vermedi (HTTP ${response.status}): ${text.slice(0, 200)}`;
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || 'goruntuden bir sey okunamadi';
-  } catch (err) {
-    return `goruntuye bakilamadi: ${err.message}`;
-  }
+  const prompt = question && question.trim()
+    ? question.trim()
+    : 'Bu ekranda ne var? Kisa ve somut anlat.';
+  return describeImages([image], prompt);
 }
+
+// Bulut saglayicilarin goruntu anlayan modelleri (kullanicinin kendi anahtariyla)
+const CLOUD_VISION = {
+  groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  gemini: 'gemini-2.5-flash',
+  nvidia: 'meta/llama-3.2-90b-vision-instruct',
+};
+
+async function visionRequest(baseURL, model, apiKey, prompt, images) {
+  const response = await fetch(`${baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+    signal: AbortSignal.timeout(60000),
+    body: JSON.stringify({
+      model,
+      stream: false,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          ...images.map((img) => ({
+            type: 'image_url',
+            image_url: { url: `data:image/${img.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${img}` },
+          })),
+        ],
+      }],
+    }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content?.trim() || 'goruntuden bir sey okunamadi';
+}
+
+// Once bu bilgisayardaki goruntu modeli (Ollama), yoksa bulut
+async function describeImages(images, question) {
+  const cfg = loadConfig();
+  const prompt = `${question}\n${langs.lang(cfg).prompt} dilinde cevapla, en fazla 4 cumle.`;
+  const errors = [];
+  try {
+    return await visionRequest(PROVIDERS.ollama.baseURL, VISION_MODEL, null, prompt, images);
+  } catch (err) {
+    errors.push(`yerel: ${err.message}`);
+  }
+  const cloud = CLOUD_VISION[cfg.provider];
+  if (cloud && cfg.apiKey) {
+    try {
+      return await visionRequest(PROVIDERS[cfg.provider].baseURL, cloud, cfg.apiKey, prompt, images);
+    } catch (err) {
+      errors.push(`bulut: ${err.message}`);
+    }
+  }
+  return `goruntuye bakilamadi (${errors.join(' | ') || 'goruntu modeli yok'})`;
+}
+
+const CAMERA_TOOL = {
+  type: 'function',
+  function: {
+    name: 'look_at_camera',
+    description:
+      'Kameradan bakar: kullaniciyi gorur, tanidigin biriyse adini soyler, elinde/onunde ne oldugunu anlatir. ' +
+      'Kullanici "bana bak", "beni goruyor musun", "bu ne" (elindeki bir seyi gosterirken), "beni taniyor musun" derse kullan.',
+    parameters: {
+      type: 'object',
+      properties: { question: { type: 'string', description: 'Kamerada ozellikle neye bakilacagi' } },
+      required: [],
+    },
+  },
+};
+
+const REMEMBER_FACE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'remember_face',
+    description:
+      'Kameradaki kisinin yuzunu verilen isimle kaydeder, sonra onu kameradan taniyabilirsin. ' +
+      'Kullanici "bu benim, beni hatirla", "yuzumu kaydet", "bu X, onu tani" derse kullan.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Kisinin adi' } },
+      required: ['name'],
+    },
+  },
+};
 
 // --- Dosya ve internet araclari ---
 //
@@ -801,7 +861,7 @@ async function openUrlOrApp(target) {
     : `"${value}" diye bir uygulama bulamadim`;
 }
 
-function mcpToolsAsOpenAI(includeScreenControl) {
+function mcpToolsAsOpenAI(includeScreenControl, cfg) {
   const remoteTools = (includeScreenControl ? mcpTools : []).map((t) => ({
     type: 'function',
     function: {
@@ -816,6 +876,7 @@ function mcpToolsAsOpenAI(includeScreenControl) {
     ...(browser.available()
       ? [BROWSER_OPEN_TOOL, BROWSER_READ_TOOL, BROWSER_CLICK_TOOL, BROWSER_TYPE_TOOL, BROWSER_LOOK_TOOL]
       : []),
+    ...(cfg && cfg.camera ? [CAMERA_TOOL, REMEMBER_FACE_TOOL] : []),
     ...remoteTools,
   ];
 }
@@ -909,6 +970,13 @@ function createWindow() {
 
 ipcMain.handle('get-config', () => loadConfig());
 
+// Secili dilin kisa cumleleri (uyanma cevaplari, hata mesajlari)
+ipcMain.handle('lang-pack', () => {
+  const cfg = loadConfig();
+  langs.voiceFor(cfg, PIPER_VOICES_DIR);
+  return langs.lang(cfg);
+});
+
 ipcMain.handle('save-config', (_event, cfg) => {
   saveConfig(cfg);
   return true;
@@ -979,6 +1047,8 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
 });
 
 const AGENT_TIME_BUDGET_MS = 28000;
+const CAMERA_GREET_GAP_MS = 30 * 60 * 1000;
+let lastCameraGreet = 0;
 const FOLLOW_UP_MS = 120000;
 let lastToolUseAt = 0;
 const MAX_AGENT_STEPS = 6;
@@ -1019,6 +1089,8 @@ const BASIC_TOOL_KEYWORDS = [
   'youtube', 'video', 'izle', 'dinle', 'sarki', 'şarkı', 'muzik', 'müzik',
   'giris yap', 'giriş yap', 'login', 'form', 'doldur', 'gonder', 'gönder',
   'tarayici', 'tarayıcı', 'browser', 'sekmede', 'sitede',
+  'kamera', 'tanı', 'tani', 'tanıyor', 'taniyor', 'görüyor', 'goruyor', 'yüzüm', 'yuzum',
+  'elimde', 'elimdeki', 'hatırla', 'hatirla', 'camera',
 ];
 
 const SCREEN_CONTROL_KEYWORDS = [
@@ -1049,16 +1121,16 @@ function messageNeedsScreenControl(text) {
 ipcMain.handle('chat', async (_event, history) => {
   const cfg = loadConfig();
   if (!cfg.provider) {
-    throw new Error('Saglayici secilmemis');
+    throw new Error('NO_KEY');
   }
   if (!cfg.apiKey && !isLocal(cfg.provider)) {
-    throw new Error('API key ayarlanmamis');
+    // Herkes kendi anahtarini girmeli; renderer bunu kullaniciya soyluyor
+    throw new Error('NO_KEY');
   }
 
   const provider = PROVIDERS[cfg.provider];
   let model = cfg.model || provider.defaultModel;
-  const language = cfg.language || 'Turkce';
-  const name = cfg.name || 'Kevin';
+  const L = langs.lang(cfg);
 
   const messages = [
     {
@@ -1068,13 +1140,30 @@ ipcMain.handle('chat', async (_event, history) => {
     ...history,
   ];
 
+  // "Bizi gorunce taniyordu": ayarda aciksa, uzun aradan sonra ilk
+  // seslenmede kameradan bir bakip kim oldugunu anliyor
+  if (cfg.camera && cfg.cameraGreet && Date.now() - lastCameraGreet > CAMERA_GREET_GAP_MS) {
+    lastCameraGreet = Date.now();
+    try {
+      const seen = await akil.lookAtCamera('Kim var? Tek cumle.', cfg.cameraDevice, describeImages);
+      messages.splice(1, 0, {
+        role: 'system',
+        content: `Az once kameradan baktin: ${seen} (Taniyorsan adiyla hitap et; gerekmedikce kameradan bahsetme.)`,
+      });
+    } catch (err) {
+      console.warn('[kevin] kamera:', err.message);
+    }
+  }
+
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
   // Az once arac kullanildiysa devam cumlelerinde de ("daha yumusak olsun",
   // "digerini ac") araclar acik: anahtar kelime yok diye araçsiz gidip bos
   // cevap donuyordu.
   const followUp = Date.now() - lastToolUseAt < FOLLOW_UP_MS;
-  let tools = messageNeedsAgent(lastUserMessage) || followUp
-    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage))
+  // Anahtar kelimeler Turkce; baska dilde araclar hep acik (model kendi secer)
+  const otherLang = langs.langCode(cfg) !== 'tr';
+  let tools = messageNeedsAgent(lastUserMessage) || followUp || otherLang
+    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage), cfg)
     : undefined;
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
@@ -1084,7 +1173,7 @@ ipcMain.handle('chat', async (_event, history) => {
 
   async function callCompletions(forceNoTools) {
     const activeTools = forceNoTools ? undefined : tools;
-    const toolChoice = hasCalledTool || (followUp && !messageNeedsAgent(lastUserMessage)) ? 'auto' : 'required';
+    const toolChoice = hasCalledTool || !messageNeedsAgent(lastUserMessage) ? 'auto' : 'required';
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -1164,7 +1253,7 @@ ipcMain.handle('chat', async (_event, history) => {
 
     if (!replyMsg) {
       console.error('Bos cevap - ham data:', JSON.stringify(data).slice(0, 500));
-      return 'Hmm, tam anlayamadim, bir daha soyler misin?';
+      return L.unclear;
     }
 
     if (replyMsg.tool_calls?.length) {
@@ -1189,6 +1278,10 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await openUrlOrApp(args.target);
           } else if (call.function.name === 'list_directory') {
             resultText = await listDirectoryTool(args.path);
+          } else if (call.function.name === 'look_at_camera') {
+            resultText = await akil.lookAtCamera(args.question, cfg.cameraDevice, describeImages);
+          } else if (call.function.name === 'remember_face') {
+            resultText = await akil.rememberFace(args.name, cfg.cameraDevice);
           } else if (call.function.name === 'look_at_screen') {
             resultText = await lookAtScreen(args.question);
           } else if (call.function.name === 'read_file') {
@@ -1228,7 +1321,10 @@ ipcMain.handle('chat', async (_event, history) => {
     win?.webContents.send('agent-activity', null);
     // Sistem promptu emojiyi yasakliyor ama modeller ara sira yine koyuyor;
     // metinden de temizliyoruz (TTS'te zaten temizleniyordu).
-    const text = stripEmoji(replyMsg.content || '').trim();
+    // Etiketler: [duygu] basta, [hatirla: ...] / [unut: ...] sonda
+    const parsed = akil.parseReply(stripEmoji(replyMsg.content || ''));
+    const text = parsed.text;
+    if (parsed.mood && parsed.mood !== 'notr') bodySend({ type: 'mood', mood: parsed.mood });
     if (text) return text;
     // Model bos dondu (gpt-oss ara sira sadece 'dusunup' bos birakiyor):
     // bir kez daha, araçsiz ve kisa cevap iste
@@ -1239,7 +1335,7 @@ ipcMain.handle('chat', async (_event, history) => {
       continue;
     }
     console.warn('[kevin] model bos cevap verdi');
-    return 'Hmm, tam anlayamadim, bir daha soyler misin?';
+    return L.unclear;
   }
 
   win?.webContents.send('agent-activity', null);
@@ -1256,7 +1352,7 @@ ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
     await runCommand('ffmpeg', ['-y', '-i', rawPath, '-ar', '16000', '-ac', '1', wavPath]);
 
     const cfg = loadConfig();
-    const lang = (cfg.language || 'tr').slice(0, 2);
+    const lang = langs.langCode(cfg);
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
@@ -1278,7 +1374,7 @@ ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
 
   try {
     const cfg = loadConfig();
-    const lang = (cfg.language || 'tr').slice(0, 2);
+    const lang = langs.langCode(cfg);
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
@@ -1302,11 +1398,16 @@ function stripEmoji(text) {
 ipcMain.handle('speak', async (_event, text) => {
   const id = crypto.randomUUID();
   const outPath = path.join(os.tmpdir(), `kevin-tts-${id}.wav`);
+  const cfg = loadConfig();
+  const voice = PIPER_VOICE || langs.voiceFor(cfg, PIPER_VOICES_DIR);
+  // Dilin sesi henuz inmediyse sessiz (indirme arkada suruyor)
+  if (!voice) throw new Error('ses indiriliyor');
+  const rate = Math.min(1.6, Math.max(0.6, Number(cfg.speechRate) || 1));
 
   try {
     await runCommand(
       PIPER_BIN,
-      ['-m', PIPER_VOICE, '--espeak_data', PIPER_ESPEAK_DATA, '-f', outPath],
+      ['-m', voice, '--espeak_data', PIPER_ESPEAK_DATA, '--length_scale', String(1 / rate), '-f', outPath],
       { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: stripEmoji(text) },
     );
 
@@ -1322,24 +1423,46 @@ const MUSIC_PLAYER_HINTS = [
   'amberol', 'tauon', 'clementine', 'lollypop', 'cmus', 'deadbeef', 'quodlibet',
 ];
 
+// Muzik sitesi (tarayicida calarken adresinden anlasilir)
+const MUSIC_SITE_HINTS = [
+  'music.youtube.com', 'open.spotify.com', 'soundcloud.com', 'deezer.com', 'music.apple.com',
+  'tidal.com', 'bandcamp.com', 'fizy.com', 'music.amazon', 'radio', 'last.fm',
+];
+// YouTube'da video degil sarki oldugunu gosteren basliklar
+const SONG_TITLE_HINTS = /(official audio|official (music )?video|music video|video ?clip|audio\)|lyrics?|lyric video|sözleri|şarkı sözü|remix|slowed|sped up|nightcore|\bft\.|\bfeat\.|playlist|full album|topic)/i;
+
+// Kevin sadece SARKI calarken dans etsin; video (YouTube izlerken) degil.
+// Tarayicida "sanatci" alani YouTube'da kanal adi oldugu icin tek basina
+// yetmiyordu (her videoda dans ediyordu).
+function looksLikeMusic({ player, url, album, title, lengthUs }) {
+  const name = player.toLowerCase();
+  if (MUSIC_PLAYER_HINTS.some((hint) => name.includes(hint))) return true;
+  const u = url.toLowerCase();
+  if (MUSIC_SITE_HINTS.some((hint) => u.includes(hint))) return true;
+  // Muzik siteleri albumu da bildiriyor; video sitelerinde bos
+  if (album.trim()) return true;
+  const minutes = Number(lengthUs) / 60e6;
+  const songLength = minutes > 0.5 && minutes < 9;
+  return songLength && SONG_TITLE_HINTS.test(title);
+}
+
 ipcMain.handle('music-status', async () => {
   if (!platform.isLinux) return { playing: false };
 
   try {
     const { stdout } = await runCommand('playerctl', [
+      '-a',
       'metadata',
       '--format',
-      '{{playerName}}|{{status}}|{{xesam:artist}}|{{xesam:title}}',
+      '{{playerName}}\t{{status}}\t{{xesam:url}}\t{{xesam:album}}\t{{mpris:length}}\t{{xesam:title}}',
     ]);
 
-    const [player = '', status = '', artist = '', title = ''] = stdout.trim().split('|');
-    if (status !== 'Playing') return { playing: false };
-
-    const name = player.toLowerCase();
-    const isMusicPlayer = MUSIC_PLAYER_HINTS.some((hint) => name.includes(hint));
-    const looksLikeSong = artist.trim().length > 0;
-
-    return { playing: isMusicPlayer || looksLikeSong, player, title };
+    for (const line of stdout.split('\n')) {
+      const [player = '', status = '', url = '', album = '', lengthUs = '', title = ''] = line.split('\t');
+      if (status !== 'Playing') continue;
+      if (looksLikeMusic({ player, url, album, title, lengthUs })) return { playing: true, player, title };
+    }
+    return { playing: false };
   } catch {
     return { playing: false };
   }

@@ -11,6 +11,7 @@ signal state_changed(state: String)
 signal played(name: String)
 signal said(text: String)
 signal heard(text: String)
+signal mood(name: String)
 
 const PORT := 47630
 ## Once calisan bir beyin var mi diye bu kadar bekle, yoksa baslat
@@ -113,3 +114,5 @@ func _drain() -> void:
 				said.emit(str(msg.get("text", "")))
 			"heard":
 				heard.emit(str(msg.get("text", "")))
+			"mood":
+				mood.emit(str(msg.get("mood", "")))

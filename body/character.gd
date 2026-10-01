@@ -34,6 +34,9 @@ var skin_path := "res://skins/totem.png"
 var walk_factor := 1.0
 var emote_factor := 1.0
 var look_enabled := true
+var dance_enabled := true
+var walk_speed_factor := 1.0
+var mood_enabled := true
 var wall_sit_enabled := true
 var fun_enabled := true
 
@@ -76,18 +79,36 @@ const CEM_PIVOT := {
 const CEM_BLEND_TIME := 0.3
 
 const Emote := preload("res://emote.gd")
-## Hangi emote ne zaman. Listede olmayan (kullanicinin bin/emotes'a attigi)
-## emote'lar "fun" havuzuna giriyor.
+## Kendiliginden (rastgele) sadece sakin hareketler. Gerisi bir sebeple
+## oynuyor: duygu (beyin), muzik (dans) ya da menudeki Emote dugmesi.
+## Listede olmayanlar (kafa koparma, parcalanma, tpose...) hic rastgele
+## gelmiyor (livi: "kafasini sokup duruyor, asiri hareketli").
 const EMOTE_POOLS := {
-	"idle": ["lookaround", "Inspect", "item", "hunchback", "shake", "nervous", "heart", "bow2"],
-	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lejat", "lay_down5", "meditation_fly"],
-	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
-		"jump", "jumping jacks", "selfie", "headspin", "tpose"],
-	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
-	"brain": ["think", "nod", "fold_arms"],
+	"idle": ["lookaround", "Inspect"],
+	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lay_down5"],
+	"fun": ["selfie", "the_dab", "jump"],
+	"dance": ["floss_dance3", "floss", "orange justice", "club_penguin_dance", "penguin"],
+	"social": ["meeting", "hug", "hearthands", "heart", "bow1", "bow2", "F", "make_gestures", "grace", "nervous", "hunchback", "dab", "jumping jacks", "take the l"],
+	"brain": ["think", "nod", "fold_arms", "shake"],
 }
 ## Dongulu emote'larin suresi (saniye) havuza gore
-const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0), "brain": Vector2(999.0, 999.0)}
+const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(3.0, 5.0), "dance": Vector2(10.0, 16.0), "social": Vector2(2.5, 4.0), "brain": Vector2(999.0, 999.0), "extra": Vector2(3.0, 5.0)}
+## Duygu -> o duyguyu gosteren hareketler (beyin cevabin basina [duygu]
+## etiketi koyuyor)
+const MOOD_EMOTES := {
+	"mutlu": ["heart", "hearthands"],
+	"heyecanli": ["jump", "jumping jacks"],
+	"havali": ["dab", "the_dab", "selfie"],
+	"uzgun": ["F", "hunchback"],
+	"utangac": ["nervous"],
+	"saskin": ["Inspect"],
+	"dusunceli": ["think", "fold_arms"],
+	"sevgi": ["hug", "hearthands"],
+	"selam": ["meeting", "bow1"],
+	"kutlama": ["floss_dance3", "orange justice", "club_penguin_dance"],
+	"alay": ["take the l"],
+	"saygi": ["bow2", "grace"],
+}
 const EMOTE_FADE := 0.5
 ## Rastgele secimde agirlik (varsayilan 1). lookaround sik geliyordu.
 const EMOTE_WEIGHT := {"lookaround": 0.25}
@@ -220,7 +241,7 @@ func _load_emotes() -> void:
 				continue
 			emotes[e.name] = e
 	for name in emotes:
-		emote_pool[name] = "fun"
+		emote_pool[name] = "extra"
 		for pool in EMOTE_POOLS:
 			if name in EMOTE_POOLS[pool]:
 				emote_pool[name] = pool
@@ -233,11 +254,12 @@ func _load_emotes() -> void:
 # =====================================================================
 
 ## Beyin durumuna gore surekli oynayan emote (durum degisince biter)
-const BRAIN_STATE_EMOTE := {"think": "think", "talk": "make_gestures", "dance": "floss_dance3", "sleep": "lay_down5"}
+const BRAIN_STATE_EMOTE := {"think": "think", "talk": "make_gestures", "dance": "@dance", "sleep": "lay_down5"}
 ## Tek seferlik hareketler
 const BRAIN_PLAY_EMOTE := {"wave": "meeting", "wake": "meeting", "nod-yes": "nod", "nod-no": "shake", "jump": "jump", "tickle": "nervous"}
 
 var brain_state := "idle"
+var last_mood_ms := -100000
 var brain_emote := ""
 ## Acilis ekraninda poz (kollar kavusturulmus) beyin olaylariyla bozulmasin
 var hold_pose := false
@@ -267,16 +289,39 @@ func on_brain_state(state: String) -> void:
 			_set_state("idle", 999.0)
 		attention_left = 0.0
 	var e: String = BRAIN_STATE_EMOTE.get(state, "")
-	if e != "" and emotes.has(e) and play_emote(e, 999.0):
+	if e == "@dance":
+		if not dance_enabled:
+			return
+		e = _random_emote("dance")
+		if e != "" and play_emote(e):
+			brain_emote = e
+	elif e != "" and emotes.has(e) and play_emote(e, 999.0):
 		brain_emote = e
 	elif not brain_busy() and anim_state == "idle":
 		state_timer = randf_range(0.8, 2.0)
 
 
+## Cevabin duygusu: o duyguya uyan kisa bir hareket, sonra konusmaya devam
+func on_brain_mood(mood: String) -> void:
+	if not mood_enabled or not MOOD_EMOTES.has(mood):
+		return
+	var options: Array = MOOD_EMOTES[mood].filter(func(n): return emotes.has(n))
+	if not options.is_empty():
+		last_mood_ms = Time.get_ticks_msec()
+		_play_over_brain(options.pick_random())
+
+
 func on_brain_play(name: String) -> void:
-	if hold_pose or (mode != Mode.ANIMATED and mode != Mode.MENU):
+	# Duygu hareketi az once basladiysa basini sallayip onu bozmasin
+	if Time.get_ticks_msec() - last_mood_ms < 2500 and name.begins_with("nod"):
 		return
 	var e: String = BRAIN_PLAY_EMOTE.get(name, "")
+	_play_over_brain(e)
+
+
+func _play_over_brain(e: String) -> void:
+	if hold_pose or (mode != Mode.ANIMATED and mode != Mode.MENU):
+		return
 	if e == "" or not emotes.has(e):
 		return
 	# Konusma hareketinin (make_gestures) ustune kisa hareket: sonra geri doner
@@ -527,7 +572,7 @@ func _cem_step(delta: float) -> void:
 	if mode == Mode.LED:
 		target_speed = led_speed
 	limb_speed = move_toward(limb_speed, target_speed, delta * 2.0)
-	limb_swing += limb_speed * CEM_SWING_RATE * delta
+	limb_swing += limb_speed * CEM_SWING_RATE * walk_speed_factor * delta
 
 	var ls := limb_swing * 0.6662
 	var bob_z := cos(cem_age * 0.09) * 0.05 + 0.05
@@ -638,7 +683,7 @@ func _update_behaviour(delta: float) -> void:
 			var before := root_x
 			# Once yana don, sonra yuru
 			if absf(facing_now - facing) < 0.05:
-				root_x = clampf(root_x + dir * WALK_SPEED * delta * (limb_speed / CEM_WALK_LIMB_SPEED), bounds.x, bounds.y)
+				root_x = clampf(root_x + dir * WALK_SPEED * walk_speed_factor * delta * (limb_speed / CEM_WALK_LIMB_SPEED), bounds.x, bounds.y)
 			# Emniyet: ilerleyemiyorsa (bir seye takildi) vazgec
 			walk_stall = walk_stall + delta if absf(root_x - before) < 0.0001 and limb_speed > 0.3 else 0.0
 			if walk_stall > 0.6 or absf(walk_target - root_x) < 0.01 or dir == 0.0 or (dir > 0 and root_x >= walk_target) or (dir < 0 and root_x <= walk_target):
@@ -665,7 +710,13 @@ func _update_behaviour(delta: float) -> void:
 func _end_emote() -> void:
 	emote = null
 	emote_facing = NAN
-	_set_state("idle", randf_range(0.8, 2.5))
+	# Muzik devam ediyorsa baska bir dansa gec
+	if brain_state == "dance" and dance_enabled and mode == Mode.ANIMATED:
+		var next := _random_emote("dance")
+		if next != "" and play_emote(next):
+			brain_emote = next
+			return
+	_set_state("idle", randf_range(2.0, 5.0))
 
 
 ## Siradaki davranis. Kisa bir durusla yuruyus arasina emote'lar giriyor;
@@ -677,27 +728,27 @@ func _choose_next() -> void:
 	var roll := randf()
 	var e := emote_factor
 	var pool := ""
-	if roll < 0.08 * e:
+	if roll < 0.05 * e:
 		pool = "idle"
-	elif roll < 0.13 * e:
+	elif roll < 0.065 * e:
 		pool = "fun" if fun_enabled else ""
-	elif roll < 0.15 * e:
+	elif roll < 0.1 * e:
 		pool = "rest"
-	elif roll < 0.18 * e and wall_sit_enabled:
+	elif roll < 0.15 * e and wall_sit_enabled:
 		_go_wall_sit()
 		return
 	if pool != "":
 		var name := _random_emote(pool)
 		if name != "sit_lean_wall" and name != "" and play_emote(name):
 			return
-	if randf() < clampf(0.8 * walk_factor, 0.0, 0.97):
+	if randf() < clampf(0.45 * walk_factor, 0.0, 0.95):
 		var span := bounds.y - bounds.x
 		walk_target = clampf(root_x + randf_range(-0.45, 0.45) * span, bounds.x + 0.4, bounds.y - 0.4)
 		if absf(walk_target - root_x) < 0.5:
 			walk_target = clampf(root_x + 1.5 * (1 if randf() < 0.5 else -1), bounds.x + 0.4, bounds.y - 0.4)
 		_set_state("walk", 0.0)
 	else:
-		_set_state("idle", randf_range(1.0, 3.0))
+		_set_state("idle", randf_range(3.0, 7.0))
 
 
 ## En yakin kenara yuru, sirtini yaslayip otur (livi: "yasli dayilar gibi")
@@ -733,7 +784,7 @@ func _update_look(delta: float) -> void:
 		var near := look_point.distance_to(head_pos) < 3.0
 		if randf() < (0.6 if near else 0.25):
 			attention_left = randf_range(1.2, 2.6)
-			attention_cooldown = randf_range(10.0, 25.0)
+			attention_cooldown = randf_range(25.0, 60.0)
 		else:
 			attention_cooldown = randf_range(2.0, 4.0)
 

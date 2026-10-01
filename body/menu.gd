@@ -1,7 +1,7 @@
 extends Control
 ## Kevin'in menusu (karaktere sag tik). Sade Japon tarzi: krem kagit, murekkep
-## siyahi yazi, tek vurgu rengi hanko kirmizisi. Solda Kevin (arkasinda firca
-## darbesi ensō), sagda numarali kategori listesi, altinda karakterler.
+## siyahi yazi, tek vurgu rengi hanko kirmizisi. Solda Kevin (arkasinda
+## Codemisk logosu), sagda numarali kategori listesi, altinda karakterler.
 ## Kategoriye basinca baslik yukari kayar, sutun o kategorinin ayarlarina doner.
 ## Olculer 880x900'luk taslaktan (~/Pictures/kevin-menu-taslak-sade-japon.png)
 ## u katsayisiyla olcekleniyor.
@@ -12,6 +12,7 @@ signal skin_chosen(path: String)
 signal action(name: String)
 
 const Settings := preload("res://settings.gd")
+const I18n := preload("res://i18n.gd")
 
 const C_PAPER := Color("f4eee2")
 const C_CARD := Color("faf6ee")
@@ -26,6 +27,7 @@ const EDGE := 12.0
 
 var body_cfg := {}
 var brain_cfg := {}
+var lang := "tr"
 var u := 1.0
 var view := Vector2.ZERO
 
@@ -71,11 +73,21 @@ var emote_slider: HSlider
 var look_check: Button
 var wallsit_check: Button
 var fun_check: Button
+var mood_check: Button
+var dance_check: Button
+var night_check: Button
+var sleep_slider: HSlider
+var walk_speed_slider: HSlider
+var speech_slider: HSlider
+var camera_check: Button
+var camera_greet_check: Button
+var lang_opt: OptionButton
+var no_key_label: Label
 var rotate_link: LinkButton
 
 var original_body := {}
 
-const CATS := [["sohbet", "Sohbet"], ["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
+const CATS := ["sohbet", "karakter", "yapay_zeka", "davranis", "hakkinda"]
 
 
 ## Taslak olculeri: menu ve arka plan ayni yerlesimi kullaniyor
@@ -91,8 +103,8 @@ static func layout(size_px: Vector2) -> Dictionary:
 		"stage_x": (EDGE + col_x) / 2.0,
 		"feet": feet,
 		"kevin_h": h,
-		"enso_c": Vector2((EDGE + col_x) / 2.0, feet - h * 0.56),
-		"enso_r": size_px.y * 0.215,
+		"logo_c": Vector2((EDGE + col_x) / 2.0, feet - h * 0.56),
+		"logo_r": size_px.y * 0.215,
 		"edge": EDGE,
 	}
 
@@ -111,8 +123,9 @@ func build(size_px: Vector2) -> void:
 	body_cfg = Settings.load_body()
 	original_body = body_cfg.duplicate()
 	brain_cfg = Settings.load_brain()
+	lang = I18n.code_of(brain_cfg)
 
-	caption = _text("KEVİN · AYARLAR", 12, C_MUTED, false, 500, 3.8)
+	caption = _text(_tx("caption"), 12, C_MUTED, false, 500, 3.8)
 	caption.position = Vector2(EDGE + 26 * u, EDGE + 18 * u)
 	add_child(caption)
 
@@ -143,12 +156,13 @@ func build(size_px: Vector2) -> void:
 
 # =====================================================================
 # Arka plan: Kevin'in ARKASINDA (main bunu SubViewport ile 3B duzleme basiyor).
-# Kagit panel + ince doku + Kevin'in arkasinda firca darbesi ensō.
+# Kagit panel + ince doku + Kevin'in arkasinda Codemisk logosu.
 # =====================================================================
 
 class Paper:
 	extends Control
 	var lay := {}
+	var logo: Texture2D
 
 	func _draw() -> void:
 		var sb := StyleBoxFlat.new()
@@ -162,55 +176,12 @@ class Paper:
 		sb.shadow_offset = Vector2(0, 3)
 		sb.anti_aliasing = true
 		draw_style_box(sb, Rect2(Vector2.ONE * e, size - Vector2.ONE * e * 2.0))
-		_enso(lay.enso_c, lay.enso_r)
-
-	## Acik kalan firca halkasi: kalinligi degisen, uclari incelen, kenari
-	## hafif titrek tek darbe; icinde kuru firca izleri
-	func _enso(c: Vector2, r: float) -> void:
-		var rng := RandomNumberGenerator.new()
-		rng.seed = 11
-		var start := -0.55
-		var span := TAU * 0.93
-		var n := 160
-		var w0 := r * 0.058
-		var outer := PackedVector2Array()
-		var inner := PackedVector2Array()
-		var center := PackedVector2Array()
-		var wob := []
-		for i in 6:
-			wob.append([rng.randf_range(1.0, 4.0), rng.randf_range(0.0, TAU), rng.randf_range(0.004, 0.012)])
-		for i in n:
-			var t := float(i) / (n - 1)
-			var a := start - span * t
-			var rr := r * (1.0 + 0.05 * sin(t * PI * 1.3 + 0.4) - 0.03 * t)
-			for wb in wob:
-				rr += r * wb[2] * sin(t * TAU * wb[0] + wb[1])
-			var p := c + Vector2(cos(a), sin(a)) * rr
-			var taper := smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.7, 1.0, t) * 0.85)
-			var half := w0 * (0.55 + 0.45 * sin(t * PI)) * taper + 0.6
-			var nrm := Vector2(cos(a), sin(a))
-			outer.append(p + nrm * half)
-			inner.append(p - nrm * half)
-			center.append(p)
-		var poly := outer.duplicate()
-		inner.reverse()
-		poly.append_array(inner)
-		var ink := Color(0.149, 0.125, 0.098, 0.22)
-		draw_colored_polygon(poly, ink)
-		# Uyumluluk render'inda 2B MSAA yok: kenarlari yumusak cizgiyle ort
-		# (fircanin kenarinda biriken murekkep gibi hafif koyu durur)
-		inner.reverse()
-		draw_polyline(outer, Color(ink, ink.a * 0.7), 1.2, true)
-		draw_polyline(inner, Color(ink, ink.a * 0.7), 1.2, true)
-		for k in 4:
-			var streak := PackedVector2Array()
-			var off := rng.randf_range(-0.6, 0.6) * w0
-			var from := int(rng.randf_range(0.05, 0.4) * n)
-			var to := int(rng.randf_range(0.65, 0.95) * n)
-			for i in range(from, to):
-				var a := start - span * float(i) / (n - 1)
-				streak.append(center[i] + Vector2(cos(a), sin(a)) * off)
-			draw_polyline(streak, Color(ink, 0.12), 1.0, true)
+		# Kevin'in arkasinda Codemisk logosu, murekkep renginde silik
+		if logo:
+			var h: float = lay.logo_r * 1.9
+			var w := h * logo.get_width() / logo.get_height()
+			var c: Vector2 = lay.logo_c
+			draw_texture_rect(logo, Rect2(c - Vector2(w, h) / 2.0, Vector2(w, h)), false, Color(0.149, 0.125, 0.098, 0.13))
 
 
 const GRAIN_SHADER := """
@@ -230,6 +201,11 @@ static func make_background(size_px: Vector2) -> Control:
 	var paper := Paper.new()
 	paper.size = size_px
 	paper.lay = layout(size_px)
+	var img := Image.load_from_file(ProjectSettings.globalize_path("res://ui/codemisk_logo.png"))
+	if img:
+		img.generate_mipmaps()
+		paper.logo = ImageTexture.create_from_image(img)
+	paper.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	root.add_child(paper)
 	var grain := ColorRect.new()
 	grain.position = Vector2.ONE * (EDGE + 6.0)
@@ -266,6 +242,10 @@ func _font(serif: bool, weight := 400, spacing := 0.0) -> Font:
 	return out
 
 
+func _tx(key: String) -> String:
+	return I18n.get_text(key, lang)
+
+
 func px(v: float) -> int:
 	return roundi(v * u)
 
@@ -274,7 +254,9 @@ func px(v: float) -> int:
 func _text(t: String, size: float, color := C_INK, serif := false, weight := 400, spacing := 0.0, wrap := false) -> Label:
 	var l := Label.new()
 	l.text = t
-	l.add_theme_font_override("font", _font(serif, weight, spacing * u))
+	# Arapca/Devanagari harfleri bitisik: aralik acilinca kopuyor
+	var sp := 0.0 if lang in ["ar", "hi", "ur"] else spacing
+	l.add_theme_font_override("font", _font(serif, weight, sp * u))
 	l.add_theme_font_size_override("font_size", px(size))
 	l.add_theme_color_override("font_color", color)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -476,6 +458,7 @@ class Switch:
 
 	func _draw() -> void:
 		var p := Vector2(size.x - pill.x, (size.y - bottom - pill.y) / 2.0)
+		modulate.a = 0.45 if disabled else 1.0
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = off_color.lerp(on_color, _k)
 		sb.set_corner_radius_all(int(pill.y / 2))
@@ -502,7 +485,7 @@ func _switch(t: String, on: bool) -> Button:
 	for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
 		s.add_theme_stylebox_override(st, line)
 	s.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color", "font_disabled_color"]:
 		s.add_theme_color_override(c, C_INK)
 	return s
 
@@ -604,19 +587,19 @@ func _build_main(w: float) -> VBoxContainer:
 	seal_box.add_child(seal)
 	title.add_child(seal_box)
 	v.add_child(title)
-	v.add_child(_text("masaüstü arkadaşın", 14, C_MUTED, false, 400, 0.6))
+	v.add_child(_text(_tx("sub"), 14, C_MUTED, false, 400, 0.6))
 	v.add_child(_rule())
 
 	for i in CATS.size():
-		var b := _item("%02d" % (i + 1), CATS[i][1])
-		b.pressed.connect(_open_category.bind(CATS[i][0]))
-		cat_buttons[CATS[i][0]] = b
+		var b := _item("%02d" % (i + 1), _tx("cat_" + CATS[i]))
+		b.pressed.connect(_open_category.bind(CATS[i]))
+		cat_buttons[CATS[i]] = b
 		v.add_child(b)
 
 	var cap_m := MarginContainer.new()
 	cap_m.add_theme_constant_override("margin_top", px(30))
 	cap_m.add_theme_constant_override("margin_bottom", px(12))
-	cap_m.add_child(_text("KARAKTERLER", 12, C_MUTED, false, 500, 3.4))
+	cap_m.add_child(_text(_tx("characters"), 12, C_MUTED, false, 500, 3.4))
 	v.add_child(cap_m)
 
 	skin_grid = GridContainer.new()
@@ -632,7 +615,7 @@ func _build_main(w: float) -> VBoxContainer:
 	add.custom_minimum_size = Vector2(cell, cell)
 	add.focus_mode = Control.FOCUS_NONE
 	add.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	add.tooltip_text = "Skin ekle (png)"
+	add.tooltip_text = _tx("add_skin")
 	add.add_theme_font_override("font", _font(true))
 	add.add_theme_font_size_override("font_size", px(22))
 	add.add_theme_color_override("font_color", C_MUTED)
@@ -697,7 +680,7 @@ func _build_footer() -> HBoxContainer:
 	var h := HBoxContainer.new()
 	h.alignment = BoxContainer.ALIGNMENT_END
 	h.add_theme_constant_override("separation", px(26))
-	foot_link = _link("Kapat", 16)
+	foot_link = _link(_tx("close"), 16)
 	foot_link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
 	foot_link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	foot_link.pressed.connect(func():
@@ -706,7 +689,7 @@ func _build_footer() -> HBoxContainer:
 		else:
 			_back_to_main())
 	h.add_child(foot_link)
-	var save := _red_button("Kaydet")
+	var save := _red_button(_tx("save"))
 	save.pressed.connect(_on_save)
 	h.add_child(save)
 	return h
@@ -715,7 +698,7 @@ func _build_footer() -> HBoxContainer:
 func _build_stage_links() -> HBoxContainer:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", px(8))
-	rotate_link = _link("Döndür", 13, C_MUTED, false)
+	rotate_link = _link(_tx("rotate"), 13, C_MUTED, false)
 	rotate_link.toggle_mode = true
 	rotate_link.toggled.connect(func(on):
 		rotate_link.add_theme_color_override("font_color", C_INK if on else C_MUTED)
@@ -723,16 +706,16 @@ func _build_stage_links() -> HBoxContainer:
 		action.emit("auto_rotate_on" if on else "auto_rotate_off"))
 	h.add_child(rotate_link)
 	h.add_child(_text("·", 13, C_MUTED))
-	var em := _link("Emote", 13, C_MUTED, false)
+	var em := _link(_tx("emote"), 13, C_MUTED, false)
 	em.pressed.connect(func(): action.emit("emote"))
 	h.add_child(em)
 	h.add_child(_text("·", 13, C_MUTED))
-	var rs := _link("Sıfırla", 13, C_MUTED, false)
+	var rs := _link(_tx("reset"), 13, C_MUTED, false)
 	rs.pressed.connect(func():
 		rotate_link.button_pressed = false
 		action.emit("reset"))
 	h.add_child(rs)
-	h.add_child(_text("  —  karakteri sürükleyerek çevir", 13, C_MUTED, false, 400, 0.6))
+	h.add_child(_text("  —  " + _tx("drag_hint"), 13, C_MUTED, false, 400, 0.6))
 	return h
 
 
@@ -790,7 +773,7 @@ func _pick_skin_file() -> void:
 	# Kevin'in penceresi Hyprland'de igneli ve "hep ustte": dosya penceresi
 	# arkasinda kaliyordu. Dosya penceresi acikken asagi alinir.
 	_window_lowered(true)
-	DisplayServer.file_dialog_show("Skin seç", OS.get_environment("HOME"), "", false,
+	DisplayServer.file_dialog_show(_tx("pick_skin"), OS.get_environment("HOME"), "", false,
 		DisplayServer.FILE_DIALOG_MODE_OPEN_FILE, PackedStringArray(["*.png ; Minecraft skin"]),
 		func(ok: bool, paths: PackedStringArray, _f: int):
 			_window_lowered(false)
@@ -831,7 +814,7 @@ func _build_detail(size_px: Vector2) -> VBoxContainer:
 	var v := VBoxContainer.new()
 	v.size = size_px
 	v.add_theme_constant_override("separation", 0)
-	var back := _link("‹ geri", 15, C_MUTED)
+	var back := _link(_tx("back_small"), 15, C_MUTED)
 	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	back.pressed.connect(_back_to_main)
 	v.add_child(back)
@@ -877,20 +860,17 @@ func _open_category(id: String) -> void:
 		_fill_chat()
 	for k in pages:
 		pages[k].visible = k == id
-	var idx := 0
-	for i in CATS.size():
-		if CATS[i][0] == id:
-			idx = i
+	var idx := CATS.find(id)
 	detail_num.text = "%02d" % (idx + 1)
-	detail_title.text = CATS[idx][1]
+	detail_title.text = _tx("cat_" + id)
 	detail_scroll.scroll_vertical = 0
-	foot_link.text = "Geri"
+	foot_link.text = _tx("back")
 
 	# Tiklanan satirin adi yerinden baslik yerine kayip buyur, sonra sayfa
 	# acilir. Baslik yerini olcmek icin sayfa gorunmez halde bir kare yerlesir.
 	var src: Button = cat_buttons[id]
 	var src_label: Label = src.get_meta("label")
-	var ghost := _text(CATS[idx][1], 19, C_RED, true)
+	var ghost := _text(_tx("cat_" + id), 19, C_RED, true)
 	ghost.position = src_label.global_position - column.global_position
 	column.add_child(ghost)
 	detail_view.visible = true
@@ -913,7 +893,7 @@ func _back_to_main() -> void:
 	if current_cat == "":
 		return
 	current_cat = ""
-	foot_link.text = "Kapat"
+	foot_link.text = _tx("close")
 	var tw := create_tween()
 	tw.tween_property(detail_view, "modulate:a", 0.0, 0.15)
 	tw.tween_callback(func():
@@ -931,30 +911,37 @@ func _page() -> VBoxContainer:
 
 
 var chat_list: VBoxContainer
+var memory_list: VBoxContainer
 
 
 func _page_chat() -> VBoxContainer:
 	var v := _page()
+	memory_list = VBoxContainer.new()
+	memory_list.add_theme_constant_override("separation", px(8))
+	memory_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_field(_tx("knows"), memory_list))
 	chat_list = VBoxContainer.new()
 	chat_list.add_theme_constant_override("separation", px(14))
 	chat_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_child(chat_list)
+	v.add_child(_field(_tx("cat_sohbet"), chat_list))
 	return v
 
 
-## Gecmisi her acilista yeniden oku (beyin bu arada yeni mesaj yazmis olabilir)
+## Gecmisi ve hafizayi her acilista yeniden oku (beyin bu arada yeni mesaj ya
+## da bilgi yazmis olabilir)
 func _fill_chat() -> void:
+	_fill_memory()
 	for c in chat_list.get_children():
 		c.queue_free()
 	var items := Settings.load_history()
 	if items.is_empty():
-		chat_list.add_child(_text("Henüz konuşma yok. \"Kevin\" diye seslen ya da Kevin'e orta tıkla.", 14, C_MUTED, false, 400, 0.0, true))
+		chat_list.add_child(_text(_tx("chat_empty"), 14, C_MUTED, false, 400, 0.0, true))
 		return
 	for m in items:
 		var mine: bool = m.get("role", "") == "user"
 		var e := VBoxContainer.new()
 		e.add_theme_constant_override("separation", px(3))
-		e.add_child(_text("SEN" if mine else "KEVİN", 10.5, C_MUTED if mine else C_RED, false, 500, 2.6))
+		e.add_child(_text(_tx("you") if mine else str(brain_cfg.get("name", "Kevin")).to_upper(), 10.5, C_MUTED if mine else C_RED, false, 500, 2.6))
 		e.add_child(_text(str(m.get("content", "")), 14.5, C_INK, false, 400, 0.0, true))
 		var line := ColorRect.new()
 		line.color = C_LINE
@@ -968,27 +955,89 @@ func _fill_chat() -> void:
 		detail_scroll.scroll_vertical = int(detail_scroll.get_v_scroll_bar().max_value)
 
 
+## Kevin'in konusmalardan ogrendikleri (beynin memory.json'u); tek tek silinir
+func _fill_memory() -> void:
+	for c in memory_list.get_children():
+		c.queue_free()
+	var mem := Settings.load_memory()
+	var facts: Array = mem.get("facts", [])
+	if facts.is_empty():
+		memory_list.add_child(_text(_tx("knows_empty"), 13, C_MUTED, false, 400, 0.0, true))
+		return
+	for f in facts:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", px(10))
+		var t := _text(str(f.get("text", "")), 14, C_INK, false, 400, 0.0, true)
+		row.add_child(t)
+		var x := _link("×", 18, C_MUTED, false)
+		x.tooltip_text = _tx("forget_one")
+		x.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		var fact_text := str(f.get("text", ""))
+		x.pressed.connect(func():
+			Settings.forget_fact(fact_text)
+			_fill_memory())
+		row.add_child(x)
+		memory_list.add_child(row)
+	var all := _link(_tx("forget_all"), 13, C_RED)
+	all.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	all.pressed.connect(func():
+		Settings.save_memory({"facts": []})
+		_fill_memory())
+	memory_list.add_child(all)
+
+
 func _page_character() -> VBoxContainer:
 	var v := _page()
-	slim_btns = _segment(["Klasik (4 px)", "İnce (3 px)"], 1 if body_cfg.slim else 0,
+	slim_btns = _segment([_tx("arm_classic"), _tx("arm_slim")], 1 if body_cfg.slim else 0,
 		func(i): body_cfg.slim = i == 1)
-	v.add_child(_field("Kol modeli", _segment_box(slim_btns)))
+	v.add_child(_field(_tx("arm_model"), _segment_box(slim_btns)))
 	scale_slider = _slider(0.6, 2.0, 0.05, float(body_cfg.scale))
 	scale_label = _text("", 14)
 	scale_slider.value_changed.connect(func(val):
 		body_cfg.scale = val
 		scale_label.text = "%%%d" % roundi(val * 100))
 	scale_label.text = "%%%d" % roundi(float(body_cfg.scale) * 100)
-	v.add_child(_field("Boyut", _slider_row(scale_slider, scale_label), "Kol modeli ve boyut Kaydet'e basınca uygulanır."))
-	v.add_child(_text("Skin: ana menüdeki Karakterler'den seç, + ile kendi png'ni ekle (64x64 Minecraft skin).", 12.5, C_MUTED, false, 400, 0.0, true))
+	v.add_child(_field(_tx("size"), _slider_row(scale_slider, scale_label), _tx("size_hint")))
+	walk_speed_slider = _slider(0.5, 2.0, 0.1, float(body_cfg.walk_speed))
+	v.add_child(_field(_tx("walk_speed"), _slider_row(walk_speed_slider, _value_label(walk_speed_slider, "x%.1f"))))
+	speech_slider = _slider(0.6, 1.6, 0.1, float(brain_cfg.get("speechRate", 1.0)))
+	v.add_child(_field(_tx("speech_rate"), _slider_row(speech_slider, _value_label(speech_slider, "x%.1f"))))
+	v.add_child(_text(_tx("skin_hint"), 12.5, C_MUTED, false, 400, 0.0, true))
 	return v
+
+
+## Kaydiricinin yaninda degerini gosteren etiket (fmt: "x%.1f" gibi)
+func _value_label(s: HSlider, fmt: String, zero_text := "") -> Label:
+	var l := _text("", 14)
+	var show := func(val: float):
+		l.text = zero_text if zero_text != "" and val <= 0.0 else fmt % val
+	s.value_changed.connect(show)
+	show.call(s.value)
+	return l
 
 
 func _page_ai() -> VBoxContainer:
 	var v := _page()
 	var local: bool = Settings.PROVIDERS.get(str(brain_cfg.get("provider", "groq")), {}).get("local", false)
-	mode_btns = _segment(["Bulut (API)", "Yerel (Ollama)"], 1 if local else 0, _on_mode)
-	v.add_child(_field("Çalışma şekli", _segment_box(mode_btns), "Bulut: hızlı, internet ve anahtar ister. Yerel: bilgisayarında çalışır, Ollama kurulu olmalı."))
+
+	no_key_label = _text(_tx("no_key"), 13.5, C_RED, false, 500, 0.0, true)
+	v.add_child(no_key_label)
+
+	lang_opt = OptionButton.new()
+	lang_opt.focus_mode = Control.FOCUS_NONE
+	lang_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for i in I18n.CODES.size():
+		lang_opt.add_item(I18n.NAMES[i])
+		if I18n.CODES[i] == lang:
+			lang_opt.select(i)
+	lang_opt.item_selected.connect(func(i):
+		# Dil hemen gecer: ayar yazilir, menu yeni dilde yeniden kurulur
+		Settings.save_brain({"language": I18n.CODES[i]})
+		action.emit("relang"))
+	v.add_child(_field(_tx("language"), lang_opt, _tx("language_hint")))
+
+	mode_btns = _segment([_tx("mode_cloud"), _tx("mode_local")], 1 if local else 0, _on_mode)
+	v.add_child(_field(_tx("mode"), _segment_box(mode_btns), _tx("mode_hint")))
 
 	provider_opt = OptionButton.new()
 	provider_opt.focus_mode = Control.FOCUS_NONE
@@ -1000,78 +1049,113 @@ func _page_ai() -> VBoxContainer:
 			if id == str(brain_cfg.get("provider", "")):
 				provider_opt.select(provider_opt.item_count - 1)
 	provider_opt.item_selected.connect(func(_i): _update_model_placeholder())
-	provider_row = _field("Sağlayıcı", provider_opt)
+	provider_row = _field(_tx("provider"), provider_opt)
 	v.add_child(provider_row)
 
 	model_edit = LineEdit.new()
 	model_edit.text = str(brain_cfg.get("model", ""))
-	v.add_child(_field("Model", model_edit, "Boş bırakırsan sağlayıcının varsayılanı."))
+	v.add_child(_field(_tx("model"), model_edit, _tx("model_hint")))
 
 	key_edit = LineEdit.new()
 	key_edit.secret = true
-	key_edit.placeholder_text = "•••••••• kayıtlı (değiştirmek için yaz)" if str(brain_cfg.get("apiKey", "")) != "" else "API anahtarını yapıştır"
-	key_row = _field("API anahtarı", key_edit, "Sadece bu bilgisayarda saklanır.")
+	key_edit.placeholder_text = _tx("key_saved") if _has_key() else _tx("key_new")
+	key_edit.text_changed.connect(func(_t): _update_key_notice())
+	key_row = _field(_tx("api_key"), key_edit, _tx("key_hint"))
 	v.add_child(key_row)
 
 	name_edit = LineEdit.new()
 	name_edit.text = str(brain_cfg.get("name", "Kevin"))
-	v.add_child(_field("İsim", name_edit, "Bu isimle seslenince uyanır."))
+	v.add_child(_field(_tx("name"), name_edit, _tx("name_hint")))
 
 	nick_edit = LineEdit.new()
 	nick_edit.text = ", ".join(PackedStringArray(brain_cfg.get("nicknames", [])))
 	nick_edit.placeholder_text = "kev, kevo"
-	v.add_child(_field("Lakaplar", nick_edit, "Virgülle ayır."))
+	v.add_child(_field(_tx("nicknames"), nick_edit, _tx("nick_hint")))
 
-	hands_check = _switch("Eller serbest dinleme", brain_cfg.get("handsFree", true) != false)
+	hands_check = _switch(_tx("hands_free"), brain_cfg.get("handsFree", true) != false)
 	v.add_child(hands_check)
 
 	var sess_s := float(brain_cfg.get("voiceSessionMs", 20000)) / 1000.0
 	session_slider = _slider(5, 60, 1, sess_s)
-	session_label = _text("%d sn" % int(sess_s), 14)
-	session_slider.value_changed.connect(func(val): session_label.text = "%d sn" % int(val))
-	v.add_child(_field("Sohbet süresi", _slider_row(session_slider, session_label), "Adını söyledikten sonra ne kadar dinlesin."))
+	v.add_child(_field(_tx("session"), _slider_row(session_slider, _value_label(session_slider, "%d " + _tx("sec"))), _tx("session_hint")))
+
+	var cam := VBoxContainer.new()
+	cam.add_theme_constant_override("separation", px(14))
+	camera_check = _switch(_tx("camera_on"), brain_cfg.get("camera", false) == true)
+	camera_greet_check = _switch(_tx("camera_greet"), brain_cfg.get("cameraGreet", false) == true)
+	cam.add_child(camera_check)
+	cam.add_child(camera_greet_check)
+	var faces_row := HBoxContainer.new()
+	faces_row.add_theme_constant_override("separation", px(12))
+	var names := Settings.list_faces()
+	var faces_label := _text("%s: %s" % [_tx("faces"), ", ".join(PackedStringArray(names)) if not names.is_empty() else _tx("faces_none")], 13, C_INK, false, 400, 0.0, true)
+	faces_row.add_child(faces_label)
+	if not names.is_empty():
+		var forget := _link(_tx("forget_faces"), 13, C_RED)
+		forget.pressed.connect(func():
+			Settings.forget_faces()
+			faces_label.text = "%s: %s" % [_tx("faces"), _tx("faces_none")]
+			forget.visible = false)
+		faces_row.add_child(forget)
+	cam.add_child(faces_row)
+	camera_check.toggled.connect(func(on): camera_greet_check.disabled = not on)
+	camera_greet_check.disabled = not camera_check.button_pressed
+	v.add_child(_field(_tx("camera"), cam, _tx("camera_hint")))
 
 	persona_edit = TextEdit.new()
 	persona_edit.text = str(brain_cfg.get("persona", ""))
-	persona_edit.placeholder_text = "Boş: varsayılan kişilik (esprili, samimi, Türkçe)."
+	persona_edit.placeholder_text = _tx("persona_ph")
 	persona_edit.custom_minimum_size.y = 96 * u
 	persona_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	v.add_child(_field("Kişilik", persona_edit))
+	v.add_child(_field(_tx("persona"), persona_edit))
 
 	_on_mode(1 if local else 0)
 	return v
 
 
+func _has_key() -> bool:
+	return str(brain_cfg.get("apiKey", "")) != ""
+
+
+## Bulut secili ve anahtar yoksa kirmizi uyari (herkes kendi anahtarini girer)
+func _update_key_notice() -> void:
+	if no_key_label == null:
+		return
+	var local: bool = mode_btns.size() > 1 and mode_btns[1].button_pressed
+	no_key_label.visible = not local and not _has_key() and key_edit.text.strip_edges() == ""
+
+
 func _page_behaviour() -> VBoxContainer:
 	var v := _page()
 	walk_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.walk))
-	var walk_label := _text("", 14)
-	walk_slider.value_changed.connect(func(val): walk_label.text = "x%.1f" % val)
-	walk_label.text = "x%.1f" % walk_slider.value
-	v.add_child(_field("Yürüme sıklığı", _slider_row(walk_slider, walk_label)))
+	v.add_child(_field(_tx("walk_freq"), _slider_row(walk_slider, _value_label(walk_slider, "x%.1f"))))
 	emote_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.emotes))
-	var emote_label := _text("", 14)
-	emote_slider.value_changed.connect(func(val): emote_label.text = "x%.1f" % val)
-	emote_label.text = "x%.1f" % emote_slider.value
-	v.add_child(_field("Emote sıklığı", _slider_row(emote_slider, emote_label)))
+	v.add_child(_field(_tx("emote_freq"), _slider_row(emote_slider, _value_label(emote_slider, "x%.1f"))))
 	var toggles := VBoxContainer.new()
 	toggles.add_theme_constant_override("separation", px(14))
-	look_check = _switch("Fareyi arada merak edip baksın", body_cfg.look)
-	wallsit_check = _switch("Kenara yaslanıp otursun", body_cfg.wall_sit)
-	fun_check = _switch("Eğlenceli emote'lar (dans vb.)", body_cfg.fun)
-	for s in [look_check, wallsit_check, fun_check]:
+	look_check = _switch(_tx("look"), body_cfg.look)
+	wallsit_check = _switch(_tx("wall_sit"), body_cfg.wall_sit)
+	fun_check = _switch(_tx("fun"), body_cfg.fun)
+	mood_check = _switch(_tx("mood"), body_cfg.mood)
+	dance_check = _switch(_tx("dance"), body_cfg.dance)
+	night_check = _switch(_tx("night"), brain_cfg.get("nightSleepy", true) != false)
+	for s in [look_check, wallsit_check, fun_check, mood_check, dance_check]:
 		toggles.add_child(s)
+	toggles.add_child(_text(_tx("dance_hint"), 12, C_MUTED, false, 400, 0.0, true))
+	toggles.add_child(night_check)
 	v.add_child(toggles)
+	sleep_slider = _slider(0, 60, 5, float(brain_cfg.get("sleepAfterMin", 10)))
+	v.add_child(_field(_tx("sleep_after"), _slider_row(sleep_slider, _value_label(sleep_slider, "%d " + _tx("min"), _tx("off")))))
 	return v
 
 
 func _page_about() -> VBoxContainer:
 	var v := _page()
-	v.add_child(_text("Masaüstünde yaşayan, konuşan ve bilgisayarını kullanabilen yapay zeka arkadaşı.", 15.5, C_INK, true, 400, 0.0, true))
+	v.add_child(_text(_tx("about_text"), 15.5, C_INK, true, 400, 0.0, true))
 	v.add_child(_text("Created by Liviciana", 17, C_RED, true, 600))
-	v.add_child(_field("Animasyonlar", _text("Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 13.5, C_INK, false, 400, 0.0, true)))
-	v.add_child(_field("Kullanım", _text("Menü: karaktere sağ tık. Karakteri sürükle: döndür. Esc: kapat. Orta tık: Kevin'i uyandır.", 13.5, C_INK, false, 400, 0.0, true)))
-	var replay := _link("Açılış ekranını oynat  ›", 16, C_RED)
+	v.add_child(_field(_tx("animations"), _text("Fresh Animations, Emotecraft (CC0), Quaternius Universal Animation Library 2 (CC0).", 13.5, C_INK, false, 400, 0.0, true)))
+	v.add_child(_field(_tx("usage"), _text(_tx("usage_text"), 13.5, C_INK, false, 400, 0.0, true)))
+	var replay := _link(_tx("replay_splash") + "  ›", 16, C_RED)
 	replay.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	replay.pressed.connect(func(): action.emit("splash"))
 	v.add_child(replay)
@@ -1085,6 +1169,7 @@ func _on_mode(i: int) -> void:
 	if key_row:
 		key_row.visible = not local
 	_update_model_placeholder()
+	_update_key_notice()
 
 
 func _update_model_placeholder() -> void:
@@ -1098,6 +1183,24 @@ func _current_provider() -> String:
 	if provider_opt and provider_opt.selected >= 0:
 		return str(provider_opt.get_item_metadata(provider_opt.selected))
 	return "groq"
+
+
+## Kategoriyi canlandirmasiz ac (dil degisince menu yeniden kurulurken)
+func open_instant(id: String) -> void:
+	current_cat = id
+	for k in pages:
+		pages[k].visible = k == id
+	detail_num.text = "%02d" % (CATS.find(id) + 1)
+	detail_title.text = _tx("cat_" + id)
+	foot_link.text = _tx("back")
+	main_view.visible = false
+	detail_view.visible = true
+	detail_view.modulate.a = 1.0
+
+
+static func brain_needs_key(cfg: Dictionary) -> bool:
+	var local: bool = Settings.PROVIDERS.get(str(cfg.get("provider", "")), {}).get("local", false)
+	return not local and str(cfg.get("apiKey", "")) == ""
 
 
 ## Test icin: kategoriyi ac
@@ -1116,6 +1219,9 @@ func _on_save() -> void:
 	body_cfg.look = look_check.button_pressed
 	body_cfg.wall_sit = wallsit_check.button_pressed
 	body_cfg.fun = fun_check.button_pressed
+	body_cfg.mood = mood_check.button_pressed
+	body_cfg.dance = dance_check.button_pressed
+	body_cfg.walk_speed = walk_speed_slider.value
 	Settings.save_body(body_cfg)
 
 	var brain := {
@@ -1126,6 +1232,11 @@ func _on_save() -> void:
 		"handsFree": hands_check.button_pressed,
 		"voiceSessionMs": int(session_slider.value * 1000),
 		"persona": persona_edit.text,
+		"speechRate": speech_slider.value,
+		"camera": camera_check.button_pressed,
+		"cameraGreet": camera_greet_check.button_pressed,
+		"nightSleepy": night_check.button_pressed,
+		"sleepAfterMin": int(sleep_slider.value),
 	}
 	if key_edit.text.strip_edges() != "":
 		brain["apiKey"] = key_edit.text.strip_edges()

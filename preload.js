@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('kevinAPI', {
   getConfig: () => ipcRenderer.invoke('get-config'),
+  langPack: () => ipcRenderer.invoke('lang-pack'),
   saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
   chat: (message) => ipcRenderer.invoke('chat', message),
   transcribe: (arrayBuffer) => ipcRenderer.invoke('transcribe', arrayBuffer),
