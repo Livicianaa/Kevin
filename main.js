@@ -34,6 +34,60 @@ let windowSize = { width: WIN_WIDTH, height: WIN_HEIGHT };
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 
+// --brain: pencere gorunmez, sadece beyin (ses, sohbet, araclar). Govde Godot
+// (body/), olaylari yerel bir TCP baglantisiyla ona gonderiyoruz.
+const BRAIN_MODE = process.argv.includes('--brain');
+const BODY_PORT = Number(process.env.KEVIN_BODY_PORT || 47630);
+const bodyClients = new Set();
+let lastBodyState = null;
+
+function bodySend(event) {
+  if (event.type === 'state') lastBodyState = event;
+  const line = JSON.stringify(event) + '\n';
+  for (const sock of bodyClients) sock.write(line);
+}
+
+function startBodyBridge() {
+  const tcp = require('node:net');
+  let everConnected = false;
+  let quitTimer = null;
+  const server = tcp.createServer((sock) => {
+    everConnected = true;
+    clearTimeout(quitTimer);
+    bodyClients.add(sock);
+    sock.setEncoding('utf8');
+    if (lastBodyState) sock.write(JSON.stringify(lastBodyState) + '\n');
+    let buffer = '';
+    sock.on('data', (chunk) => {
+      buffer += chunk;
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (win) win.webContents.send('body-command', msg);
+        } catch {}
+      }
+    });
+    const drop = () => {
+      bodyClients.delete(sock);
+      // Govde kapandiysa beyin de kapansin (sahipsiz kalmasin)
+      if (everConnected && bodyClients.size === 0) {
+        clearTimeout(quitTimer);
+        quitTimer = setTimeout(() => app.quit(), 5000);
+      }
+    };
+    sock.on('close', drop);
+    sock.on('error', drop);
+  });
+  server.on('error', (err) => console.error('[kevin] govde koprusu:', err.message));
+  server.listen(BODY_PORT, '127.0.0.1');
+}
+
+ipcMain.on('body-event', (_event, ev) => bodySend(ev));
+
 const PIPER_DIR = path.join(__dirname, 'bin', 'piper');
 const PIPER_BIN = path.join(PIPER_DIR, 'piper');
 const PIPER_VOICES_DIR = path.join(__dirname, 'bin', 'piper-voices');
@@ -740,7 +794,7 @@ let placing = false;
 let placeAgain = false;
 
 async function placeWindow() {
-  if (!characterAnchor || !hypr.available()) return;
+  if (BRAIN_MODE || !characterAnchor || !hypr.available()) return;
   if (placing) {
     placeAgain = true;
     return;
@@ -765,6 +819,7 @@ function createWindow() {
   const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
+    show: !BRAIN_MODE,
     width: WIN_WIDTH,
     height: WIN_HEIGHT,
     x: screenW - WIN_WIDTH - MARGIN,
@@ -786,11 +841,12 @@ function createWindow() {
     },
   });
 
-  win.setAlwaysOnTop(true, 'screen-saver');
+  if (!BRAIN_MODE) win.setAlwaysOnTop(true, 'screen-saver');
   const animArg = process.argv.find((a) => a.startsWith('--anim='));
   const params = new URLSearchParams();
   if (animArg) params.set('anim', animArg.slice(7));
   if (process.argv.includes('--no-vad')) params.set('novad', '1');
+  if (BRAIN_MODE) params.set('brain', '1');
   if (process.argv.includes('--no-cem')) params.set('cem', '0');
   if (process.argv.includes('--selftest')) params.set('selftest', '1');
   const voiceArg = process.argv.find((a) => a.startsWith('--voicetest='));
@@ -1211,8 +1267,10 @@ app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(filePath).toString());
   });
 
+  if (BRAIN_MODE) startBodyBridge();
+
   // Kurallar pencereden ONCE yuklenmeli: windowrule pencere acilirken uygulaniyor.
-  if (hypr.available()) {
+  if (hypr.available() && !BRAIN_MODE) {
     try {
       await hypr.loadRules(path.join(app.getPath('userData'), 'hypr-rules.conf'));
     } catch (err) {
@@ -1224,7 +1282,7 @@ app.whenReady().then(async () => {
   initAgentMCP();
 
   // setprop acik pencereye uygulaniyor, o yuzden pencere gorunur olduktan sonra.
-  if (hypr.available()) {
+  if (hypr.available() && !BRAIN_MODE) {
     win.once('ready-to-show', () => {
       setTimeout(async () => {
         try {

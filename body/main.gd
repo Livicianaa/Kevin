@@ -10,6 +10,7 @@ extends Node3D
 const Character := preload("res://character.gd")
 const Settings := preload("res://settings.gd")
 const Menu := preload("res://menu.gd")
+const Brain := preload("res://brain.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
 var PX_PER_UNIT := 118.0
@@ -123,6 +124,16 @@ func _ready() -> void:
 	win_pos = _desired_window_pos()
 	_apply_window()
 
+	# Beyin (ses, sohbet): testlerde baslatma
+	var testing := test_offscreen or test_grab != "" or test_diag or shot_prefix != "" or test_menu != "" or test_emote != "" or test_anim != ""
+	if not testing and OS.get_environment("KEVIN_NO_BRAIN") == "":
+		brain = Brain.new()
+		add_child(brain)
+		brain.state_changed.connect(character.on_brain_state)
+		brain.played.connect(character.on_brain_play)
+		brain.said.connect(func(t): print("[kevin] diyor: ", t))
+		brain.heard.connect(func(t): print("[kevin] duydu: ", t))
+
 	# Hyprland pencere kenarligini (ve kose yuvarlamasini) kaldir. Bu ozellikler
 	# kural dosyasiyla degil, pencere ACILDIKTAN sonra setprop ile veriliyor.
 	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") != "":
@@ -130,6 +141,13 @@ func _ready() -> void:
 
 
 var body_settings := {}
+var brain: Node = null
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
+		if brain:
+			brain.stop()
 
 
 func _apply_behaviour(cfg: Dictionary) -> void:
@@ -459,6 +477,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		if not _hit_at(event.position).is_empty():
 			_open_menu()
+		return
+	# Orta tik: adi soylenmis gibi ("Efendim?")
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE and event.pressed:
+		if brain and not _hit_at(event.position).is_empty():
+			brain.send({"type": "wake"})
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:

@@ -86,6 +86,29 @@ let sleeping = false;
 
 const forcedAnim = new URLSearchParams(window.location.search).get('anim');
 
+// --brain: bu pencere gorunmez; karakteri Godot govdesi oynatiyor. Durum ve
+// hareketleri ona iletiyoruz, eski 2B karakteri cizmiyoruz.
+const BRAIN = new URLSearchParams(window.location.search).get('brain') === '1';
+const BODY_STATES = new Set(['idle', 'listen', 'think', 'talk', 'sleep', 'night-sleepy', 'dance']);
+const BODY_PLAYS = new Set(['wake', 'nod-yes', 'nod-no', 'wave', 'tickle', 'jump']);
+if (BRAIN) {
+  let lastState = '';
+  const setState = window.KevinSkin.setState;
+  const play = window.KevinSkin.play;
+  window.KevinSkin.setState = (state) => {
+    const mapped = BODY_STATES.has(state) ? state : 'idle';
+    if (mapped !== lastState) {
+      lastState = mapped;
+      window.kevinAPI.bodyEvent({ type: 'state', state: mapped });
+    }
+    return setState(state);
+  };
+  window.KevinSkin.play = (name) => {
+    if (BODY_PLAYS.has(name)) window.kevinAPI.bodyEvent({ type: 'play', name });
+    return play(name);
+  };
+}
+
 function worldFrozen() {
   return Boolean(busyState || conversationActive || sleeping || voiceActive());
 }
@@ -348,7 +371,18 @@ async function voiceReply(text, cfg) {
   touchVoiceSession(cfg.voiceSessionMs);
 }
 
+if (BRAIN) {
+  window.kevinAPI.onBodyCommand(async (msg) => {
+    if (msg.type === 'wake') {
+      // Karaktere tiklandi: adi soylenmis gibi
+      const cfg = await window.kevinAPI.getConfig();
+      handleVoice(cfg.name || 'Kevin');
+    }
+  });
+}
+
 async function handleVoice(text) {
+  if (BRAIN) window.kevinAPI.bodyEvent({ type: 'heard', text });
   // Bir sey takildiysa kilitli kalmayalim: uzun suredir mesgulse sifirla.
   if (voiceBusy && Date.now() - voiceBusySince > VOICE_STUCK_MS) {
     console.warn('[kevin] takilmis gorunuyor, durum sifirlaniyor');
@@ -553,7 +587,7 @@ if (voiceTest) {
 }
 
 initWorld();
-requestAnimationFrame(frame);
+if (!BRAIN) requestAnimationFrame(frame);
 
 
 // --- Fare ile tutma: hangi uzuvdan tutuldugu onemli ---
@@ -629,6 +663,7 @@ character.addEventListener('dblclick', () => {
 });
 
 function showBubble(text) {
+  if (BRAIN) window.kevinAPI.bodyEvent({ type: 'say', text });
   bubble.textContent = text;
   bubble.classList.remove('hidden');
   clearTimeout(showBubble._t);

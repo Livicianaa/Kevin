@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   worldInfo: () => ipcRenderer.invoke('world-info'),
   cemPack: () => ipcRenderer.invoke('cem-pack'),
   cursorPos: () => ipcRenderer.invoke('cursor-pos'),
+  bodyEvent: (event) => ipcRenderer.send('body-event', event),
+  onBodyCommand: (callback) => {
+    ipcRenderer.on('body-command', (_e, data) => callback(data));
+  },
   onAgentActivity: (callback) => {
     ipcRenderer.on('agent-activity', (_e, data) => callback(data));
   },

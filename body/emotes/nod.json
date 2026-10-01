@@ -1,0 +1,50 @@
+{
+ "name": "Evet",
+ "author": "Kevin (Liviciana)",
+ "description": "Basini sallayarak evet",
+ "emote": {
+  "beginTick": 0,
+  "endTick": 20,
+  "stopTick": 28,
+  "isLoop": "false",
+  "returnTick": 0,
+  "degrees": false,
+  "moves": [
+   {
+    "tick": 0,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.0
+    }
+   },
+   {
+    "tick": 5,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.32
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.05
+    }
+   },
+   {
+    "tick": 15,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.28
+    }
+   },
+   {
+    "tick": 20,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": 0.0
+    }
+   }
+  ]
+ }
+}

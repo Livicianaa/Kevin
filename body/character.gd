@@ -84,9 +84,10 @@ const EMOTE_POOLS := {
 	"fun": ["dab", "the_dab", "floss_dance3", "orange justice", "club_penguin_dance", "take the l",
 		"jump", "jumping jacks", "selfie", "headspin", "tpose"],
 	"social": ["meeting", "hug", "hearthands", "bow1", "F", "make_gestures", "grace"],
+	"brain": ["think", "nod"],
 }
 ## Dongulu emote'larin suresi (saniye) havuza gore
-const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0)}
+const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(4.0, 7.0), "social": Vector2(3.0, 5.0), "brain": Vector2(999.0, 999.0)}
 const EMOTE_FADE := 0.5
 ## Rastgele secimde agirlik (varsayilan 1). lookaround sik geliyordu.
 const EMOTE_WEIGHT := {"lookaround": 0.25}
@@ -224,6 +225,64 @@ func _load_emotes() -> void:
 			if name in EMOTE_POOLS[pool]:
 				emote_pool[name] = pool
 	print("[kevin] %d emote yuklendi" % emotes.size())
+
+
+# =====================================================================
+# Beyin (Electron) olaylari: dinliyor / dusunuyor / konusuyor ...
+# Kevin konusmaya dahilken gezinmez, kameraya (kullaniciya) doner.
+# =====================================================================
+
+## Beyin durumuna gore surekli oynayan emote (durum degisince biter)
+const BRAIN_STATE_EMOTE := {"think": "think", "talk": "make_gestures", "dance": "floss_dance3", "sleep": "lay_down5"}
+## Tek seferlik hareketler
+const BRAIN_PLAY_EMOTE := {"wave": "meeting", "wake": "meeting", "nod-yes": "nod", "nod-no": "shake", "jump": "jump", "tickle": "nervous"}
+
+var brain_state := "idle"
+var brain_emote := ""
+
+
+func brain_busy() -> bool:
+	return brain_state in ["listen", "think", "talk"]
+
+
+func on_brain_state(state: String) -> void:
+	if OS.is_debug_build() and state != brain_state:
+		print("[kevin] beyin: ", state)
+	brain_state = state
+	if mode != Mode.ANIMATED and mode != Mode.MENU:
+		return
+	# Onceki durumun emote'unu birak
+	if brain_emote != "" and emote and emote.name == brain_emote:
+		emote_until = emote_t
+	brain_emote = ""
+	if brain_busy():
+		# Yurumeyi birak, kullaniciya don
+		if anim_state == "walk" or after_walk != "":
+			after_walk = ""
+			_set_state("idle", 999.0)
+		attention_left = 0.0
+	var e: String = BRAIN_STATE_EMOTE.get(state, "")
+	if e != "" and emotes.has(e) and play_emote(e, 999.0):
+		brain_emote = e
+	elif not brain_busy() and anim_state == "idle":
+		state_timer = randf_range(0.8, 2.0)
+
+
+func on_brain_play(name: String) -> void:
+	if mode != Mode.ANIMATED and mode != Mode.MENU:
+		return
+	var e: String = BRAIN_PLAY_EMOTE.get(name, "")
+	if e == "" or not emotes.has(e):
+		return
+	# Konusma hareketinin (make_gestures) ustune kisa hareket: sonra geri doner
+	var resume := brain_emote
+	if play_emote(e, 1.6):
+		brain_emote = ""
+		if resume != "":
+			get_tree().create_timer(emotes[e].length_seconds() if not emotes[e].looped else 1.6).timeout.connect(func():
+				if brain_state in BRAIN_STATE_EMOTE and emote == null and BRAIN_STATE_EMOTE[brain_state] == resume:
+					if play_emote(resume, 999.0):
+						brain_emote = resume)
 
 
 ## Emote oynat (beyin de bunu cagiracak). Dongulu emote'lar sure bitince
@@ -607,6 +666,9 @@ func _end_emote() -> void:
 ## Siradaki davranis. Kisa bir durusla yuruyus arasina emote'lar giriyor;
 ## uzun dinlenmeler (oturma, uzanma) seyrek.
 func _choose_next() -> void:
+	if brain_busy():
+		_set_state("idle", 1.0)
+		return
 	var roll := randf()
 	var e := emote_factor
 	var pool := ""
@@ -671,6 +733,8 @@ func _update_look(delta: float) -> void:
 			attention_cooldown = randf_range(2.0, 4.0)
 
 	var target := Vector2.ZERO
+	if brain_busy():
+		attention_left = 0.0
 	if attention_left > 0.0 and anim_state != "walk":
 		var to := look_point - head_pos
 		target = Vector2(

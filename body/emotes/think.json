@@ -1,0 +1,87 @@
+{
+ "name": "Dusunme",
+ "author": "Kevin (Liviciana)",
+ "description": "Eli cenesinde dusunuyor",
+ "emote": {
+  "beginTick": 0,
+  "endTick": 100,
+  "stopTick": 108,
+  "isLoop": "true",
+  "returnTick": 8,
+  "degrees": false,
+  "moves": [
+   {
+    "tick": 8,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -1.75,
+     "yaw": -0.25,
+     "roll": 0.55
+    }
+   },
+   {
+    "tick": 8,
+    "easing": "EASEINOUTSINE",
+    "leftArm": {
+     "pitch": -0.55,
+     "yaw": 0.3,
+     "roll": -0.45
+    }
+   },
+   {
+    "tick": 8,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.18,
+     "yaw": 0.22,
+     "roll": 0.08
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.24,
+     "yaw": 0.32,
+     "roll": 0.12
+    }
+   },
+   {
+    "tick": 70,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.14,
+     "yaw": 0.12,
+     "roll": 0.05
+    }
+   },
+   {
+    "tick": 100,
+    "easing": "EASEINOUTSINE",
+    "head": {
+     "pitch": -0.18,
+     "yaw": 0.22,
+     "roll": 0.08
+    }
+   },
+   {
+    "tick": 55,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -1.82,
+     "yaw": -0.25,
+     "roll": 0.58
+    }
+   },
+   {
+    "tick": 100,
+    "easing": "EASEINOUTSINE",
+    "rightArm": {
+     "pitch": -1.75,
+     "yaw": -0.25,
+     "roll": 0.55
+    }
+   }
+  ]
+ }
+}
