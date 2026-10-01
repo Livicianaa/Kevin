@@ -88,6 +88,31 @@ function startBodyBridge() {
 
 ipcMain.on('body-event', (_event, ev) => bodySend(ev));
 
+// Sohbet gecmisi: yeniden baslayinca son konusmayi hatirlasin, govdenin
+// menusu de gostersin. Modele sadece son birkac mesaj gidiyor.
+const HISTORY_PATH = path.join(app.getPath('userData'), 'history.json');
+const HISTORY_KEEP = 300;
+
+function loadHistory() {
+  try {
+    const data = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf-8'));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle('history-load', () => loadHistory());
+ipcMain.on('history-add', (_event, entry) => {
+  const all = loadHistory();
+  all.push({ ...entry, at: new Date().toISOString() });
+  try {
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(all.slice(-HISTORY_KEEP), null, 1));
+  } catch (err) {
+    console.error('[kevin] gecmis yazilamadi:', err.message);
+  }
+});
+
 const PIPER_DIR = path.join(__dirname, 'bin', 'piper');
 const PIPER_BIN = path.join(PIPER_DIR, 'piper');
 const PIPER_VOICES_DIR = path.join(__dirname, 'bin', 'piper-voices');
@@ -954,6 +979,8 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
 });
 
 const AGENT_TIME_BUDGET_MS = 28000;
+const FOLLOW_UP_MS = 120000;
+let lastToolUseAt = 0;
 const MAX_AGENT_STEPS = 6;
 const MAX_TOOL_RESULT_CHARS = 4000;
 
@@ -1042,17 +1069,22 @@ ipcMain.handle('chat', async (_event, history) => {
   ];
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-  let tools = messageNeedsAgent(lastUserMessage)
+  // Az once arac kullanildiysa devam cumlelerinde de ("daha yumusak olsun",
+  // "digerini ac") araclar acik: anahtar kelime yok diye araçsiz gidip bos
+  // cevap donuyordu.
+  const followUp = Date.now() - lastToolUseAt < FOLLOW_UP_MS;
+  let tools = messageNeedsAgent(lastUserMessage) || followUp
     ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage))
     : undefined;
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
   let rateRetried = false;
+  let emptyRetried = false;
 
   async function callCompletions(forceNoTools) {
     const activeTools = forceNoTools ? undefined : tools;
-    const toolChoice = hasCalledTool ? 'auto' : 'required';
+    const toolChoice = hasCalledTool || (followUp && !messageNeedsAgent(lastUserMessage)) ? 'auto' : 'required';
     const response = await fetch(`${provider.baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -1132,12 +1164,13 @@ ipcMain.handle('chat', async (_event, history) => {
 
     if (!replyMsg) {
       console.error('Bos cevap - ham data:', JSON.stringify(data).slice(0, 500));
-      return '(bos cevap)';
+      return 'Hmm, tam anlayamadim, bir daha soyler misin?';
     }
 
     if (replyMsg.tool_calls?.length) {
       messages.push(replyMsg);
       hasCalledTool = true;
+      lastToolUseAt = Date.now();
 
       for (const call of replyMsg.tool_calls) {
         let args = {};
@@ -1195,7 +1228,18 @@ ipcMain.handle('chat', async (_event, history) => {
     win?.webContents.send('agent-activity', null);
     // Sistem promptu emojiyi yasakliyor ama modeller ara sira yine koyuyor;
     // metinden de temizliyoruz (TTS'te zaten temizleniyordu).
-    return stripEmoji(replyMsg.content || '').trim() || '(bos cevap)';
+    const text = stripEmoji(replyMsg.content || '').trim();
+    if (text) return text;
+    // Model bos dondu (gpt-oss ara sira sadece 'dusunup' bos birakiyor):
+    // bir kez daha, araçsiz ve kisa cevap iste
+    if (!emptyRetried) {
+      emptyRetried = true;
+      tools = undefined;
+      messages.push({ role: 'system', content: 'Cevabin bos geldi. Kullaniciya simdi kisa, dogal bir cumleyle cevap ver.' });
+      continue;
+    }
+    console.warn('[kevin] model bos cevap verdi');
+    return 'Hmm, tam anlayamadim, bir daha soyler misin?';
   }
 
   win?.webContents.send('agent-activity', null);

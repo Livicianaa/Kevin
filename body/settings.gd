@@ -77,6 +77,17 @@ static func save_brain(changes: Dictionary) -> void:
 	_write("config.json", cfg)
 
 
+## Beynin kaydettigi sohbet gecmisi (son N mesaj)
+static func load_history(limit := 80) -> Array:
+	var path := config_dir().path_join("history.json")
+	if not FileAccess.file_exists(path):
+		return []
+	var data = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not (data is Array):
+		return []
+	return data.slice(maxi(0, data.size() - limit))
+
+
 ## Paketteki ve kullanicinin skin'leri (png yollari)
 static func list_skins() -> Array:
 	var out := []

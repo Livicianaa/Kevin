@@ -30,6 +30,7 @@ var fs := 15
 var column: Control
 var left_bar: Control
 var main_view: VBoxContainer
+var detail_scroll: ScrollContainer
 var detail_view: VBoxContainer
 var detail_head: Button
 var cat_buttons := {}
@@ -286,7 +287,7 @@ func _build_column(size_px: Vector2) -> Control:
 	plate.add_child(ph)
 	main_view.add_child(plate)
 
-	var cats := [["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
+	var cats := [["sohbet", "Sohbet"], ["karakter", "Karakter"], ["yapay_zeka", "Yapay Zeka"], ["davranis", "Davranış"], ["hakkinda", "Hakkında"]]
 	for c in cats:
 		var b := _game_button(c[1], C_CARAMEL, 2.1)
 		b.pressed.connect(_open_category.bind(c[0]))
@@ -357,9 +358,11 @@ func _build_detail(size_px: Vector2) -> VBoxContainer:
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	box.add_child(scroll)
+	detail_scroll = scroll
 	var holder := VBoxContainer.new()
 	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(holder)
+	pages["sohbet"] = _page_chat()
 	pages["karakter"] = _page_character()
 	pages["yapay_zeka"] = _page_ai()
 	pages["davranis"] = _page_behaviour()
@@ -376,6 +379,8 @@ func _open_category(id: String) -> void:
 	if current_cat != "":
 		return
 	current_cat = id
+	if id == "sohbet":
+		_fill_chat()
 	var src: Button = cat_buttons[id]
 	for k in pages:
 		pages[k].visible = k == id
@@ -492,6 +497,45 @@ func _page() -> VBoxContainer:
 	v.add_theme_constant_override("separation", int(fs * 0.65))
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return v
+
+
+var chat_list: VBoxContainer
+var chat_scroll: ScrollContainer
+
+
+func _page_chat() -> VBoxContainer:
+	var v := _page()
+	chat_list = VBoxContainer.new()
+	chat_list.add_theme_constant_override("separation", int(fs * 0.45))
+	chat_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(chat_list)
+	return v
+
+
+## Gecmisi her acilista yeniden oku (beyin bu arada yeni mesaj yazmis olabilir)
+func _fill_chat() -> void:
+	for c in chat_list.get_children():
+		c.queue_free()
+	var items := Settings.load_history()
+	if items.is_empty():
+		chat_list.add_child(_label("Henüz konuşma yok. \"Kevin\" diye seslen ya da Kevin'e orta tıkla.", 0.85, C_MUTED, true))
+		return
+	for m in items:
+		var mine: bool = m.get("role", "") == "user"
+		var bubble := PanelContainer.new()
+		bubble.add_theme_stylebox_override("panel", _box(Color("fffaf0") if mine else C_CREAM_2, 10, C_INK, 2, 2))
+		bubble.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var bv := VBoxContainer.new()
+		bv.add_theme_constant_override("separation", 0)
+		bv.add_child(_label("Sen" if mine else "Kevin", 0.72, C_CARAMEL.darkened(0.25) if not mine else C_MUTED, false, 800))
+		bv.add_child(_label(str(m.get("content", "")), 0.88, C_TEXT, true))
+		bubble.add_child(bv)
+		chat_list.add_child(bubble)
+	# En yeni mesaj gorunsun
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if detail_scroll:
+		detail_scroll.scroll_vertical = int(detail_scroll.get_v_scroll_bar().max_value)
 
 
 func _page_character() -> VBoxContainer:

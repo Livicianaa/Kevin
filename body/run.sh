@@ -4,7 +4,13 @@
 # gecici olarak yukler.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Zaten aciksa ikinci bir Kevin (ve ikinci beyin) acma
+if pgrep -f -- "--path $HERE( |$)" >/dev/null 2>&1; then
+  echo "Kevin zaten calisiyor."
+  exit 0
+fi
 GODOT="${GODOT:-$(command -v godot || echo "$HOME/.local/bin/godot")}"
 
 if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null; then

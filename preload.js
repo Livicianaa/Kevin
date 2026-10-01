@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   cemPack: () => ipcRenderer.invoke('cem-pack'),
   cursorPos: () => ipcRenderer.invoke('cursor-pos'),
   bodyEvent: (event) => ipcRenderer.send('body-event', event),
+  historyLoad: () => ipcRenderer.invoke('history-load'),
+  historyAdd: (entry) => ipcRenderer.send('history-add', entry),
   onBodyCommand: (callback) => {
     ipcRenderer.on('body-command', (_e, data) => callback(data));
   },

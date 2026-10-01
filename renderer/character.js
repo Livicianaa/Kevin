@@ -376,6 +376,7 @@ async function voiceReply(text, cfg) {
 
   conversationHistory.push({ role: 'user', content: text });
   trimHistory();
+  window.kevinAPI.historyAdd({ role: 'user', content: text });
 
   let reply;
   try {
@@ -397,6 +398,7 @@ async function voiceReply(text, cfg) {
   }
 
   console.log('[kevin] cevap:', reply);
+  window.kevinAPI.historyAdd({ role: 'assistant', content: reply });
   playAnswerGesture(reply);
   showBubble(reply);
   setVoiceState(VOICE_SPEAKING);
@@ -707,6 +709,15 @@ function showBubble(text) {
 
 let conversationActive = false;
 let conversationHistory = [];
+
+// Onceki oturumun son konusmasi: yeniden baslayinca kaldigi yerden hatirlasin
+window.kevinAPI.historyLoad().then((all) => {
+  if (!Array.isArray(all) || conversationHistory.length) return;
+  conversationHistory = all
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((m) => ({ role: m.role, content: m.content }));
+}).catch(() => {});
 
 async function openPanel() {
   markInteraction();
