@@ -26,7 +26,9 @@ async function ensurePage(profileDir) {
   if (context && page && !page.isClosed()) return page;
 
   context = await chromium.launchPersistentContext(profileDir, {
-    headless: false,
+    // Gorunmez: kullaniciya gostermek icin varsayilan tarayicisi kullaniliyor
+    // (open_url_or_app); burada sadece Kevin'in kendisi okuyor/tikliyor.
+    headless: process.env.KEVIN_BROWSER_VISIBLE !== '1',
     viewport: { width: 1280, height: 800 },
     args: ['--no-first-run', '--no-default-browser-check'],
   });

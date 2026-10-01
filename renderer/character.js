@@ -323,14 +323,49 @@ function touchVoiceSession(ms) {
   voiceSessionTimer = setTimeout(endVoiceSession, ms || DEFAULT_SESSION_MS);
 }
 
+// Ses tanima ismi bozuk yaziyor ("Kevim", "Kev'in", "Kemin", "Ken"): yaklasik
+// eslesme. Ilk iki kelimede daha toleransli (seslenme genelde basta).
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return d[a.length][b.length];
+}
+
+function normalizeWord(w) {
+  return w.toLocaleLowerCase('tr').replace(/['’`]/g, '').replace(/[^a-zçğıöşü0-9]/g, '')
+    .replace(/ı/g, 'i');
+}
+
+// Uyanma kelimesinin bittigi karakter konumu; yoksa -1
+function findWake(text, wakeWords) {
+  const re = /\S+/g;
+  let m;
+  let index = 0;
+  const wakes = wakeWords.map(normalizeWord).filter(Boolean);
+  while ((m = re.exec(text)) !== null) {
+    const w = normalizeWord(m[0]);
+    for (const wake of wakes) {
+      if (!w) continue;
+      const tol = index < 2 && wake.length >= 4 && w[0] === wake[0] ? 2 : (wake.length >= 5 ? 1 : 0);
+      // "kevine", "kevinim" gibi ekler: kelimenin basi yeterli
+      const head = w.slice(0, Math.max(wake.length, 3));
+      if (w === wake || editDistance(head, wake) <= tol || (w.length >= 3 && editDistance(w, wake) <= tol)) {
+        return m.index + m[0].length;
+      }
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 // "kevin hava nasil" -> "hava nasil" (uyanma kelimesi ve oncesi atiliyor)
 function stripWakeWord(text, wakeWords) {
-  const lower = text.toLowerCase();
-  let cut = -1;
-  for (const word of wakeWords) {
-    const at = lower.indexOf(word);
-    if (at >= 0) cut = Math.max(cut, at + word.length);
-  }
+  const cut = findWake(text, wakeWords);
   if (cut < 0) return text.trim();
   return text.slice(cut).replace(/^[\s,.:!?]+/, '').trim();
 }
@@ -399,7 +434,7 @@ async function handleVoice(text) {
   voiceBusySince = Date.now();
   try {
     if (voiceState === VOICE_IDLE) {
-      if (!wakeWords.some((w) => w && lower.includes(w))) return;
+      if (findWake(text, wakeWords) < 0) return;
 
       markInteraction();
       const rest = stripWakeWord(text, wakeWords);

@@ -159,6 +159,13 @@ const DEFAULT_PERSONA = [
   'tiklayip yazarsin). Giris gerektiren ya da JavaScript ile yuklenen sayfalarda',
   'fetch_page degil tarayiciyi kullan. Kullanici bunlardan birini isterse ARACI CAGIR,',
   'tahmin etme ve "yapamam" deme. Arac sonucunu aldiktan sonra kisa bir cumleyle anlat.',
+  'LEB DEMEDEN LEBLEBIYI ANLA: kullanici ne istedigini tam soylemese de niyetini tahmin et ve',
+  'sormadan hemen yap, sonra ne yaptigini kisaca soyle. Ornekler: "buton tasarimi bul" ya da',
+  '"menu icin renk ornekleri" -> open_url_or_app ile https://www.pinterest.com/search/pins/?q=...',
+  'aramasini ac. "su videoyu ac" -> YouTube aramasi ac. Bir sey ogrenmek istiyorsa ara ve cevapla.',
+  'Ses yaziya cevrilirken kelimeler bozulabilir (site adlari, "nokta com", "nokta mi" gibi):',
+  'en mantikli adresi tahmin edip ac, emin degilsen arama sayfasi ac. Kullanicinin onceki',
+  'cumlelerinden baglami kullan; ayni seyi tekrar sordurtma.',
 ].join(' ');
 
 function buildPersona(cfg) {
@@ -193,6 +200,14 @@ const PROVIDERS = {
 
 function isLocal(provider) {
   return Boolean(PROVIDERS[provider] && PROVIDERS[provider].local);
+}
+
+// Ses tanimaya ismi onceden soyluyoruz: yoksa "Kevin"i "Ken", "Kemim", "Kevim"
+// diye yaziyor ve uyanma kelimesi tutmuyordu.
+function whisperPrompt(cfg) {
+  const name = cfg.name || 'Kevin';
+  const nicks = (cfg.nicknames || []).join(', ');
+  return `${name}${nicks ? `, ${nicks}` : ''}. ${name}, bana yardim eder misin?`;
 }
 
 function loadConfig() {
@@ -255,8 +270,9 @@ const OPEN_URL_TOOL = {
   function: {
     name: 'open_url_or_app',
     description:
-      'Bir web adresini varsayilan tarayicida veya bir dosyayi varsayilan uygulamada acar. ' +
-      'Kullanici "X\'i ac", "tarayicidan X\'e git", "su dosyayi ac" dediginde bunu kullan. ' +
+      'Kullanicinin KENDI varsayilan tarayicisinda bir adres, ya da varsayilan uygulamada bir dosya acar. ' +
+      'Kullaniciya bir site/arama/sayfa GOSTERMEK icin HER ZAMAN bunu kullan. ' +
+      'Kullanici "X\'i ac", "X\'e git", "X bul", "su dosyayi ac" dediginde bunu kullan. ' +
       'Ornekler: "https://discord.com", "/home/user/belge.pdf"',
     parameters: {
       type: 'object',
@@ -511,8 +527,9 @@ const BROWSER_OPEN_TOOL = {
   function: {
     name: 'browser_open',
     description:
-      'Kendi tarayicisinda bir adresi acar ve sayfayi okur. Giris gerektiren ya da ' +
-      'JavaScript ile yuklenen sayfalar icin fetch_page yerine BUNU kullan.',
+      'Kendi (gorunmeyen) tarayicinda bir adresi acar ve sayfayi SENIN icin okur. ' +
+      'Kullaniciya gostermek icin DEGIL (onun icin open_url_or_app). Sadece icerigi okuman ' +
+      'ya da sayfada islem yapman gerekiyorsa; JavaScript ile yuklenen sayfalarda fetch_page yerine.',
     parameters: {
       type: 'object',
       properties: { url: { type: 'string', description: 'Adres' } },
@@ -966,6 +983,7 @@ const BASIC_TOOL_KEYWORDS = [
   'dosya', 'klasor', 'klasör', 'dizin', 'oku', 'okusana', 'yaz', 'kaydet', 'not al',
   'duzenle', 'düzenle', 'olustur', 'oluştur', 'sil', 'listele', 'ac', 'aç', 'baslat', 'başlat',
   'ara', 'arat', 'bul', 'internet', 'site', 'sayfa', 'link', 'adres', 'google',
+  'tasarim', 'tasarım', 'ornek', 'örnek', 'resim', 'gorsel', 'görsel', 'pinterest',
   'haber', 'hava', 'fiyat', 'kac para', 'kaç para', 'nedir', 'ne demek', 'kim',
   'ne zaman', 'nerede', 'guncel', 'güncel', 'indir', 'goster', 'göster',
   'ekran', 'bak', 'baksana', 'goruyor musun', 'görüyor musun', 'ne yaziyor', 'ne yazıyor',
@@ -982,15 +1000,23 @@ const SCREEN_CONTROL_KEYWORDS = [
   'one getir', 'öne getir', 'click', 'window', 'type', 'press',
 ];
 
+// Kisa anahtar kelimeler ("ac", "bul", "oku") sadece kelime basinda: "acaba"
+// gibi kelimelerin icinde eslesip her cumlede arac semalarini (binlerce token)
+// gonderiyordu, Groq'un dakikalik siniri doluyordu.
+function keywordHit(lower, key) {
+  if (key.length > 4) return lower.includes(key);
+  return new RegExp(`(^|[^a-zçğıöşü])${key}`, 'i').test(lower);
+}
+
 function messageNeedsAgent(text) {
-  const lower = text.toLowerCase();
-  return BASIC_TOOL_KEYWORDS.some((k) => lower.includes(k))
-    || SCREEN_CONTROL_KEYWORDS.some((k) => lower.includes(k));
+  const lower = text.toLocaleLowerCase('tr');
+  return BASIC_TOOL_KEYWORDS.some((k) => keywordHit(lower, k))
+    || SCREEN_CONTROL_KEYWORDS.some((k) => keywordHit(lower, k));
 }
 
 function messageNeedsScreenControl(text) {
-  const lower = text.toLowerCase();
-  return SCREEN_CONTROL_KEYWORDS.some((k) => lower.includes(k));
+  const lower = text.toLocaleLowerCase('tr');
+  return SCREEN_CONTROL_KEYWORDS.some((k) => keywordHit(lower, k));
 }
 
 ipcMain.handle('chat', async (_event, history) => {
@@ -1022,6 +1048,7 @@ ipcMain.handle('chat', async (_event, history) => {
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
+  let rateRetried = false;
 
   async function callCompletions(forceNoTools) {
     const activeTools = forceNoTools ? undefined : tools;
@@ -1045,6 +1072,20 @@ ipcMain.handle('chat', async (_event, history) => {
         model = provider.defaultModel;
         saveConfig({ ...loadConfig(), model: '' });
         return callCompletions(forceNoTools);
+      }
+
+      // Groq ucretsiz katman: dakikalik token siniri (TPM). "X sn sonra dene"
+      // diyorsa o kadar bekleyip bir kez daha dene; onceden direkt "bir sorun
+      // cikti" deniyordu.
+      if (response.status === 429 && !rateRetried) {
+        const m = text.match(/try again in ([0-9.]+)s/i);
+        const wait = m ? parseFloat(m[1]) : 6;
+        if (wait <= 18) {
+          rateRetried = true;
+          console.warn(`[kevin] hiz siniri, ${wait.toFixed(1)} sn bekleniyor`);
+          await new Promise((r) => setTimeout(r, (wait + 0.4) * 1000));
+          return callCompletions(forceNoTools);
+        }
       }
 
       const err = new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
@@ -1175,7 +1216,7 @@ ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS],
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS, '--prompt', whisperPrompt(cfg)],
       { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
     );
 
@@ -1197,7 +1238,7 @@ ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
 
     const { stdout } = await runCommand(
       WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS],
+      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS, '--prompt', whisperPrompt(cfg)],
       { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
     );
 
