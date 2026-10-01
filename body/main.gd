@@ -8,13 +8,15 @@ extends Node3D
 ## karakterin ekranlar arasinda gezmesinin de temeli.
 
 const Character := preload("res://character.gd")
+const Settings := preload("res://settings.gd")
+const Menu := preload("res://menu.gd")
 
 ## Ekranda 1 dunya biriminin kac piksel oldugu. Karakter 2 birim boyunda.
-const PX_PER_UNIT := 118.0
+var PX_PER_UNIT := 118.0
 ## Takip penceresi (piksel), SABIT. Tutarken buyuyup ayaktayken kuculen bir
 ## surum denendi: Hyprland pencere boyutunu kamerayla ayni anda degistirmeyince
 ## karakter tutuldugunda kuculuyordu. 430x500 ise "asiri buyuktu".
-const WIN_SIZE := Vector2i(300, 300)
+var WIN_SIZE := Vector2i(300, 300)
 ## Pencere karakteri ne kadar hizli takip etsin (0-1, kare basina)
 const FOLLOW := 0.55
 
@@ -50,6 +52,9 @@ var test_anim := ""
 ## Test: acilista bu emote oynasin
 var test_emote := ""
 var test_led := false
+## Test: 1. saniyede menuyu ac (deger: acilacak sekme)
+var test_menu := ""
+var test_menu_clock := 0.0
 var shot_times := [0.6, 3.0, 6.95, 9.5]
 var shot_index := 0
 var shot_clock := 0.0
@@ -70,6 +75,8 @@ func _ready() -> void:
 			test_diag = true
 		elif arg.begins_with("--shot="):
 			shot_prefix = arg.substr(7)
+		elif arg.begins_with("--menu"):
+			test_menu = arg.substr(7) if arg.length() > 6 else "karakter"
 		elif arg == "--led":
 			test_led = true
 		elif arg == "--throw":
@@ -85,17 +92,27 @@ func _ready() -> void:
 			for v in arg.substr(8).split(","):
 				shot_times.append(float(v))
 
+	# Menuden kaydedilen govde ayarlari (boyut, model, skin, davranis)
+	body_settings = Settings.load_body()
+	var scale := clampf(float(body_settings.scale), 0.6, 2.0)
+	PX_PER_UNIT = 118.0 * scale
+	WIN_SIZE = Vector2i(roundi(300 * scale), roundi(300 * scale))
+
 	_read_screens()
 	if usable_right <= usable_left:
 		usable_left = desk_rect.position.x
 		usable_right = desk_rect.end.x
-	DisplayServer.window_set_size(WIN_SIZE)
+	get_window().size = WIN_SIZE
 
 	_build_camera()
+	_build_menu_bg()
 	_build_lights()
 	_build_world_edges()
 
 	character = Character.new()
+	character.slim = body_settings.slim
+	character.skin_path = body_settings.skin
+	_apply_behaviour(body_settings)
 	add_child(character)
 	var margin := 0.6
 	character.bounds = Vector2(_px_to_world_x(desk_rect.position.x) + margin, _px_to_world_x(desk_rect.end.x) - margin)
@@ -110,6 +127,17 @@ func _ready() -> void:
 	# kural dosyasiyla degil, pencere ACILDIKTAN sonra setprop ile veriliyor.
 	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") != "":
 		get_tree().create_timer(0.6).timeout.connect(_strip_decorations)
+
+
+var body_settings := {}
+
+
+func _apply_behaviour(cfg: Dictionary) -> void:
+	character.walk_factor = float(cfg.walk)
+	character.emote_factor = float(cfg.emotes)
+	character.look_enabled = cfg.look
+	character.wall_sit_enabled = cfg.wall_sit
+	character.fun_enabled = cfg.fun
 
 
 func _strip_decorations() -> void:
@@ -244,6 +272,37 @@ func _build_camera() -> void:
 	camera.near = 0.1
 	camera.far = 100.0
 	add_child(camera)
+
+
+const MENU_BG_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never, blend_mix;
+uniform float alpha = 0.0;
+void fragment() {
+	vec3 col = mix(vec3(0.17, 0.12, 0.36), vec3(0.07, 0.05, 0.17), UV.y);
+	vec2 g = fract(FRAGCOORD.xy / 22.0) - 0.5;
+	col += (1.0 - smoothstep(0.08, 0.13, length(g))) * 0.04;
+	float v = smoothstep(0.95, 0.2, length(UV - vec2(0.33, 0.45)));
+	col *= mix(0.6, 1.12, v);
+	ALBEDO = col;
+	ALPHA = alpha * 0.93;
+}
+"""
+var menu_bg: MeshInstance3D
+
+
+## Menu arka plani: kameraya bagli, karakterin ARKASINDA bir duzlem (2B katman
+## karakterin ustune cizilirdi)
+func _build_menu_bg() -> void:
+	menu_bg = MeshInstance3D.new()
+	menu_bg.mesh = QuadMesh.new()
+	var mat := ShaderMaterial.new()
+	mat.shader = Shader.new()
+	mat.shader.code = MENU_BG_SHADER
+	menu_bg.material_override = mat
+	menu_bg.position = Vector3(0, 0, -40)
+	menu_bg.visible = false
+	camera.add_child(menu_bg)
 
 
 func _build_lights() -> void:
@@ -385,6 +444,13 @@ var led_speed := 0.0
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if menu_state != MENU_CLOSED:
+		_menu_input(event)
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if not _hit_at(event.position).is_empty():
+			_open_menu()
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var hit := _hit_at(event.position)
@@ -510,7 +576,167 @@ func _physics_process(delta: float) -> void:
 			get_tree().quit()
 
 
+# =====================================================================
+# Menu: sag tik -> Kevin ekranin ortasina ucar, pencere o ekrani kaplar,
+# kamera yaklasir, menu ustten ve yanlardan gelir.
+# =====================================================================
+
+enum { MENU_CLOSED, MENU_RESIZING, MENU_OPEN, MENU_CLOSING }
+const MENU_FLY_TIME := 0.9
+var menu_state := MENU_CLOSED
+var menu_screen := Rect2i()
+var menu_k := 0.0
+var menu_from_x := 0.0
+var menu_target_x := 0.0
+var menu_layer: CanvasLayer
+var menu_ui: Control
+var menu_rotating := false
+var menu_auto_rotate := false
+var menu_reload := false
+
+
+func _open_menu() -> void:
+	if character.mode != 0:
+		return
+	menu_screen = _screen_at_x(_world_to_px(_character_center()).x)
+	menu_state = MENU_RESIZING
+	menu_k = 0.0
+	menu_from_x = character.root_x
+	menu_target_x = _px_to_world_x(menu_screen.get_center().x)
+	menu_reload = false
+	character.enter_menu()
+	get_window().size = menu_screen.size
+	DisplayServer.window_set_position(menu_screen.position)
+	DisplayServer.window_move_to_foreground()
+
+
+func _close_menu() -> void:
+	if menu_state == MENU_CLOSED or menu_state == MENU_CLOSING:
+		return
+	menu_state = MENU_CLOSING
+	menu_rotating = false
+	if menu_ui:
+		menu_ui.animate_out(Vector2(menu_screen.size))
+
+
+func _finish_close() -> void:
+	menu_state = MENU_CLOSED
+	if menu_layer:
+		menu_layer.queue_free()
+		menu_layer = null
+		menu_ui = null
+	menu_bg.visible = false
+	character.exit_menu()
+	if menu_reload:
+		get_tree().reload_current_scene()
+		return
+	get_window().size = WIN_SIZE
+	win_pos = _desired_window_pos()
+	_apply_window()
+
+
+func _build_menu_ui(size_px: Vector2) -> void:
+	menu_layer = CanvasLayer.new()
+	add_child(menu_layer)
+	menu_ui = Menu.new()
+	menu_layer.add_child(menu_ui)
+	menu_ui.build(size_px)
+	menu_ui.close_requested.connect(_close_menu)
+	menu_ui.skin_chosen.connect(func(path):
+		character.set_skin(path)
+		body_settings.skin = path
+		Settings.save_body(body_settings))
+	menu_ui.saved.connect(func(needs_reload):
+		body_settings = Settings.load_body()
+		_apply_behaviour(body_settings)
+		menu_reload = needs_reload
+		_close_menu())
+	menu_ui.action.connect(_menu_action)
+
+
+func _menu_action(name: String) -> void:
+	match name:
+		"auto_rotate_on":
+			menu_auto_rotate = true
+		"auto_rotate_off":
+			menu_auto_rotate = false
+		"reset":
+			menu_auto_rotate = false
+			character.menu_yaw = 0.0
+		"emote":
+			var pool := "fun" if character.fun_enabled else "idle"
+			character.play_emote(character._random_emote(pool))
+
+
+func _menu_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		_close_menu()
+	elif event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			_close_menu()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			menu_rotating = event.pressed
+	elif event is InputEventMouseMotion and menu_rotating:
+		character.menu_yaw += event.relative.x * 0.012
+		menu_auto_rotate = false
+
+
+func _update_menu(delta: float) -> void:
+	var vp := get_viewport().get_visible_rect().size
+	if menu_state == MENU_RESIZING:
+		# Pencere boyutu Hyprland'de gecikmeli degisiyor; ekran boyutuna
+		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu
+		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
+			menu_state = MENU_OPEN
+			menu_bg.visible = true
+			_build_menu_ui(vp)
+		else:
+			return
+	elif menu_state == MENU_OPEN:
+		menu_k = minf(1.0, menu_k + delta / MENU_FLY_TIME)
+	elif menu_state == MENU_CLOSING:
+		menu_k = maxf(0.0, menu_k - delta / 0.6)
+		if menu_k <= 0.0:
+			_finish_close()
+			return
+
+	if menu_auto_rotate:
+		character.menu_yaw += delta * 0.9
+
+	var k := smoothstep(0.0, 1.0, menu_k)
+	# Kevin ekranin ortasina ucuyor (yay cizerek)
+	character.root_x = lerpf(menu_from_x if menu_state != MENU_CLOSING else menu_target_x, menu_target_x, k if menu_state != MENU_CLOSING else 1.0)
+	character.menu_lift = sin(PI * clampf(menu_k, 0.0, 1.0)) * 1.1 if menu_state == MENU_OPEN and menu_k < 1.0 else 0.0
+
+	# Kamera: 1:1'den (karakter oldugu yerde) yakin plana; karakter ekranin
+	# solunda (%30), sag panel icin yer kaliyor
+	var ground := (desk_rect.end.y - menu_screen.end.y) / PX_PER_UNIT
+	var zoom_final := 0.55 * vp.y / (2.0 * PX_PER_UNIT)
+	var zoom := lerpf(1.0, zoom_final, k)
+	var c0 := _px_to_world(Vector2(menu_screen.get_center()))
+	var c1 := Vector3(menu_target_x + 0.2 * vp.x / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.08 * vp.y / (PX_PER_UNIT * zoom_final), 0)
+	var c := c0.lerp(c1, k)
+	camera.position = Vector3(c.x, c.y, 30)
+	camera.size = vp.y / (PX_PER_UNIT * zoom)
+	(menu_bg.mesh as QuadMesh).size = Vector2(camera.size * vp.x / vp.y, camera.size) * 1.02
+	(menu_bg.material_override as ShaderMaterial).set_shader_parameter("alpha", clampf(menu_k * 1.5, 0.0, 1.0))
+
+
 func _process(delta: float) -> void:
+	if test_menu != "":
+		test_menu_clock += delta
+		if test_menu_clock > 1.0 and test_menu_clock < 2.0 and menu_state == MENU_CLOSED and character.mode == 0:
+			_open_menu()
+		if menu_ui and test_menu_clock > 1.5:
+			menu_ui._select_tab(test_menu)
+		if test_menu_clock > 3.0 and test_menu_clock < 3.1:
+			_close_menu()
+		if test_diag and Engine.get_process_frames() % 20 == 0:
+			print("MENU t=%.2f durum=%d k=%.2f vp=%s mod=%d" % [test_menu_clock, menu_state, menu_k, str(get_viewport().get_visible_rect().size), character.mode])
+	if menu_state != MENU_CLOSED:
+		_update_menu(delta)
+		_process_shots(delta)
+		return
 	_update_character_screen()
 	if test_emote == "wall_sit" and character.mode == 0 and character.after_walk == "" and character.anim_state != "emote":
 		character._go_wall_sit()

@@ -14,8 +14,9 @@ extends Node3D
 const PX := 1.0 / 16.0
 const SKIN_SIZE := 64.0
 
-## Parcalar (piksel): boyut, ayakta merkez, skin UV koku (ic/dis katman), kutle
-const PARTS := {
+## Parcalar (piksel): boyut, ayakta merkez, skin UV koku (ic/dis katman), kutle.
+## Ince (Alex) modelde kollar 3 px: _ready'de PARTS buna gore kuruluyor.
+const PARTS_CLASSIC := {
 	"head":      { "size": Vector3(8, 8, 8),  "center": Vector3(0, 28, 0),  "uv": Vector2(0, 0),   "overlay": Vector2(32, 0),  "mass": 4.0 },
 	"body":      { "size": Vector3(8, 12, 4), "center": Vector3(0, 18, 0),  "uv": Vector2(16, 16), "overlay": Vector2(16, 32), "mass": 10.0 },
 	"right_arm": { "size": Vector3(4, 12, 4), "center": Vector3(-6, 18, 0), "uv": Vector2(40, 16), "overlay": Vector2(40, 32), "mass": 2.5 },
@@ -23,6 +24,18 @@ const PARTS := {
 	"right_leg": { "size": Vector3(4, 12, 4), "center": Vector3(-2, 6, 0),  "uv": Vector2(0, 16),  "overlay": Vector2(0, 32),  "mass": 4.0 },
 	"left_leg":  { "size": Vector3(4, 12, 4), "center": Vector3(2, 6, 0),   "uv": Vector2(16, 48), "overlay": Vector2(0, 48),  "mass": 4.0 },
 }
+
+var PARTS := PARTS_CLASSIC.duplicate(true)
+
+const Settings := preload("res://settings.gd")
+## Menuden gelen ayarlar (add_child'dan ONCE atanir)
+var slim := false
+var skin_path := "res://skins/totem.png"
+var walk_factor := 1.0
+var emote_factor := 1.0
+var look_enabled := true
+var wall_sit_enabled := true
+var fun_enabled := true
 
 ## Uzuvlar: govdeye baglandigi eklem (piksel, ayakta) ve fizikteki koni acisi (derece)
 const LIMBS := {
@@ -44,7 +57,7 @@ const GETUP_TIME := 0.9
 const SETTLE_ENERGY := 0.12
 const MAX_LYING_TIME := 4.0
 
-enum Mode { ANIMATED, RAGDOLL, GETTING_UP, LED }
+enum Mode { ANIMATED, RAGDOLL, GETTING_UP, LED, MENU }
 
 const Cem := preload("res://cem.gd")
 ## Yururken Minecraft'in limb_speed degeri ve limb_swing'in saniyede artisi.
@@ -159,9 +172,17 @@ var led_lean := 0.0
 var led_speed := 0.0
 var led_rise := 0.0
 
+## Menu: karakter ekranin ortasina ucuyor, kullanici surukleyerek donduruyor
+var menu_yaw := 0.0
+var menu_lift := 0.0
+
 
 func _ready() -> void:
-	skin_texture = load("res://skins/totem.png")
+	if slim:
+		for arm in ["right_arm", "left_arm"]:
+			PARTS[arm].size = Vector3(3, 12, 4)
+			PARTS[arm].center.x = -5.5 if arm == "right_arm" else 5.5
+	skin_texture = Settings.load_skin(skin_path)
 	for part_name in PARTS.keys():
 		_build_part(part_name)
 	for limb in LIMBS.keys():
@@ -208,7 +229,7 @@ func _load_emotes() -> void:
 ## Emote oynat (beyin de bunu cagiracak). Dongulu emote'lar sure bitince
 ## yumusakca birakiliyor, digerleri kendi sonunda.
 func play_emote(emote_name: String, seconds := -1.0) -> bool:
-	if mode != Mode.ANIMATED or not emotes.has(emote_name):
+	if (mode != Mode.ANIMATED and mode != Mode.MENU) or not emotes.has(emote_name):
 		return false
 	emote = emotes[emote_name]
 	emote_t = 0.0
@@ -296,6 +317,16 @@ func _build_joint(a_name: String, b_name: String, world_point: Vector3, swing: f
 
 	joint_probes.append([a, a.transform.affine_inverse() * world_point,
 		b, b.transform.affine_inverse() * world_point, "%s-%s" % [a_name, b_name]])
+
+
+## Skin'i canli degistir (model ve boyut degisikligi yeniden kurulum ister)
+func set_skin(path: String) -> void:
+	skin_path = path
+	skin_texture = Settings.load_skin(path)
+	for b in bodies.values():
+		for child in b.get_children():
+			if child is MeshInstance3D and child.material_override:
+				child.material_override.albedo_texture = skin_texture
 
 
 func _overlay_used(px_size: Vector3, uv: Vector2) -> bool:
@@ -465,7 +496,7 @@ func _cem_step(delta: float) -> void:
 		"is_on_ground": 1.0, "id": 7.0, "health": 20.0, "max_health": 20.0,
 	})
 
-	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y, 0))
+	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y + menu_lift, 0))
 	if mode == Mode.LED:
 		root = root * Transform3D(Basis(Vector3.RIGHT, led_lean), Vector3(0, led_rise, 0))
 	if emote:
@@ -577,21 +608,22 @@ func _end_emote() -> void:
 ## uzun dinlenmeler (oturma, uzanma) seyrek.
 func _choose_next() -> void:
 	var roll := randf()
+	var e := emote_factor
 	var pool := ""
-	if roll < 0.08:
+	if roll < 0.08 * e:
 		pool = "idle"
-	elif roll < 0.13:
-		pool = "fun"
-	elif roll < 0.15:
+	elif roll < 0.13 * e:
+		pool = "fun" if fun_enabled else ""
+	elif roll < 0.15 * e:
 		pool = "rest"
-	elif roll < 0.18:
+	elif roll < 0.18 * e and wall_sit_enabled:
 		_go_wall_sit()
 		return
 	if pool != "":
 		var name := _random_emote(pool)
 		if name != "sit_lean_wall" and name != "" and play_emote(name):
 			return
-	if randf() < 0.8:
+	if randf() < clampf(0.8 * walk_factor, 0.0, 0.97):
 		var span := bounds.y - bounds.x
 		walk_target = clampf(root_x + randf_range(-0.45, 0.45) * span, bounds.x + 0.4, bounds.y - 0.4)
 		if absf(walk_target - root_x) < 0.5:
@@ -630,7 +662,7 @@ func _update_look(delta: float) -> void:
 
 	attention_cooldown -= delta
 	attention_left -= delta
-	if attention_left <= 0.0 and attention_cooldown <= 0.0 and mouse_activity > 1.2:
+	if look_enabled and attention_left <= 0.0 and attention_cooldown <= 0.0 and mouse_activity > 1.2:
 		var near := look_point.distance_to(head_pos) < 3.0
 		if randf() < (0.6 if near else 0.25):
 			attention_left = randf_range(1.2, 2.6)
@@ -664,6 +696,22 @@ func _set_frozen(frozen: bool) -> void:
 		if not frozen:
 			body.linear_velocity = Vector3.ZERO
 			body.angular_velocity = Vector3.ZERO
+
+
+func enter_menu() -> void:
+	emote = null
+	emote_facing = NAN
+	after_walk = ""
+	menu_yaw = facing_now
+	anim_state = "idle"
+	mode = Mode.MENU
+
+
+func exit_menu() -> void:
+	menu_lift = 0.0
+	if mode == Mode.MENU:
+		mode = Mode.ANIMATED
+		_set_state("idle", randf_range(0.8, 1.6))
 
 
 ## Sendeleme basladi: part'in bu yerel noktasindan tutuldu
@@ -756,6 +804,16 @@ func _physics_process(delta: float) -> void:
 			_advance_getup(delta)
 		Mode.LED:
 			_led_step(delta)
+			_cem_step(delta)
+		Mode.MENU:
+			anim_t += delta
+			if emote:
+				emote_t += delta
+				if emote.finished(emote_t) or (emote.looped and emote_t >= emote_until):
+					emote = null
+			facing = menu_yaw
+			facing_now = menu_yaw
+			_update_look(delta)
 			_cem_step(delta)
 
 
