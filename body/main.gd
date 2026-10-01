@@ -708,7 +708,8 @@ func _update_menu(delta: float) -> void:
 		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu
 		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
 			menu_state = MENU_OPEN
-			menu_bg.visible = true
+			# Arka plan yok (livi: "arka plan olmasin"): Kevin ve menu dogrudan
+			# masaustunun ustunde
 			_build_menu_ui(vp)
 		else:
 			return
