@@ -121,13 +121,16 @@ static func make_back(size: Vector2) -> Control:
 		_halftone(ci, Rect2(c - Vector2(w * 0.12, h * 0.08), Vector2(w * 0.24, h * 0.16)), w * 0.02, Color(C_PLUM, 0.35), w * 0.007, c))
 	burst.set_meta("anim", "pop")
 
-	# Sag koyu blok + dikey "YAPAY ZEKA"
-	var block := _piece(root, size, Vector2(w * 0.82, h * 0.45), func(ci: CanvasItem):
+	# Sag koyu blok + "SENIN" ("Selam, ben Kevin, senin arkadasin")
+	var block := _piece(root, size, Vector2(w * 0.82, h * 0.4), func(ci: CanvasItem):
 		ci.draw_colored_polygon(PackedVector2Array([
-			Vector2(w * 0.66, h * 0.26), Vector2(w * 0.96, h * 0.24),
-			Vector2(w * 0.96, h * 0.68), Vector2(w * 0.70, h * 0.70)]), C_PLUM)
-		_big_text(ci, font, "YAPAY", Vector2(w * 0.69, h * 0.38), int(h * 0.105), C_CREAM, C_PLUM, 0, -0.12)
-		_big_text(ci, font, "ZEKA", Vector2(w * 0.71, h * 0.52), int(h * 0.12), C_CREAM, C_PLUM, 0, -0.12))
+			Vector2(w * 0.64, h * 0.31), Vector2(w * 0.97, h * 0.29),
+			Vector2(w * 0.97, h * 0.49), Vector2(w * 0.67, h * 0.51)]), C_PLUM)
+		# Yazi bloga sigsin
+		var fsz := int(h * 0.15)
+		var tw := font.get_string_size("SENİN", HORIZONTAL_ALIGNMENT_LEFT, -1, fsz).x
+		fsz = int(fsz * minf(1.0, (w * 0.27) / tw))
+		_big_text(ci, font, "SENİN", Vector2(w * 0.685, h * 0.465), fsz, C_CREAM, C_PLUM, 0, -0.12))
 	block.set_meta("anim", "right")
 
 	# Dev "KEVIN" (kafanin arkasinda)
@@ -168,19 +171,6 @@ func build(sz: Vector2) -> void:
 			ci.draw_colored_polygon(PackedVector2Array([p0 - n * 2.0, p1 - n * w * 0.012, p1 + n * w * 0.012, p0 + n * 2.0]), C_PINK))
 	bang.set_meta("anim", "pop")
 
-	# Etiket: "AI ARKADAS" + imza
-	var tag := _piece(self, sz, Vector2(w * 0.36, h * 0.35), func(ci: CanvasItem):
-		var r := Rect2(w * 0.25, h * 0.325, w * 0.22, h * 0.06)
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = C_CREAM
-		sb.set_corner_radius_all(6)
-		sb.border_color = C_PLUM
-		sb.set_border_width_all(2)
-		ci.draw_style_box(sb, r)
-		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.024), "KEVİN v0.2", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.019), C_PLUM)
-		ci.draw_string(small, r.position + Vector2(w * 0.012, h * 0.048), "Created by Liviciana", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.014), C_PLUM))
-	tag.set_meta("anim", "pop")
-
 	# Koyu konusma patlamasi (sol alt)
 	var speech := _piece(self, sz, Vector2(w * 0.19, h * 0.68), func(ci: CanvasItem):
 		var c := Vector2(w * 0.19, h * 0.68)
@@ -193,43 +183,10 @@ func build(sz: Vector2) -> void:
 		ci.draw_set_transform_matrix(Transform2D.IDENTITY))
 	speech.set_meta("anim", "pop")
 
-	# Sag cikartma: mikrofon + "SES ACIK" ve imlec
-	var sticker := _piece(self, sz, Vector2(w * 0.83, h * 0.6), func(ci: CanvasItem):
-		var r := Rect2(w * 0.76, h * 0.55, w * 0.15, w * 0.15)
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color.WHITE
-		sb.set_corner_radius_all(10)
-		sb.border_color = C_PLUM
-		sb.set_border_width_all(3)
-		ci.draw_style_box(sb, r)
-		var c := r.get_center() - Vector2(0, w * 0.012)
-		ci.draw_rect(Rect2(c - Vector2(w * 0.014, w * 0.035), Vector2(w * 0.028, w * 0.05)), C_PLUM)
-		ci.draw_arc(c + Vector2(0, w * 0.005), w * 0.028, 0.0, PI, 16, C_PLUM, 3.0)
-		ci.draw_line(c + Vector2(0, w * 0.033), c + Vector2(0, w * 0.045), C_PLUM, 3.0)
-		ci.draw_string(small, r.position + Vector2(w * 0.012, r.size.y - w * 0.02), "SENİ DİNLİYORUM", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.0115), C_PLUM)
-		var cur := Vector2(w * 0.935, h * 0.635)
-		var arrow := PackedVector2Array([cur, cur + Vector2(0, w * 0.07), cur + Vector2(w * 0.018, w * 0.052), cur + Vector2(w * 0.032, w * 0.08),
-			cur + Vector2(w * 0.042, w * 0.075), cur + Vector2(w * 0.028, w * 0.047), cur + Vector2(w * 0.05, w * 0.045)])
-		ci.draw_colored_polygon(arrow, Color.WHITE)
-		var o := arrow.duplicate()
-		o.append(arrow[0])
-		ci.draw_polyline(o, C_PLUM, 2.5, true))
-	sticker.set_meta("anim", "right")
-
 	# Onde dev "ARKADASIN"
 	var bottom := _piece(self, sz, Vector2(w * 0.5, h * 0.9), func(ci: CanvasItem):
 		_big_text(ci, big, "ARKADAŞIN", Vector2(w * 0.09, h * 0.965), int(h * 0.16), C_MINT, C_PLUM, int(h * 0.008), -0.16, -0.02))
 	bottom.set_meta("anim", "up")
-
-	# Ipucu hapi (instagram hapi gibi)
-	var hint := _piece(self, sz, Vector2(w * 0.5, h * 0.83), func(ci: CanvasItem):
-		var r := Rect2(w * 0.17, h * 0.805, w * 0.5, h * 0.045)
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = C_PLUM
-		sb.set_corner_radius_all(8)
-		ci.draw_style_box(sb, r)
-		ci.draw_string(small, r.position + Vector2(w * 0.02, h * 0.03), "\"Kevin\" de: konuşalım  ·  Sağ tık: menü", HORIZONTAL_ALIGNMENT_LEFT, -1, int(h * 0.0145), C_CREAM))
-	hint.set_meta("anim", "fade")
 
 	# Yukleniyor cubugu (referanstaki "<<<< Dopamine detox")
 	bar_piece = _piece(self, sz, Vector2(w * 0.82, h * 0.78), func(ci: CanvasItem):
