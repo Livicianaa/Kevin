@@ -702,7 +702,8 @@ func enter_menu() -> void:
 	emote = null
 	emote_facing = NAN
 	after_walk = ""
-	menu_yaw = facing_now
+	# Menude onden baksin (yandan geliyordu)
+	menu_yaw = 0.0
 	anim_state = "idle"
 	mode = Mode.MENU
 

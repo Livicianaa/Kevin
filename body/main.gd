@@ -278,14 +278,23 @@ const MENU_BG_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, blend_mix;
 uniform float alpha = 0.0;
+uniform vec2 rect_px = vec2(1000.0, 700.0);
+uniform float radius_px = 28.0;
 void fragment() {
-	vec3 col = mix(vec3(0.17, 0.12, 0.36), vec3(0.07, 0.05, 0.17), UV.y);
+	vec3 col = mix(vec3(0.19, 0.13, 0.40), vec3(0.08, 0.06, 0.19), UV.y);
 	vec2 g = fract(FRAGCOORD.xy / 22.0) - 0.5;
-	col += (1.0 - smoothstep(0.08, 0.13, length(g))) * 0.04;
+	col += (1.0 - smoothstep(0.08, 0.13, length(g))) * 0.045;
 	float v = smoothstep(0.95, 0.2, length(UV - vec2(0.33, 0.45)));
-	col *= mix(0.6, 1.12, v);
+	col *= mix(0.65, 1.12, v);
+	// Yuvarlak koseli pencere + koyu kalin kenar (referanstaki gibi)
+	vec2 p = (UV - 0.5) * rect_px;
+	vec2 q = abs(p) - (rect_px * 0.5 - vec2(radius_px));
+	float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius_px;
+	float inside = 1.0 - smoothstep(-1.0, 0.5, d);
+	float border = smoothstep(-6.0, -4.5, d);
+	col = mix(col, vec3(0.08, 0.066, 0.17), border);
 	ALBEDO = col;
-	ALPHA = alpha * 0.93;
+	ALPHA = alpha * inside;
 }
 """
 var menu_bg: MeshInstance3D
@@ -593,12 +602,21 @@ var menu_ui: Control
 var menu_rotating := false
 var menu_auto_rotate := false
 var menu_reload := false
+var menu_ground_y := 0.0
 
 
 func _open_menu() -> void:
 	if character.mode != 0:
 		return
-	menu_screen = _screen_at_x(_world_to_px(_character_center()).x)
+	# Tam ekran degil: ekranin ortasinda yuvarlak koseli bir pencere
+	# (livi: "neden tam ekran oluyor")
+	var scr := _screen_at_x(_world_to_px(_character_center()).x)
+	menu_ground_y = (desk_rect.end.y - scr.end.y) / PX_PER_UNIT
+	var sz := Vector2i(roundi(scr.size.x * 0.74), roundi(scr.size.y * 0.82))
+	menu_screen = Rect2i(scr.position + (scr.size - sz) / 2, sz)
+	# Normal moddaki siluet tiklama alani menude kalirsa hicbir dugmeye
+	# basilamiyordu
+	DisplayServer.window_set_mouse_passthrough(PackedVector2Array())
 	menu_state = MENU_RESIZING
 	menu_k = 0.0
 	menu_from_x = character.root_x
@@ -627,6 +645,8 @@ func _finish_close() -> void:
 		menu_ui = null
 	menu_bg.visible = false
 	character.exit_menu()
+	# Kamera menude yakinlastirilmisti; geri alinmazsa Kevin minicik kaliyordu
+	camera.size = WIN_SIZE.y / PX_PER_UNIT
 	if menu_reload:
 		get_tree().reload_current_scene()
 		return
@@ -710,16 +730,19 @@ func _update_menu(delta: float) -> void:
 
 	# Kamera: 1:1'den (karakter oldugu yerde) yakin plana; karakter ekranin
 	# solunda (%30), sag panel icin yer kaliyor
-	var ground := (desk_rect.end.y - menu_screen.end.y) / PX_PER_UNIT
-	var zoom_final := 0.55 * vp.y / (2.0 * PX_PER_UNIT)
+	var ground := menu_ground_y
+	var zoom_final := 0.42 * vp.y / (2.0 * PX_PER_UNIT)
 	var zoom := lerpf(1.0, zoom_final, k)
 	var c0 := _px_to_world(Vector2(menu_screen.get_center()))
-	var c1 := Vector3(menu_target_x + 0.2 * vp.x / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.08 * vp.y / (PX_PER_UNIT * zoom_final), 0)
+	c0.y = maxf(c0.y, ground + 1.0)
+	var c1 := Vector3(menu_target_x + 0.17 * vp.x / (PX_PER_UNIT * zoom_final), ground + 1.0 - 0.06 * vp.y / (PX_PER_UNIT * zoom_final), 0)
 	var c := c0.lerp(c1, k)
 	camera.position = Vector3(c.x, c.y, 30)
 	camera.size = vp.y / (PX_PER_UNIT * zoom)
-	(menu_bg.mesh as QuadMesh).size = Vector2(camera.size * vp.x / vp.y, camera.size) * 1.02
-	(menu_bg.material_override as ShaderMaterial).set_shader_parameter("alpha", clampf(menu_k * 1.5, 0.0, 1.0))
+	(menu_bg.mesh as QuadMesh).size = Vector2(camera.size * vp.x / vp.y, camera.size)
+	var mat := menu_bg.material_override as ShaderMaterial
+	mat.set_shader_parameter("alpha", clampf(menu_k * 1.5, 0.0, 1.0))
+	mat.set_shader_parameter("rect_px", vp)
 
 
 func _process(delta: float) -> void:

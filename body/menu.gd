@@ -1,7 +1,9 @@
 extends Control
-## Kevin'in menusu (karaktere sag tik). Solda karakter (3B sahnede, main
-## ciziyor), sagda sekmeli ayar paneli, altta skin kartlari, solda yuvarlak
-## islem dugmeleri. Parcalar ustten ve yanlardan kayarak geliyor.
+## Kevin'in menusu (karaktere sag tik). Gorunum livi'nin verdigi oyun karakter
+## ekrani referansina gore: kalin koyu kenarli, alttan golgeli dugmeler, yazi
+## dis cizgisi, egik rozet, birlesik sekmeler, ikonlu yuvarlak sol dugmeler,
+## cerceveli skin kartlari, testere disli alt serit.
+## Karakter 3B sahnede (main ciziyor), bu dugum sadece arayuz.
 
 signal close_requested
 signal saved(needs_reload: bool)
@@ -10,14 +12,16 @@ signal action(name: String)
 
 const Settings := preload("res://settings.gd")
 
-const C_PANEL := Color("211a42ee")
-const C_PANEL_2 := Color("2b2356")
-const C_BORDER := Color("5a4bb3")
-const C_TEXT := Color("f1edff")
-const C_MUTED := Color("a99fd6")
-const C_ACCENT := Color("8b6cff")
-const C_BLUE := Color("3d8bff")
-const C_GREEN := Color("62d148")
+const C_INK := Color("15112b")
+const C_PANEL := Color("2a2354")
+const C_PANEL_DARK := Color("1b1638")
+const C_LINE := Color("3d3474")
+const C_TEXT := Color("ffffff")
+const C_MUTED := Color("b8b0e0")
+const C_PURPLE := Color("8a5cf6")
+const C_BLUE := Color("2f86e8")
+const C_GREEN := Color("7ad83b")
+const C_CYAN := Color("6fe3ff")
 
 var body_cfg := {}
 var brain_cfg := {}
@@ -29,8 +33,8 @@ var bottom_strip: Control
 var tab_buttons := {}
 var tab_pages := {}
 var cards := {}
+var card_marks := {}
 
-# Alanlar
 var slim_btns := []
 var scale_slider: HSlider
 var scale_label: Label
@@ -57,101 +61,111 @@ var auto_rotate_btn: Button
 var original_body := {}
 
 
-func build(screen_size: Vector2) -> void:
+func build(view: Vector2) -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fs = int(clampf(screen_size.y / 52.0, 14.0, 26.0))
+	fs = int(clampf(view.y / 44.0, 14.0, 24.0))
 	theme = _make_theme()
 
 	body_cfg = Settings.load_body()
 	original_body = body_cfg.duplicate()
 	brain_cfg = Settings.load_brain()
 
-	var w := screen_size.x
-	var h := screen_size.y
-	var strip_h := h * 0.2
-	var panel_w := clampf(w * 0.34, 420.0, 620.0)
+	var pad := view.y * 0.035
+	var strip_h := view.y * 0.22
+	var panel_w := clampf(view.x * 0.4, 380.0, 560.0)
 
-	right_panel = _build_right_panel(Vector2(panel_w, h - strip_h - h * 0.08))
-	right_panel.position = Vector2(w - panel_w - w * 0.03, h * 0.04)
+	right_panel = _build_right_panel(Vector2(panel_w, view.y - strip_h - pad * 2))
+	right_panel.position = Vector2(view.x - panel_w - pad, pad)
 	add_child(right_panel)
 
 	left_bar = _build_left_bar()
-	left_bar.position = Vector2(w * 0.03, h * 0.28)
+	left_bar.position = Vector2(pad, view.y * 0.16)
 	add_child(left_bar)
 
-	bottom_strip = _build_bottom_strip(Vector2(w, strip_h))
-	bottom_strip.position = Vector2(0, h - strip_h)
+	bottom_strip = _build_bottom_strip(Vector2(view.x, strip_h))
+	bottom_strip.position = Vector2(0, view.y - strip_h)
 	add_child(bottom_strip)
 
 	_select_tab("karakter")
-	_animate_in(screen_size)
+	_animate_in(view)
 
 
 # =====================================================================
-# Tema
+# Stil
 # =====================================================================
 
-func _font(bold: bool) -> SystemFont:
+func _font(weight := 800) -> SystemFont:
 	var f := SystemFont.new()
 	f.font_names = PackedStringArray(["Inter", "Noto Sans", "Cantarell", "DejaVu Sans", "Segoe UI", "Arial"])
-	f.font_weight = 750 if bold else 450
-	f.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	f.font_weight = weight
 	return f
 
 
-func _box(bg: Color, border := Color.TRANSPARENT, radius := 12, bw := 0) -> StyleBoxFlat:
+## Referanstaki gibi: koyu kalin kenar + alttan "dudak" (golge kaymasi)
+func _box(bg: Color, radius := 12, border := C_INK, bw := 3, lip := 0, lip_color := Color.TRANSPARENT) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
 	sb.set_border_width_all(bw)
 	sb.set_corner_radius_all(radius)
-	sb.content_margin_left = fs * 0.6
-	sb.content_margin_right = fs * 0.6
-	sb.content_margin_top = fs * 0.35
-	sb.content_margin_bottom = fs * 0.35
+	sb.content_margin_left = fs * 0.7
+	sb.content_margin_right = fs * 0.7
+	sb.content_margin_top = fs * 0.4
+	sb.content_margin_bottom = fs * 0.4
+	if lip > 0:
+		sb.shadow_color = lip_color if lip_color.a > 0.0 else bg.darkened(0.45)
+		sb.shadow_size = 0
+		sb.shadow_offset = Vector2(0, lip)
 	return sb
+
+
+func _outlined(node: Control, size_mul := 1.0, weight := 800) -> void:
+	node.add_theme_font_override("font", _font(weight))
+	node.add_theme_font_size_override("font_size", int(fs * size_mul))
+	node.add_theme_constant_override("outline_size", maxi(3, int(fs * 0.28)))
+	node.add_theme_color_override("font_outline_color", C_INK)
 
 
 func _make_theme() -> Theme:
 	var t := Theme.new()
-	t.default_font = _font(false)
+	t.default_font = _font(560)
 	t.default_font_size = fs
 	t.set_color("font_color", "Label", C_TEXT)
-	for cls in ["Button", "OptionButton", "CheckButton"]:
+	for cls in ["Button", "OptionButton"]:
 		t.set_color("font_color", cls, C_TEXT)
-		t.set_color("font_hover_color", cls, Color.WHITE)
-		t.set_color("font_pressed_color", cls, Color.WHITE)
-		t.set_stylebox("normal", cls, _box(C_PANEL_2, C_BORDER, 10, 2))
-		t.set_stylebox("hover", cls, _box(C_PANEL_2.lightened(0.12), C_ACCENT, 10, 2))
-		t.set_stylebox("pressed", cls, _box(C_ACCENT.darkened(0.25), C_ACCENT, 10, 2))
-		t.set_stylebox("focus", cls, _box(Color.TRANSPARENT, C_ACCENT, 10, 2))
-	# Onay kutusu: secili olmasi anahtardan belli, zemin degismesin
-	for st in ["pressed", "hover_pressed"]:
-		t.set_stylebox(st, "CheckButton", _box(C_PANEL_2, C_ACCENT, 10, 2))
-	t.set_stylebox("normal", "LineEdit", _box(Color("16112e"), C_BORDER, 8, 2))
-	t.set_stylebox("focus", "LineEdit", _box(Color("16112e"), C_BLUE, 8, 2))
-	t.set_color("font_color", "LineEdit", C_TEXT)
-	t.set_color("font_placeholder_color", "LineEdit", C_MUTED.darkened(0.2))
-	t.set_stylebox("normal", "TextEdit", _box(Color("16112e"), C_BORDER, 8, 2))
-	t.set_stylebox("focus", "TextEdit", _box(Color("16112e"), C_BLUE, 8, 2))
-	t.set_color("font_color", "TextEdit", C_TEXT)
-	t.set_stylebox("slider", "HSlider", _box(Color("16112e"), Color.TRANSPARENT, 6))
-	t.set_stylebox("grabber_area", "HSlider", _box(C_ACCENT, Color.TRANSPARENT, 6))
-	t.set_stylebox("grabber_area_highlight", "HSlider", _box(C_ACCENT.lightened(0.2), Color.TRANSPARENT, 6))
-	t.set_stylebox("panel", "PopupMenu", _box(C_PANEL_2, C_BORDER, 8, 2))
+		t.set_color("font_hover_color", cls, C_TEXT)
+		t.set_color("font_pressed_color", cls, C_TEXT)
+		t.set_color("font_focus_color", cls, C_TEXT)
+		t.set_stylebox("normal", cls, _box(C_PANEL_DARK, 10, C_INK, 3, 4))
+		t.set_stylebox("hover", cls, _box(C_PANEL_DARK.lightened(0.12), 10, C_INK, 3, 4))
+		t.set_stylebox("pressed", cls, _box(C_BLUE, 10, C_INK, 3, 4))
+		t.set_stylebox("focus", cls, StyleBoxEmpty.new())
+	t.set_color("font_color", "CheckButton", C_TEXT)
+	t.set_color("font_hover_color", "CheckButton", C_TEXT)
+	t.set_color("font_pressed_color", "CheckButton", C_TEXT)
+	for st in ["normal", "hover", "pressed", "hover_pressed"]:
+		t.set_stylebox(st, "CheckButton", _box(C_PANEL_DARK, 10, C_INK, 3, 4))
+	t.set_stylebox("focus", "CheckButton", StyleBoxEmpty.new())
+	for cls in ["LineEdit", "TextEdit"]:
+		t.set_stylebox("normal", cls, _box(C_INK, 8, C_LINE, 2))
+		t.set_stylebox("focus", cls, _box(C_INK, 8, C_BLUE, 2))
+		t.set_color("font_color", cls, C_TEXT)
+	t.set_color("font_placeholder_color", "LineEdit", C_MUTED.darkened(0.25))
+	t.set_stylebox("slider", "HSlider", _box(C_INK, 8, C_LINE, 2))
+	t.set_stylebox("grabber_area", "HSlider", _box(C_PURPLE, 8, C_INK, 2))
+	t.set_stylebox("grabber_area_highlight", "HSlider", _box(C_PURPLE.lightened(0.15), 8, C_INK, 2))
+	t.set_stylebox("panel", "PopupMenu", _box(C_PANEL_DARK, 8, C_INK, 3))
 	return t
 
 
-## wrap: uzun aciklamalar icin. Dar kutuda (baslik gibi) kaydirma her harfi
-## ayri satira kiriyordu.
-func _label(text: String, size_mul := 1.0, bold := false, color := C_TEXT, wrap := false) -> Label:
+func _label(text: String, size_mul := 1.0, color := C_TEXT, wrap := false, weight := 560) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", int(fs * size_mul))
-	if bold:
-		l.add_theme_font_override("font", _font(true))
 	l.add_theme_color_override("font_color", color)
+	if weight != 560:
+		l.add_theme_font_override("font", _font(weight))
 	if wrap:
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -159,17 +173,30 @@ func _label(text: String, size_mul := 1.0, bold := false, color := C_TEXT, wrap 
 	return l
 
 
+func _title(text: String, size_mul := 1.0) -> Label:
+	var l := Label.new()
+	l.text = text
+	_outlined(l, size_mul)
+	return l
+
+
+## Referanstaki istatistik satiri: baslik, altinda kontrol, ince ayrac
 func _row(title: String, control: Control, hint := "") -> VBoxContainer:
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.3))
-	v.add_child(_label(title, 0.9, true, C_MUTED))
+	v.add_theme_constant_override("separation", int(fs * 0.35))
+	v.add_child(_title(title, 0.95))
 	v.add_child(control)
 	if hint != "":
-		v.add_child(_label(hint, 0.75, false, C_MUTED.darkened(0.15), true))
+		v.add_child(_label(hint, 0.72, C_MUTED, true))
+	var sep := ColorRect.new()
+	sep.color = C_LINE
+	sep.custom_minimum_size.y = 2
+	v.add_child(sep)
 	return v
 
 
-func _toggle_group(labels: Array, selected: int, on_pick: Callable) -> Array:
+## Birlesik sekme/secim dugmeleri (referanstaki mavi-koyu ikili)
+func _segment(labels: Array, selected: int, on_pick: Callable) -> Array:
 	var group := ButtonGroup.new()
 	var out := []
 	for i in labels.size():
@@ -179,10 +206,35 @@ func _toggle_group(labels: Array, selected: int, on_pick: Callable) -> Array:
 		b.button_group = group
 		b.button_pressed = i == selected
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.add_theme_stylebox_override("pressed", _box(C_BLUE, C_BLUE.lightened(0.2), 10, 2))
+		b.custom_minimum_size.y = fs * 2.0
+		_outlined(b, 0.9)
+		var first := i == 0
+		var last := i == labels.size() - 1
+		for st in ["normal", "hover", "pressed", "hover_pressed"]:
+			var on: bool = st.contains("pressed")
+			var sb := _box(C_BLUE if on else C_PANEL_DARK.lightened(0.06 if st == "hover" else 0.0), 0, C_INK, 3)
+			sb.corner_radius_top_left = 12 if first else 0
+			sb.corner_radius_bottom_left = 12 if first else 0
+			sb.corner_radius_top_right = 12 if last else 0
+			sb.corner_radius_bottom_right = 12 if last else 0
+			if not first:
+				sb.border_width_left = 0
+			b.add_theme_stylebox_override(st, sb)
+		b.add_theme_color_override("font_color", C_MUTED)
+		b.add_theme_color_override("font_pressed_color", C_TEXT)
+		b.add_theme_color_override("font_hover_pressed_color", C_TEXT)
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 		b.pressed.connect(on_pick.bind(i))
 		out.append(b)
 	return out
+
+
+func _segment_box(buttons: Array) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 0)
+	for b in buttons:
+		h.add_child(b)
+	return h
 
 
 func _slider(min_v: float, max_v: float, step: float, value: float) -> HSlider:
@@ -196,64 +248,86 @@ func _slider(min_v: float, max_v: float, step: float, value: float) -> HSlider:
 	return s
 
 
+func _big_button(text: String, color: Color) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.custom_minimum_size.y = fs * 2.8
+	_outlined(b, 1.3, 900)
+	b.add_theme_stylebox_override("normal", _box(color, 16, C_INK, 4, 7, color.darkened(0.5)))
+	b.add_theme_stylebox_override("hover", _box(color.lightened(0.12), 16, C_INK, 4, 7, color.darkened(0.5)))
+	b.add_theme_stylebox_override("pressed", _box(color.darkened(0.12), 16, C_INK, 4, 2, color.darkened(0.5)))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	return b
+
+
 # =====================================================================
 # Sag panel
 # =====================================================================
 
 func _build_right_panel(size_px: Vector2) -> Control:
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = size_px
-	panel.size = size_px
-	panel.add_theme_stylebox_override("panel", _box(C_PANEL, C_BORDER, 18, 2))
-
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.6))
-	panel.add_child(v)
+	v.custom_minimum_size = size_px
+	v.size = size_px
+	v.add_theme_constant_override("separation", int(fs * 0.5))
 
-	# Baslik: rozet + isim + alt yazi
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", int(fs * 0.5))
+	# Ust satir: egik rozet + kucuk yazi (referanstaki "SR  ...")
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", int(fs * 0.6))
 	var badge := PanelContainer.new()
-	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	badge.add_theme_stylebox_override("panel", _box(C_ACCENT, C_ACCENT.lightened(0.3), 8, 2))
-	badge.add_child(_label("AI", 0.95, true))
-	head.add_child(badge)
-	var name_box := VBoxContainer.new()
-	name_box.add_theme_constant_override("separation", 0)
-	name_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_box.add_child(_label(str(brain_cfg.get("name", "Kevin")), 1.7, true))
-	name_box.add_child(_label("Masaüstü arkadaşın", 0.8, false, C_MUTED))
-	head.add_child(name_box)
-	v.add_child(head)
+	var bsb := _box(C_PURPLE, 6, C_INK, 3)
+	bsb.skew = Vector2(0.25, 0)
+	bsb.content_margin_left = fs * 0.9
+	bsb.content_margin_right = fs * 0.9
+	badge.add_theme_stylebox_override("panel", bsb)
+	badge.add_child(_title("AI", 1.0))
+	top.add_child(badge)
+	top.add_child(_title("Masaüstü arkadaşı", 0.95))
+	v.add_child(top)
 
-	var status := PanelContainer.new()
-	status.add_theme_stylebox_override("panel", _box(Color("16112e"), C_BORDER, 10, 1))
+	# Isim plakasi
+	var plate := PanelContainer.new()
+	plate.add_theme_stylebox_override("panel", _box(C_PANEL_DARK, 12, C_INK, 3))
+	var name_l := _title(str(brain_cfg.get("name", "Kevin")), 1.7)
+	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	plate.add_child(name_l)
+	v.add_child(plate)
+
+	# Durum cipleri: saglayici (mor) + model (kahverengi hap)
+	var chips := HBoxContainer.new()
+	chips.add_theme_constant_override("separation", int(fs * 0.4))
 	var prov: String = str(brain_cfg.get("provider", ""))
-	var prov_label: String = Settings.PROVIDERS.get(prov, {}).get("label", "seçilmedi")
-	status.add_child(_label("Beyin: %s  ·  model: %s" % [prov_label, str(brain_cfg.get("model", "varsayılan"))], 0.8, false, C_MUTED))
-	v.add_child(status)
+	var c1 := PanelContainer.new()
+	c1.add_theme_stylebox_override("panel", _box(C_PURPLE, 20, C_INK, 3))
+	c1.add_child(_title(Settings.PROVIDERS.get(prov, {}).get("label", "Beyin yok"), 0.75))
+	chips.add_child(c1)
+	var c2 := PanelContainer.new()
+	c2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	c2.add_theme_stylebox_override("panel", _box(Color("6b4a35"), 20, C_INK, 3))
+	var model_l := _title(str(brain_cfg.get("model", "varsayılan model")), 0.75)
+	model_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	model_l.clip_text = true
+	c2.add_child(model_l)
+	chips.add_child(c2)
+	v.add_child(chips)
 
-	# Sekmeler
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", int(fs * 0.3))
-	var group := ButtonGroup.new()
-	for id in ["karakter", "yapay_zeka", "davranis", "hakkinda"]:
-		var b := Button.new()
-		b.text = {"karakter": "Karakter", "yapay_zeka": "Yapay Zeka", "davranis": "Davranış", "hakkinda": "Hakkında"}[id]
-		b.toggle_mode = true
-		b.button_group = group
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.add_theme_stylebox_override("pressed", _box(C_BLUE, C_BLUE.lightened(0.25), 10, 2))
-		b.add_theme_font_override("font", _font(true))
-		b.pressed.connect(_select_tab.bind(id))
-		tabs.add_child(b)
-		tab_buttons[id] = b
-	v.add_child(tabs)
-
+	# Icerik kutusu: birlesik sekmeler + sayfa
+	var box := PanelContainer.new()
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_theme_stylebox_override("panel", _box(C_PANEL, 14, C_INK, 3))
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override("separation", int(fs * 0.6))
+	box.add_child(inner)
+	var ids := ["karakter", "yapay_zeka", "davranis", "hakkinda"]
+	var tabs := _segment(["Karakter", "Yapay Zeka", "Davranış", "Hakkında"], 0,
+		func(i): _select_tab(ids[i]))
+	for i in ids.size():
+		tab_buttons[ids[i]] = tabs[i]
+	inner.add_child(_segment_box(tabs))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	v.add_child(scroll)
+	inner.add_child(scroll)
 	var pages := VBoxContainer.new()
 	pages.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(pages)
@@ -263,85 +337,65 @@ func _build_right_panel(size_px: Vector2) -> Control:
 	tab_pages["hakkinda"] = _page_about()
 	for p in tab_pages.values():
 		pages.add_child(p)
+	v.add_child(box)
 
-	# Alt dugmeler (referanstaki yesil/mavi)
+	# Alt dugmeler (referanstaki yesil / mavi)
 	var foot := HBoxContainer.new()
-	foot.add_theme_constant_override("separation", int(fs * 0.5))
-	var save := Button.new()
-	save.text = "Kaydet"
-	save.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	save.custom_minimum_size.y = fs * 2.6
-	save.add_theme_font_override("font", _font(true))
-	save.add_theme_font_size_override("font_size", int(fs * 1.2))
-	save.add_theme_stylebox_override("normal", _box(C_GREEN, C_GREEN.lightened(0.3), 14, 3))
-	save.add_theme_stylebox_override("hover", _box(C_GREEN.lightened(0.1), Color.WHITE, 14, 3))
-	save.add_theme_stylebox_override("pressed", _box(C_GREEN.darkened(0.2), Color.WHITE, 14, 3))
+	foot.add_theme_constant_override("separation", int(fs * 0.6))
+	var save := _big_button("Kaydet", C_GREEN)
 	save.pressed.connect(_on_save)
 	foot.add_child(save)
-	var close := Button.new()
-	close.text = "Kapat"
-	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close.custom_minimum_size.y = fs * 2.6
-	close.add_theme_font_override("font", _font(true))
-	close.add_theme_font_size_override("font_size", int(fs * 1.2))
-	close.add_theme_stylebox_override("normal", _box(C_BLUE, C_BLUE.lightened(0.3), 14, 3))
-	close.add_theme_stylebox_override("hover", _box(C_BLUE.lightened(0.1), Color.WHITE, 14, 3))
-	close.add_theme_stylebox_override("pressed", _box(C_BLUE.darkened(0.2), Color.WHITE, 14, 3))
+	var close := _big_button("Kapat", C_BLUE)
 	close.pressed.connect(func(): close_requested.emit())
 	foot.add_child(close)
 	v.add_child(foot)
-	return panel
+	return v
 
 
-func _page(title: String) -> VBoxContainer:
+func _page() -> VBoxContainer:
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.9))
+	v.add_theme_constant_override("separation", int(fs * 0.7))
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_child(_label(title, 1.05, true))
 	return v
 
 
 func _page_character() -> VBoxContainer:
-	var v := _page("Görünüm")
-	skin_name = _label(str(body_cfg.skin).get_file(), 0.95)
+	var v := _page()
 	var skin_box := HBoxContainer.new()
-	skin_box.add_child(skin_name)
+	skin_name = _label(str(body_cfg.skin).get_file(), 0.95)
 	skin_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	skin_box.add_child(skin_name)
 	var pick := Button.new()
 	pick.text = "Dosyadan seç"
+	_outlined(pick, 0.8)
 	pick.pressed.connect(_pick_skin_file)
 	skin_box.add_child(pick)
-	v.add_child(_row("Skin", skin_box, "Aşağıdaki kartlardan da seçebilirsin. 64x64 Minecraft skin (png)."))
+	v.add_child(_row("Skin", skin_box, "Alttaki kartlardan da seçebilirsin (64x64 Minecraft skin)."))
 
-	var model_box := HBoxContainer.new()
-	slim_btns = _toggle_group(["Klasik (4 px kol)", "İnce (3 px kol)"], 1 if body_cfg.slim else 0,
+	slim_btns = _segment(["Klasik (4 px)", "İnce (3 px)"], 1 if body_cfg.slim else 0,
 		func(i): body_cfg.slim = i == 1)
-	for b in slim_btns:
-		model_box.add_child(b)
-	v.add_child(_row("Model", model_box))
+	v.add_child(_row("Kol modeli", _segment_box(slim_btns)))
 
 	var scale_box := HBoxContainer.new()
 	scale_slider = _slider(0.6, 2.0, 0.05, float(body_cfg.scale))
-	scale_label = _label("", 0.95)
-	scale_label.custom_minimum_size.x = fs * 3.5
+	scale_label = _title("", 0.9)
+	scale_label.custom_minimum_size.x = fs * 3.6
+	scale_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	scale_slider.value_changed.connect(func(val):
 		body_cfg.scale = val
 		scale_label.text = "%%%d" % roundi(val * 100))
 	scale_label.text = "%%%d" % roundi(float(body_cfg.scale) * 100)
 	scale_box.add_child(scale_slider)
 	scale_box.add_child(scale_label)
-	v.add_child(_row("Boyut", scale_box, "Model ve boyut Kaydet'e basınca uygulanır."))
+	v.add_child(_row("Boyut", scale_box, "Kol modeli ve boyut Kaydet'e basınca uygulanır."))
 	return v
 
 
 func _page_ai() -> VBoxContainer:
-	var v := _page("Beyin")
+	var v := _page()
 	var local: bool = Settings.PROVIDERS.get(str(brain_cfg.get("provider", "groq")), {}).get("local", false)
-	var mode_box := HBoxContainer.new()
-	mode_btns = _toggle_group(["Bulut (API)", "Yerel (Ollama)"], 1 if local else 0, _on_mode)
-	for b in mode_btns:
-		mode_box.add_child(b)
-	v.add_child(_row("Çalışma şekli", mode_box, "Bulut: hızlı, internet ve anahtar ister. Yerel: bilgisayarında çalışır, Ollama kurulu olmalı."))
+	mode_btns = _segment(["Bulut (API)", "Yerel (Ollama)"], 1 if local else 0, _on_mode)
+	v.add_child(_row("Çalışma şekli", _segment_box(mode_btns), "Bulut: hızlı, internet ve anahtar ister. Yerel: bilgisayarında çalışır, Ollama kurulu olmalı."))
 
 	provider_opt = OptionButton.new()
 	for id in Settings.PROVIDERS:
@@ -356,12 +410,12 @@ func _page_ai() -> VBoxContainer:
 
 	model_edit = LineEdit.new()
 	model_edit.text = str(brain_cfg.get("model", ""))
-	v.add_child(_row("Model", model_edit, "Boş bırakırsan sağlayıcının varsayılanı kullanılır."))
+	v.add_child(_row("Model", model_edit, "Boş bırakırsan sağlayıcının varsayılanı."))
 
 	key_edit = LineEdit.new()
 	key_edit.secret = true
 	key_edit.placeholder_text = "Kayıtlı anahtar var (değiştirmek için yaz)" if str(brain_cfg.get("apiKey", "")) != "" else "API anahtarını yapıştır"
-	key_row = _row("API anahtarı", key_edit, "Anahtar sadece bu bilgisayarda, ayar dosyasında durur.")
+	key_row = _row("API anahtarı", key_edit, "Sadece bu bilgisayarda, ayar dosyasında durur.")
 	v.add_child(key_row)
 
 	name_edit = LineEdit.new()
@@ -381,27 +435,28 @@ func _page_ai() -> VBoxContainer:
 	var sess_box := HBoxContainer.new()
 	var sess_s := float(brain_cfg.get("voiceSessionMs", 20000)) / 1000.0
 	session_slider = _slider(5, 60, 1, sess_s)
-	session_label = _label("%d sn" % int(sess_s), 0.95)
-	session_label.custom_minimum_size.x = fs * 3.5
+	session_label = _title("%d sn" % int(sess_s), 0.9)
+	session_label.custom_minimum_size.x = fs * 3.6
+	session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	session_slider.value_changed.connect(func(val): session_label.text = "%d sn" % int(val))
 	sess_box.add_child(session_slider)
 	sess_box.add_child(session_label)
-	v.add_child(_row("Sohbet süresi", sess_box, "Adını söyledikten sonra ne kadar süre seni dinlesin."))
+	v.add_child(_row("Sohbet süresi", sess_box, "Adını söyledikten sonra ne kadar dinlesin."))
 
 	persona_edit = TextEdit.new()
 	persona_edit.text = str(brain_cfg.get("persona", ""))
-	persona_edit.placeholder_text = "Boş bırakırsan varsayılan kişilik (esprili, samimi, Türkçe)."
-	persona_edit.custom_minimum_size.y = fs * 7
+	persona_edit.placeholder_text = "Boş: varsayılan kişilik (esprili, samimi, Türkçe)."
+	persona_edit.custom_minimum_size.y = fs * 6
 	persona_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	v.add_child(_row("Kişilik", persona_edit))
 
-	v.add_child(_label("Not: beyin (ses, sohbet, araçlar) henüz bu gövdeye bağlı değil; ayarlar kaydediliyor, bağlantı sıradaki adım.", 0.75, false, C_MUTED, true))
+	v.add_child(_label("Not: beyin (ses, sohbet, araçlar) henüz bu gövdeye bağlı değil; ayarlar kaydediliyor, bağlantı sıradaki adım.", 0.72, C_MUTED, true))
 	_on_mode(1 if local else 0)
 	return v
 
 
 func _page_behaviour() -> VBoxContainer:
-	var v := _page("Davranış")
+	var v := _page()
 	walk_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.walk))
 	v.add_child(_row("Yürüme sıklığı", walk_slider))
 	emote_slider = _slider(0.0, 2.0, 0.1, float(body_cfg.emotes))
@@ -422,11 +477,11 @@ func _page_behaviour() -> VBoxContainer:
 
 
 func _page_about() -> VBoxContainer:
-	var v := _page("Kevin")
-	v.add_child(_label("Masaüstünde yaşayan, konuşan ve bilgisayarını kullanabilen yapay zeka arkadaşı.", 0.9, false, C_TEXT, true))
-	v.add_child(_label("Created by Liviciana", 0.9, true, C_ACCENT.lightened(0.3)))
-	v.add_child(_label("Animasyonlar: Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 0.8, false, C_MUTED, true))
-	v.add_child(_label("Menü: karaktere sağ tık. Sürükle: döndür. Esc: kapat.", 0.8, false, C_MUTED, true))
+	var v := _page()
+	v.add_child(_label("Masaüstünde yaşayan, konuşan ve bilgisayarını kullanabilen yapay zeka arkadaşı.", 0.9, C_TEXT, true))
+	v.add_child(_title("Created by Liviciana", 0.95))
+	v.add_child(_label("Animasyonlar: Fresh Animations (kullanıcının paketi), Emotecraft emote'ları (CC0), Quaternius Universal Animation Library 2 (CC0).", 0.78, C_MUTED, true))
+	v.add_child(_label("Menü: karaktere sağ tık. Karakteri sürükle: döndür. Esc: kapat.", 0.78, C_MUTED, true))
 	return v
 
 
@@ -440,10 +495,8 @@ func _on_mode(i: int) -> void:
 
 
 func _update_model_placeholder() -> void:
-	if not model_edit:
-		return
-	var id := _current_provider()
-	model_edit.placeholder_text = Settings.PROVIDERS.get(id, {}).get("model", "")
+	if model_edit:
+		model_edit.placeholder_text = Settings.PROVIDERS.get(_current_provider(), {}).get("model", "")
 
 
 func _current_provider() -> String:
@@ -462,60 +515,134 @@ func _select_tab(id: String) -> void:
 
 
 # =====================================================================
-# Sol dugmeler ve alt skin seridi
+# Sol yuvarlak dugmeler: daire + cizilmis ikon + altina tasan etiket
 # =====================================================================
 
-func _round_button(text: String) -> Button:
+class RoundIcon:
+	extends Control
+	var kind := ""
+	func _draw() -> void:
+		var c := size / 2.0
+		var r := minf(size.x, size.y) * 0.22
+		var ink := Color("15112b")
+		var white := Color.WHITE
+		match kind:
+			"rotate":
+				draw_arc(c, r, 0.4, TAU - 0.6, 24, ink, r * 0.55)
+				draw_arc(c, r, 0.4, TAU - 0.6, 24, white, r * 0.3)
+				var tip := c + Vector2(cos(-0.6), sin(-0.6)) * r
+				var head := PackedVector2Array([tip + Vector2(-r * 0.45, -r * 0.35), tip + Vector2(r * 0.45, -r * 0.1), tip + Vector2(-r * 0.05, r * 0.45)])
+				draw_colored_polygon(head, white)
+				var outline := head.duplicate()
+				outline.append(head[0])
+				draw_polyline(outline, ink, 2.0)
+			"emote":
+				var pts := PackedVector2Array()
+				for i in 10:
+					var a := -PI / 2 + i * TAU / 10.0
+					var rr := r * (1.2 if i % 2 == 0 else 0.5)
+					pts.append(c + Vector2(cos(a), sin(a)) * rr)
+				draw_colored_polygon(pts, white)
+				var outline := pts.duplicate()
+				outline.append(pts[0])
+				draw_polyline(outline, ink, 3.0)
+			"reset":
+				draw_circle(c, r * 1.05, ink)
+				draw_circle(c, r * 0.8, white)
+				draw_line(c, c + Vector2(0, -r * 0.6), ink, 3.0)
+				draw_line(c, c + Vector2(r * 0.45, 0), ink, 3.0)
+
+
+func _round_button(text: String, icon: String) -> Control:
+	var size_px := fs * 3.8
+	var holder := Control.new()
+	holder.custom_minimum_size = Vector2(size_px, size_px + fs * 0.6)
 	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(fs * 4.6, fs * 4.6)
-	b.add_theme_font_size_override("font_size", int(fs * 0.8))
-	b.add_theme_font_override("font", _font(true))
-	var r := int(fs * 2.3)
-	b.add_theme_stylebox_override("normal", _box(C_PANEL, C_BORDER, r, 3))
-	b.add_theme_stylebox_override("hover", _box(C_PANEL_2, C_ACCENT, r, 3))
-	b.add_theme_stylebox_override("pressed", _box(C_ACCENT.darkened(0.2), C_ACCENT, r, 3))
-	return b
+	b.custom_minimum_size = Vector2(size_px, size_px)
+	b.size = Vector2(size_px, size_px)
+	var r := int(size_px / 2)
+	b.add_theme_stylebox_override("normal", _box(C_PANEL_DARK, r, C_INK, 4, 5, Color("0c0920")))
+	b.add_theme_stylebox_override("hover", _box(C_PANEL_DARK.lightened(0.15), r, C_INK, 4, 5, Color("0c0920")))
+	b.add_theme_stylebox_override("pressed", _box(C_PURPLE, r, C_INK, 4, 2, Color("0c0920")))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	holder.add_child(b)
+	var ic := RoundIcon.new()
+	ic.kind = icon
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.size = Vector2(size_px, size_px * 0.8)
+	holder.add_child(ic)
+	var l := _title(text, 0.8)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.size = Vector2(size_px, fs * 1.4)
+	l.position = Vector2(0, size_px - fs * 0.9)
+	holder.add_child(l)
+	holder.set_meta("button", b)
+	return holder
 
 
 func _build_left_bar() -> Control:
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(fs * 0.8))
-	auto_rotate_btn = _round_button("Döndür")
+	v.add_theme_constant_override("separation", int(fs * 0.9))
+	var rot := _round_button("Döndür", "rotate")
+	auto_rotate_btn = rot.get_meta("button")
 	auto_rotate_btn.toggle_mode = true
 	auto_rotate_btn.toggled.connect(func(on): action.emit("auto_rotate_on" if on else "auto_rotate_off"))
-	v.add_child(auto_rotate_btn)
-	var em := _round_button("Emote")
-	em.pressed.connect(func(): action.emit("emote"))
+	v.add_child(rot)
+	var em := _round_button("Emote", "emote")
+	(em.get_meta("button") as Button).pressed.connect(func(): action.emit("emote"))
 	v.add_child(em)
-	var reset := _round_button("Sıfırla")
-	reset.pressed.connect(func():
+	var reset := _round_button("Sıfırla", "reset")
+	(reset.get_meta("button") as Button).pressed.connect(func():
 		auto_rotate_btn.button_pressed = false
 		action.emit("reset"))
 	v.add_child(reset)
 	return v
 
 
+# =====================================================================
+# Alt serit: testere disli koyu bant + cerceveli skin kartlari
+# =====================================================================
+
+class StripBg:
+	extends Control
+	func _draw() -> void:
+		var tooth := 18.0
+		draw_rect(Rect2(Vector2.ZERO, size), Color("1b1638f2"))
+		draw_line(Vector2(0, 1), Vector2(size.x, 1), Color("15112b"), 4.0)
+		draw_line(Vector2(0, 5), Vector2(size.x, 5), Color("3d3474"), 2.0)
+		var pts := PackedVector2Array([Vector2(0, size.y)])
+		var x := 0.0
+		while x <= size.x + tooth:
+			pts.append(Vector2(x, size.y - tooth * 0.55))
+			pts.append(Vector2(x + tooth / 2.0, size.y))
+			x += tooth
+		pts.append(Vector2(size.x, size.y))
+		draw_colored_polygon(pts, Color("15112b"))
+
+
 func _build_bottom_strip(size_px: Vector2) -> Control:
-	var bg := PanelContainer.new()
+	var bg := StripBg.new()
 	bg.custom_minimum_size = size_px
 	bg.size = size_px
-	var sb := _box(Color("150f2cf2"), C_BORDER, 0, 0)
-	sb.border_width_top = 3
-	bg.add_theme_stylebox_override("panel", sb)
 	var scroll := ScrollContainer.new()
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.position = Vector2(fs, fs * 0.8)
+	scroll.size = Vector2(size_px.x - fs * 2, size_px.y - fs * 1.6)
 	bg.add_child(scroll)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", int(fs * 0.9))
-	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.add_child(row)
-	var card_h := size_px.y * 0.78
+	var card_h := scroll.size.y - fs * 0.4
 	for path in Settings.list_skins():
 		row.add_child(_skin_card(path, card_h))
 	var add := Button.new()
 	add.text = "+ Skin ekle"
-	add.custom_minimum_size = Vector2(card_h * 0.8, card_h)
+	_outlined(add, 0.85)
+	add.custom_minimum_size = Vector2(card_h * 0.72, card_h * 0.72)
+	add.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	add.add_theme_stylebox_override("normal", _box(C_PANEL, 12, C_INK, 3, 5))
+	add.add_theme_stylebox_override("hover", _box(C_PANEL.lightened(0.1), 12, C_INK, 3, 5))
 	add.pressed.connect(_pick_skin_file)
 	row.add_child(add)
 	_mark_selected_card()
@@ -523,51 +650,63 @@ func _build_bottom_strip(size_px: Vector2) -> Control:
 
 
 func _skin_card(path: String, card_h: float) -> Control:
-	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(card_h * 0.8, card_h)
-	btn.tooltip_text = path.get_file()
-	var tex := Settings.load_skin(path)
-	var face := AtlasTexture.new()
-	face.atlas = tex
-	face.region = Rect2(8, 8, 8, 8)
-	var hat := AtlasTexture.new()
-	hat.atlas = tex
-	hat.region = Rect2(40, 8, 8, 8)
+	var w := card_h * 0.72
 	var v := VBoxContainer.new()
-	v.set_anchors_preset(Control.PRESET_FULL_RECT)
-	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	var holder := Control.new()
-	holder.custom_minimum_size = Vector2(card_h * 0.5, card_h * 0.5)
-	holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for t in [face, hat]:
+	v.add_theme_constant_override("separation", int(fs * 0.25))
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(w, card_h * 0.72)
+	btn.tooltip_text = path.get_file()
+	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var tex := Settings.load_skin(path)
+	for region in [Rect2(8, 8, 8, 8), Rect2(40, 8, 8, 8)]:
+		var at := AtlasTexture.new()
+		at.atlas = tex
+		at.region = region
 		var tr := TextureRect.new()
-		tr.texture = t
+		tr.texture = at
 		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tr.set_anchors_preset(Control.PRESET_FULL_RECT)
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		holder.add_child(tr)
-	v.add_child(holder)
-	var name := _label(path.get_file().get_basename(), 0.75, true)
+		tr.position = Vector2(w * 0.2, card_h * 0.08)
+		tr.size = Vector2(w * 0.6, w * 0.6)
+		btn.add_child(tr)
+	var name := _title(path.get_file().get_basename(), 0.72)
 	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(name)
-	btn.add_child(v)
+	name.position = Vector2(0, card_h * 0.72 - fs * 1.5)
+	name.size = Vector2(w, fs * 1.3)
+	btn.add_child(name)
 	btn.pressed.connect(func():
 		body_cfg.skin = path
 		skin_name.text = path.get_file()
 		_mark_selected_card()
 		skin_chosen.emit(path))
+	v.add_child(btn)
+	var mark := Button.new()
+	mark.text = "Seçili"
+	mark.disabled = true
+	_outlined(mark, 0.72)
+	mark.custom_minimum_size = Vector2(w, fs * 1.5)
+	mark.add_theme_stylebox_override("disabled", _box(C_GREEN, 8, C_INK, 3, 3, C_GREEN.darkened(0.5)))
+	mark.add_theme_color_override("font_disabled_color", C_TEXT)
+	v.add_child(mark)
 	cards[path] = btn
-	return btn
+	card_marks[path] = mark
+	return v
 
 
 func _mark_selected_card() -> void:
 	for p in cards:
 		var sel: bool = p == str(body_cfg.skin)
-		cards[p].add_theme_stylebox_override("normal", _box(C_PANEL_2 if not sel else C_BLUE.darkened(0.35), C_BLUE if sel else C_BORDER, 12, 3 if sel else 2))
+		var frame := C_PURPLE if not sel else C_CYAN
+		var sb := _box(C_PANEL_DARK, 12, frame, 4, 5, C_INK)
+		if sel:
+			sb.shadow_color = Color(C_CYAN, 0.55)
+			sb.shadow_size = 8
+			sb.shadow_offset = Vector2.ZERO
+		for st in ["normal", "hover", "pressed"]:
+			cards[p].add_theme_stylebox_override(st, sb)
+		card_marks[p].modulate.a = 1.0 if sel else 0.0
 
 
 func _pick_skin_file() -> void:
@@ -612,14 +751,14 @@ func _on_save() -> void:
 
 
 # =====================================================================
-# Giris / cikis animasyonu: ustten ve yanlardan
+# Giris / cikis: ustten ve yanlardan
 # =====================================================================
 
-func _animate_in(screen_size: Vector2) -> void:
+func _animate_in(view: Vector2) -> void:
 	var items := [
-		[right_panel, Vector2(screen_size.x * 0.45, 0), 0.12],
-		[left_bar, Vector2(-screen_size.x * 0.2, 0), 0.2],
-		[bottom_strip, Vector2(0, screen_size.y * 0.3), 0.05],
+		[right_panel, Vector2(view.x * 0.5, 0), 0.12],
+		[left_bar, Vector2(-view.x * 0.25, 0), 0.2],
+		[bottom_strip, Vector2(0, view.y * 0.3), 0.05],
 	]
 	for it in items:
 		var node: Control = it[0]
@@ -631,10 +770,10 @@ func _animate_in(screen_size: Vector2) -> void:
 		tw.tween_property(node, "modulate:a", 1.0, 0.3).set_delay(it[2])
 
 
-func animate_out(screen_size: Vector2) -> Tween:
+func animate_out(view: Vector2) -> Tween:
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(right_panel, "position:x", right_panel.position.x + screen_size.x * 0.45, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	tw.tween_property(left_bar, "position:x", -screen_size.x * 0.2, 0.3).set_ease(Tween.EASE_IN)
-	tw.tween_property(bottom_strip, "position:y", bottom_strip.position.y + screen_size.y * 0.3, 0.3).set_ease(Tween.EASE_IN)
+	tw.tween_property(right_panel, "position:x", right_panel.position.x + view.x * 0.5, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.tween_property(left_bar, "position:x", -view.x * 0.25, 0.3).set_ease(Tween.EASE_IN)
+	tw.tween_property(bottom_strip, "position:y", bottom_strip.position.y + view.y * 0.3, 0.3).set_ease(Tween.EASE_IN)
 	tw.tween_property(self, "modulate:a", 0.0, 0.35)
 	return tw
