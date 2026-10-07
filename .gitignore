@@ -9,3 +9,4 @@ bin/cem/
 body/.godot/
 body/*.import
 .body-test/
+.body-vis/

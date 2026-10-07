@@ -327,8 +327,22 @@ function setVoiceState(next) {
   refreshKevinState();
 }
 
-// Seslenince duraklatilan video/muzik (konusma bitince devam eder)
-let mediaPausedByUs = false;
+// Seslenince kisilan ya da duraklatilan video/muzik (konusma bitince geri
+// gelir): 'duck' | 'pause' | null
+let mediaHeld = null;
+
+async function holdMedia(cfg) {
+  const mode = cfg.mediaOnTalk || 'duck';
+  if (mode === 'pause') return (await window.kevinAPI.mediaPause()) ? 'pause' : null;
+  if (mode === 'duck') return (await window.kevinAPI.mediaDuck()) ? 'duck' : null;
+  return null;
+}
+
+function releaseMedia() {
+  if (mediaHeld === 'pause') window.kevinAPI.mediaResume();
+  else if (mediaHeld === 'duck') window.kevinAPI.mediaUnduck();
+  mediaHeld = null;
+}
 
 async function mediaPlaying() {
   try {
@@ -344,10 +358,22 @@ function endVoiceSession() {
   voiceSessionTimer = null;
   setBusy(null);
   setVoiceState(VOICE_IDLE);
-  if (mediaPausedByUs) {
-    mediaPausedByUs = false;
-    window.kevinAPI.mediaResume();
-  }
+  releaseMedia();
+}
+
+// Sohbet oturumu acikken kullanici konusmaya basladi: oturum o konusurken
+// kapanmasin. Onceden sayac konusma sirasinda da isliyordu; cumle yaziya
+// cevrildiginde oturum kapanmis oluyor, her cumlede "Kevin" demek gerekiyordu.
+function holdVoiceSession() {
+  if (voiceState !== VOICE_AWAKE) return;
+  clearTimeout(voiceSessionTimer);
+  voiceSessionTimer = null;
+}
+
+// Konusma bitti ama Kevin'e bir sey gitmedi (bos/yanlis algilama): sessizlik
+// sayaci yeniden baslasin
+function rearmVoiceSession() {
+  if (voiceState === VOICE_AWAKE && !voiceSessionTimer && !voiceBusy) touchVoiceSession(liveCfg.voiceSessionMs);
 }
 
 function touchVoiceSession(ms) {
@@ -430,6 +456,7 @@ async function voiceReply(text, cfg) {
     const L = await window.kevinAPI.langPack();
     if (err.message === 'zaman asimi') reply = L.slow;
     else if (String(err.message).includes('NO_KEY')) reply = L.noKey;
+    else if (String(err.message).includes('BUSY')) reply = L.busy || L.error;
     else reply = L.error;
     console.error('[kevin] sohbet hatasi:', err.message);
   }
@@ -457,6 +484,7 @@ if (BRAIN) {
     }
     if (msg.type === 'menu') {
       bodyMenuOpen = Boolean(msg.open);
+      if (!bodyMenuOpen) refreshLiveCfg();
       if (bodyMenuOpen && voiceActive() && !voiceBusy) endVoiceSession();
       return;
     }
@@ -491,7 +519,7 @@ async function handleVoice(text) {
       // sanmasin: tam isim gerekli, sonra medya duraklatilir
       const media = await mediaPlaying();
       if (findWake(text, wakeWords, media) < 0) return;
-      if (media && cfg.pauseMedia !== false) mediaPausedByUs = await window.kevinAPI.mediaPause();
+      if (media) mediaHeld = await holdMedia(cfg);
 
       markInteraction();
       const rest = stripWakeWord(text, wakeWords);
@@ -514,9 +542,9 @@ async function handleVoice(text) {
       return;
     }
 
-    // Oturum acik: soylenen her sey Kevin'e. Ama medya hala caliyorsa
-    // (duraklatma kapali) sadece adiyla seslenilen cumleler.
-    if (!mediaPausedByUs && await mediaPlaying() && findWake(text, wakeWords, true) < 0) return;
+    // Oturum acik: soylenen her sey Kevin'e. Ama medya tam sesle caliyorsa
+    // ("dokunma" secili) sadece adiyla seslenilen cumleler.
+    if (!mediaHeld && await mediaPlaying() && findWake(text, wakeWords, true) < 0) return;
     markInteraction();
     await voiceReply(text, cfg);
   } finally {
@@ -913,11 +941,33 @@ function addMessage(text, who) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+// Kevin'in ses seviyesi (ayar 0-2): HTMLAudio en fazla 1, o yuzden Web Audio
+// kazanciyla; %100'un ustu de calisiyor
+let voiceCtx = null;
+let voiceGain = null;
+
+function routeVoice(audio) {
+  try {
+    if (!voiceCtx) {
+      voiceCtx = new AudioContext();
+      voiceGain = voiceCtx.createGain();
+      voiceGain.connect(voiceCtx.destination);
+    }
+    if (voiceCtx.state === 'suspended') voiceCtx.resume();
+    voiceCtx.createMediaElementSource(audio).connect(voiceGain);
+    const v = Number(liveCfg.voiceVolume);
+    voiceGain.gain.value = Number.isFinite(v) ? Math.min(2, Math.max(0, v)) : 1;
+  } catch (err) {
+    console.warn('[kevin] ses seviyesi uygulanamadi:', err.message);
+  }
+}
+
 function speak(text) {
   return new Promise(async (resolve) => {
     try {
       const base64 = await window.kevinAPI.speak(text);
       const audio = new Audio(`data:audio/wav;base64,${base64}`);
+      routeVoice(audio);
       const done = () => {
         setBusy(null);
         resolve();
@@ -1099,10 +1149,12 @@ async function initHandsFree() {
       onnxWASMBasePath: assetsURL,
       onSpeechStart: () => {
         listening = true;
+        holdVoiceSession();
         refreshKevinState();
       },
       onVADMisfire: () => {
         listening = false;
+        rearmVoiceSession();
         refreshKevinState();
       },
       redemptionMs: 1600,
@@ -1120,6 +1172,8 @@ async function initHandsFree() {
           await handleVoice(text);
         } catch (err) {
           console.error('Eller serbest transkripsiyon hatasi:', err);
+        } finally {
+          rearmVoiceSession();
         }
       },
     });

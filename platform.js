@@ -41,6 +41,24 @@ function runDetached(command, args, env) {
   });
 }
 
+// Kisayolun Exec satirindaki programin adi + gorunen adin ilk kelimesi
+function entryProcessNames(entry) {
+  const out = [entry.id.split('.').pop()];
+  if (entry.exec) out.push(path.basename(entry.exec.split(/\s+/)[0]));
+  const first = String(entry.displayName || '').split(/[\s(]/)[0];
+  if (first) out.push(first);
+  return out;
+}
+
+async function waitForProcess(names, ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    for (const n of names) if (await processRunning(n)) return true;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
 function processRunning(name) {
   if (isWindows) {
     return run('tasklist', ['/FI', `IMAGENAME eq ${name}.exe`, '/NH']).then(
@@ -75,11 +93,14 @@ function findDesktopEntry(name) {
       if (!file.endsWith('.desktop')) continue;
       const id = file.slice(0, -8);
       let displayName = '';
+      let exec = '';
       try {
         const body = fs.readFileSync(path.join(dir, file), 'utf8');
         if (/^NoDisplay=true/m.test(body)) continue;
         const m = body.match(/^Name=(.+)$/m);
         displayName = m ? m[1].trim() : '';
+        const ex = body.match(/^Exec=(.+)$/m);
+        exec = ex ? ex[1].trim() : '';
       } catch {
         continue;
       }
@@ -89,7 +110,7 @@ function findDesktopEntry(name) {
       if (idLower === wanted || nameLower === wanted) score = 100;
       else if (idLower.endsWith('.' + wanted) || nameLower.startsWith(wanted)) score = 80;
       else if (idLower.includes(wanted) || nameLower.includes(wanted)) score = 50;
-      if (score) candidates.push({ id, displayName: displayName || id, score });
+      if (score) candidates.push({ id, displayName: displayName || id, exec, score });
     }
   }
   candidates.sort((a, b) => b.score - a.score);
@@ -122,18 +143,22 @@ async function launchApp(name, compositorExec) {
 
   const entry = findDesktopEntry(name);
   const label = entry ? entry.displayName : name;
+  const onPath = (await run('sh', ['-c', `command -v ${JSON.stringify(binary)}`])).ok;
+  // Uygulama acilinca hangi adla calisir: komut, kisayolun Exec'i, adinin ilk
+  // kelimesi (spotify-launcher -> spotify). Hemen degil, birkac saniye
+  // icinde: onceden aninda bakilip "kurulu ama baslatilamadi" deniyordu.
+  const names = new Set([binary, ...(entry ? entryProcessNames(entry) : [])].map((n) => n.toLowerCase()).filter(Boolean));
+  const started = () => waitForProcess([...names], 5000);
 
   // Electron'dan dogrudan baslatilan GUI uygulamalari acilmiyor (kutuphane
-  // yollari miras kaliyor); compositor baslatinca sorun kalmiyor.
+  // yollari miras kaliyor); compositor baslatinca sorun kalmiyor. Kisayol
+  // varsa once o: komut adi her zaman uygulama adi degil (Spotify).
   if (compositorExec) {
-    if (await compositorExec(name)) {
-      if (await processRunning(binary)) return { ok: true, label };
-    }
-    if (entry && (await compositorExec(`gtk-launch ${entry.id}`))) {
-      if (await processRunning(entry.id.split('.').pop())) return { ok: true, label };
-    }
+    if (entry && (await compositorExec(`gtk-launch ${entry.id}`)) && (await started())) return { ok: true, label };
+    if (onPath && (await compositorExec(name)) && (await started())) return { ok: true, label };
   }
 
+  if (!onPath) return { ok: false, label, installed: Boolean(entry) };
   const direct = await runDetached(binary, name.split(/\s+/).slice(1));
   if (direct.ok && (await processRunning(binary))) return { ok: true, label };
   return { ok: false, label, installed: Boolean(entry) };
@@ -141,7 +166,8 @@ async function launchApp(name, compositorExec) {
 
 // --- Ekran goruntusu ---
 
-async function captureScreen(outPath, scale = 0.5) {
+// output: Wayland'de tek bir ekran (grim -o), bos = hepsi
+async function captureScreen(outPath, scale = 0.5, output = null) {
   if (isWindows) {
     const script = `
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
@@ -161,7 +187,7 @@ $small.Save('${outPath.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFo
     return r.ok;
   }
 
-  let r = await run('grim', ['-s', String(scale), '-l', '0', outPath]);
+  let r = await run('grim', ['-s', String(scale), '-l', '0', ...(output ? ['-o', output] : []), outPath]);
   if (!r.ok) r = await run('import', ['-window', 'root', outPath]); // X11 yedegi
   return r.ok;
 }

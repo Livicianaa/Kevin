@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   musicStatus: () => ipcRenderer.invoke('music-status'),
   mediaPause: () => ipcRenderer.invoke('media-pause'),
   mediaResume: () => ipcRenderer.invoke('media-resume'),
+  mediaDuck: () => ipcRenderer.invoke('media-duck'),
+  mediaUnduck: () => ipcRenderer.invoke('media-unduck'),
   resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
   setAnchor: (x, y) => ipcRenderer.send('set-anchor', x, y),
   worldInfo: () => ipcRenderer.invoke('world-info'),

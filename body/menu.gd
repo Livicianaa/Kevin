@@ -60,12 +60,18 @@ var scale_label: Label
 var mode_btns := []
 var provider_opt: OptionButton
 var provider_row: Control
-var model_opt: OptionButton
+## Model listesi menunun icinde, sabit yukseklikte kayan liste. (Acilir
+## liste ayri bir pencere olarak ekranin altina acilip kesiliyordu.)
+var model_list: ItemList
+## Kapali halde secili modeli gosteren satir; tiklaninca liste acilir
+var model_btn: Button
 var model_status: Label
 var models_http: HTTPRequest
 var key_timer: Timer
 var ollama_link: LinkButton
-var pause_media_check: Button
+var media_btns: Array = []
+const MEDIA_MODES := ["duck", "pause", "none"]
+var volume_slider: HSlider
 var live_typing_check: Button
 var key_edit: LineEdit
 var key_row: Control
@@ -754,6 +760,37 @@ func _add_skin_card(path: String) -> void:
 	dot.position = Vector2((cell - px(5)) / 2.0, cell + 5 * u)
 	btn.add_child(dot)
 	btn.set_meta("dot", dot)
+	# Kendi eklenen skinler silinebilir: ustune gelince kosede x
+	if not path.begins_with("res://"):
+		var del := Button.new()
+		del.text = "×"
+		del.tooltip_text = _tx("delete_skin")
+		del.focus_mode = Control.FOCUS_NONE
+		del.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		del.add_theme_font_override("font", _font(false, 600))
+		del.add_theme_font_size_override("font_size", px(13))
+		for st in ["normal", "hover", "pressed"]:
+			var sb := _flat(C_RED if st != "normal" else C_INK, Color.TRANSPARENT, 0, int(9 * u))
+			sb.content_margin_left = 0
+			sb.content_margin_right = 0
+			sb.content_margin_top = 0
+			sb.content_margin_bottom = 0
+			del.add_theme_stylebox_override(st, sb)
+		del.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		for c in ["font_color", "font_hover_color", "font_pressed_color"]:
+			del.add_theme_color_override(c, C_CREAM)
+		del.size = Vector2(18, 18) * u
+		del.position = Vector2(cell - 12 * u, -6 * u)
+		del.visible = false
+		btn.add_child(del)
+		btn.mouse_entered.connect(func(): del.visible = true)
+		btn.mouse_exited.connect(func():
+			if not del.get_global_rect().has_point(get_global_mouse_position()):
+				del.visible = false)
+		del.mouse_exited.connect(func():
+			if not btn.get_global_rect().has_point(get_global_mouse_position()):
+				del.visible = false)
+		del.pressed.connect(_delete_skin.bind(path))
 	btn.pressed.connect(func():
 		body_cfg.skin = path
 		_mark_selected_card()
@@ -764,6 +801,22 @@ func _add_skin_card(path: String) -> void:
 	if not plus.is_empty():
 		skin_grid.move_child(btn, plus[0].get_index())
 	skin_cards[path] = btn
+
+
+func _delete_skin(path: String) -> void:
+	if not Settings.delete_skin(path):
+		return
+	var card: Button = skin_cards.get(path)
+	skin_cards.erase(path)
+	if card:
+		card.queue_free()
+	# Secili olan silindiyse kalanlardan ilkine gec
+	if str(body_cfg.skin) == path:
+		var rest := Settings.list_skins()
+		if not rest.is_empty():
+			body_cfg.skin = rest[0]
+			skin_chosen.emit(rest[0])
+	_mark_selected_card()
 
 
 func _mark_selected_card() -> void:
@@ -1009,6 +1062,8 @@ func _page_character() -> VBoxContainer:
 	v.add_child(_field(_tx("walk_speed"), _slider_row(walk_speed_slider, _value_label(walk_speed_slider, "x%.1f"))))
 	speech_slider = _slider(0.6, 1.6, 0.1, float(brain_cfg.get("speechRate", 1.0)))
 	v.add_child(_field(_tx("speech_rate"), _slider_row(speech_slider, _value_label(speech_slider, "x%.1f"))))
+	volume_slider = _slider(0, 200, 5, roundf(float(brain_cfg.get("voiceVolume", 1.0)) * 100.0))
+	v.add_child(_field(_tx("voice_volume"), _slider_row(volume_slider, _value_label(volume_slider, "%%%d"))))
 	v.add_child(_text(_tx("skin_hint"), 12.5, C_MUTED, false, 400, 0.0, true))
 	return v
 
@@ -1058,7 +1113,12 @@ func _page_ai() -> VBoxContainer:
 			provider_opt.set_item_metadata(provider_opt.item_count - 1, id)
 			if id == str(brain_cfg.get("provider", "")):
 				provider_opt.select(provider_opt.item_count - 1)
-	provider_opt.item_selected.connect(func(_i): _fetch_models())
+	provider_opt.item_selected.connect(func(_i):
+		# Saglayici degisince anahtar alani o saglayicinin kendi anahtarini gosterir
+		key_edit.text = ""
+		key_edit.placeholder_text = _tx("key_saved") if _has_key() else _tx("key_new")
+		_update_key_notice()
+		_fetch_models())
 	cloud.add_child(_field(_tx("provider"), provider_opt))
 	provider_row = cloud
 
@@ -1078,17 +1138,57 @@ func _page_ai() -> VBoxContainer:
 
 	# Model: elle yazilmiyor, saglayicidan gelen listeden secilir (anahtar
 	# yapistirilinca liste kendiliginden gelir, anahtar da boylece denenmis olur)
-	model_opt = OptionButton.new()
-	model_opt.focus_mode = Control.FOCUS_NONE
-	model_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	model_list = ItemList.new()
+	model_list.custom_minimum_size.y = roundi(210 * u)
+	model_list.select_mode = ItemList.SELECT_SINGLE
+	model_list.focus_mode = Control.FOCUS_NONE
+	model_list.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	model_list.add_theme_font_override("font", _font(false))
+	model_list.add_theme_font_size_override("font_size", px(15))
+	model_list.add_theme_color_override("font_color", C_INK)
+	model_list.add_theme_color_override("font_hovered_color", C_RED)
+	model_list.add_theme_color_override("font_selected_color", C_RED)
+	model_list.add_theme_constant_override("v_separation", px(6))
+	model_list.add_theme_stylebox_override("panel", _flat(Color.TRANSPARENT, Color(C_INK, 0.35), 1, 2))
+	model_list.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	model_list.add_theme_stylebox_override("selected", _flat(Color(C_RED, 0.1), Color.TRANSPARENT, 0, 2))
+	model_list.add_theme_stylebox_override("selected_focus", _flat(Color(C_RED, 0.1), Color.TRANSPARENT, 0, 2))
+	model_list.add_theme_stylebox_override("hovered", _flat(Color(C_INK, 0.05), Color.TRANSPARENT, 0, 2))
+	model_list.add_theme_stylebox_override("cursor", StyleBoxEmpty.new())
+	model_list.add_theme_stylebox_override("cursor_unfocused", StyleBoxEmpty.new())
 	model_status = _text("", 13, C_MUTED, false, 500, 0.0, true)
 	ollama_link = _link(_tx("get_ollama"), 14, C_RED)
 	ollama_link.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	ollama_link.visible = false
 	ollama_link.pressed.connect(func(): OS.shell_open(str(Settings.PROVIDERS.ollama.keys)))
+	# Liste kapali durur, sadece secili model gorunur; tiklayinca acilir,
+	# secince kapanir (livi: "tiklanmadikca acilmasinlar")
+	model_list.visible = false
+	model_list.item_selected.connect(func(_i):
+		_update_model_btn()
+		model_list.visible = false)
+	model_btn = Button.new()
+	model_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	model_btn.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	model_btn.icon = _chevron_tex(px(11), C_MUTED)
+	model_btn.focus_mode = Control.FOCUS_NONE
+	model_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	model_btn.add_theme_font_override("font", _font(false))
+	model_btn.add_theme_font_size_override("font_size", px(16))
+	for st in ["normal", "hover", "pressed", "hover_pressed"]:
+		model_btn.add_theme_stylebox_override(st, _underline(C_RED if st != "normal" else C_INK))
+	model_btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	for c in ["font_color", "font_pressed_color", "font_focus_color"]:
+		model_btn.add_theme_color_override(c, C_INK)
+	model_btn.add_theme_color_override("font_hover_color", C_RED)
+	model_btn.pressed.connect(func():
+		model_list.visible = not model_list.visible
+		if model_list.visible:
+			model_list.ensure_current_is_visible())
 	var model_box := VBoxContainer.new()
 	model_box.add_theme_constant_override("separation", px(8))
-	model_box.add_child(model_opt)
+	model_box.add_child(model_btn)
+	model_box.add_child(model_list)
 	model_box.add_child(model_status)
 	model_box.add_child(ollama_link)
 	v.add_child(_field(_tx("model"), model_box, _tx("model_hint2")))
@@ -1118,12 +1218,18 @@ func _page_ai() -> VBoxContainer:
 	var voice := VBoxContainer.new()
 	voice.add_theme_constant_override("separation", px(14))
 	hands_check = _switch(_tx("hands_free"), brain_cfg.get("handsFree", true) != false)
-	pause_media_check = _switch(_tx("pause_media"), brain_cfg.get("pauseMedia", true) != false)
 	live_typing_check = _switch(_tx("live_typing"), brain_cfg.get("liveTyping", true) != false)
-	for sw in [hands_check, pause_media_check, live_typing_check]:
+	for sw in [hands_check, live_typing_check]:
 		voice.add_child(sw)
 	voice.add_child(_text(_tx("live_typing_hint"), 12, C_MUTED, false, 400, 0.0, true))
 	v.add_child(voice)
+
+	# Konusurken muzik: kis (varsayilan) / duraklat / dokunma. Eski "duraklat"
+	# anahtari (pauseMedia) okunmuyor: livi "konusurken sarki duruyor" dedi.
+	var media_mode := str(brain_cfg.get("mediaOnTalk", "duck"))
+	media_btns = _segment([_tx("media_duck"), _tx("media_pause"), _tx("media_none")],
+		maxi(0, MEDIA_MODES.find(media_mode)), func(_i): pass)
+	v.add_child(_field(_tx("media_talk"), _segment_box(media_btns), _tx("media_talk_hint")))
 
 	var sess_s := float(brain_cfg.get("voiceSessionMs", 20000)) / 1000.0
 	session_slider = _slider(5, 60, 1, sess_s)
@@ -1172,8 +1278,8 @@ func _fetch_models() -> void:
 	var p: Dictionary = Settings.PROVIDERS[prov]
 	var local: bool = p.get("local", false)
 	var key := key_edit.text.strip_edges()
-	if key == "" and prov == str(brain_cfg.get("provider", "")):
-		key = str(brain_cfg.get("apiKey", ""))
+	if key == "":
+		key = Settings.key_for(brain_cfg, prov)
 	ollama_link.visible = false
 	models_http.cancel_request()
 	if not local and key == "":
@@ -1219,27 +1325,62 @@ func _set_model_status(t: String, color: Color) -> void:
 	model_status.add_theme_color_override("font_color", color)
 
 
-## Kayitli model listede varsa o, yoksa onerilen secili; onerilen en ustte
+## Sohbet modelleri: onerilen en ustte, sonra yeni/kararli surumler once.
+## Kayitli model listede varsa secili, yoksa onerilen.
 func _fill_models(ids: Array) -> void:
 	var prov := _current_provider()
 	var rec := str(Settings.PROVIDERS[prov].model)
 	var saved := str(brain_cfg.get("model", "")) if prov == str(brain_cfg.get("provider", "")) else ""
 	var list := ids.duplicate()
+	list.sort_custom(func(a, b): return _model_score(a) > _model_score(b))
 	if list.is_empty():
 		list = [saved if saved != "" else rec]
 	if rec in list:
 		list.erase(rec)
 		list.push_front(rec)
-	model_opt.clear()
+	model_list.clear()
 	for id in list:
-		model_opt.add_item("%s  (%s)" % [id, _tx("recommended")] if id == rec else id)
-		model_opt.set_item_metadata(model_opt.item_count - 1, id)
+		var i := model_list.add_item("%s  (%s)" % [id, _tx("recommended")] if id == rec else id)
+		model_list.set_item_metadata(i, id)
 	var pick := list.find(saved) if saved in list else 0
-	model_opt.select(pick)
+	model_list.select(pick)
+	model_list.ensure_current_is_visible()
+	_update_model_btn()
+
+
+func _update_model_btn() -> void:
+	if model_btn == null:
+		return
+	var sel := model_list.get_selected_items()
+	model_btn.text = model_list.get_item_text(sel[0]) if not sel.is_empty() else "—"
+
+
+## Model ne kadar "ana akim": yeni surum, kararli ad ustte; tarihli/deneysel
+## kopyalar, kucuk/ozel varyantlar altta
+static func _model_score(id: String) -> float:
+	var low := id.to_lower()
+	var score := 0.0
+	var m := RegEx.create_from_string("(\\d+(?:\\.\\d+)?)").search(low.get_file())
+	if m:
+		score += minf(float(m.get_string(1)), 100.0) * 0.1
+	for w in ["flash", "pro", "instruct", "versatile", "qwen", "llama", "gpt-oss", "kimi", "deepseek"]:
+		if low.contains(w):
+			score += 1.0
+	for w in ["preview", "exp", "lite", "nano", "mini", "gemma", "thinking", "base"]:
+		if low.contains(w):
+			score -= 1.2
+	if RegEx.create_from_string("-\\d{3,4}$|-\\d{2}-\\d{2}").search(low):
+		score -= 3.0
+	return score
+
+
+func _selected_model() -> String:
+	var sel := model_list.get_selected_items()
+	return str(model_list.get_item_metadata(sel[0])) if not sel.is_empty() else ""
 
 
 func _has_key() -> bool:
-	return str(brain_cfg.get("apiKey", "")) != ""
+	return Settings.key_for(brain_cfg, _current_provider()) != ""
 
 
 ## Bulut secili ve anahtar yoksa kirmizi uyari (herkes kendi anahtarini girer)
@@ -1278,6 +1419,7 @@ func _page_about() -> VBoxContainer:
 	var v := _page()
 	v.add_child(_text(_tx("about_text"), 15.5, C_INK, true, 400, 0.0, true))
 	v.add_child(_text("Created by Liviciana", 17, C_RED, true, 600))
+	v.add_child(_field(_tx("try_title"), _text(_tx("try_text"), 13.5, C_INK, false, 400, 0.0, true)))
 	v.add_child(_field(_tx("animations"), _text("Fresh Animations, Emotecraft (CC0), Quaternius Universal Animation Library 2 (CC0).", 13.5, C_INK, false, 400, 0.0, true)))
 	v.add_child(_field(_tx("usage"), _text(_tx("usage_text"), 13.5, C_INK, false, 400, 0.0, true)))
 	# Her acilista olculen sistem ve secilen calisma duzeyi
@@ -1322,7 +1464,7 @@ func open_instant(id: String) -> void:
 
 static func brain_needs_key(cfg: Dictionary) -> bool:
 	var local: bool = Settings.PROVIDERS.get(str(cfg.get("provider", "")), {}).get("local", false)
-	return not local and str(cfg.get("apiKey", "")) == ""
+	return not local and Settings.key_for(cfg, str(cfg.get("provider", ""))) == ""
 
 
 ## Test icin: kategoriyi ac
@@ -1348,7 +1490,7 @@ func _on_save() -> void:
 
 	var brain := {
 		"provider": _current_provider(),
-		"model": str(model_opt.get_item_metadata(model_opt.selected)) if model_opt.selected >= 0 else "",
+		"model": _selected_model(),
 		"name": name_edit.text.strip_edges() if name_edit.text.strip_edges() != "" else "Kevin",
 		"nicknames": Array(nick_edit.text.split(",", false)).map(func(s): return s.strip_edges()).filter(func(s): return s != ""),
 		"handsFree": hands_check.button_pressed,
@@ -1357,13 +1499,24 @@ func _on_save() -> void:
 		"speechRate": speech_slider.value,
 		"camera": camera_check.button_pressed,
 		"cameraGreet": camera_greet_check.button_pressed,
-		"pauseMedia": pause_media_check.button_pressed,
+		"mediaOnTalk": MEDIA_MODES[maxi(0, media_btns.find_custom(func(b): return b.button_pressed))],
+		"voiceVolume": volume_slider.value / 100.0,
 		"liveTyping": live_typing_check.button_pressed,
 		"nightSleepy": night_check.button_pressed,
 		"sleepAfterMin": int(sleep_slider.value),
 	}
+	# Anahtarlar saglayici basina; "apiKey" her zaman secili saglayicinin
+	# anahtari (beyin onu okuyor). Baska saglayicinin anahtari kullanilmaz.
+	var keys: Dictionary = {}
+	if brain_cfg.get("apiKeys") is Dictionary:
+		keys = brain_cfg.apiKeys.duplicate()
+	var old_prov := str(brain_cfg.get("provider", ""))
+	if old_prov != "" and not keys.has(old_prov) and str(brain_cfg.get("apiKey", "")) != "":
+		keys[old_prov] = str(brain_cfg.apiKey)
 	if key_edit.text.strip_edges() != "":
-		brain["apiKey"] = key_edit.text.strip_edges()
+		keys[brain.provider] = key_edit.text.strip_edges()
+	brain["apiKeys"] = keys
+	brain["apiKey"] = str(keys.get(brain.provider, ""))
 	Settings.save_brain(brain)
 
 	var needs_reload: bool = body_cfg.slim != original_body.slim or absf(float(body_cfg.scale) - float(original_body.scale)) > 0.001

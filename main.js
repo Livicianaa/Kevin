@@ -9,6 +9,7 @@ const hypr = require('./hypr.js');
 const platform = require('./platform.js');
 const browser = require('./browser.js');
 const langs = require('./langs.js');
+const { BeatTracker } = require('./beat.js');
 const { createAkil } = require('./akil.js');
 
 // Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
@@ -115,9 +116,48 @@ ipcMain.on('history-add', (_event, entry) => {
   }
 });
 
+// Windows'ta programlar .exe
+const EXE = process.platform === 'win32' ? '.exe' : '';
 const PIPER_DIR = path.join(__dirname, 'bin', 'piper');
-const PIPER_BIN = path.join(PIPER_DIR, 'piper');
+const PIPER_BIN = path.join(PIPER_DIR, `piper${EXE}`);
 const PIPER_VOICES_DIR = path.join(__dirname, 'bin', 'piper-voices');
+// Paketlenmis surumde uygulama klasoru salt okunur (AppImage): yeni dilin sesi
+// kullanicinin klasorune iner, pakete gomulu sesler de kullanilir
+const VOICES_USER_DIR = app.isPackaged ? path.join(app.getPath('userData'), 'piper-voices') : PIPER_VOICES_DIR;
+
+// Paketlenmis Windows surumu: Kevin.exe once govdeyi (Godot) baslatip kapanir,
+// govde beyni yine bu programla --brain diye acar. Govde kullanicinin
+// klasorune kopyalanir (Program Files gibi yazilamayan yerde de calissin).
+// Linux AppImage'da bu isi AppRun yapiyor.
+const LAUNCHER = app.isPackaged && !BRAIN_MODE && process.platform === 'win32';
+
+function launchBody() {
+  const appDir = app.getAppPath();
+  const src = path.join(appDir, 'body');
+  const dst = path.join(app.getPath('userData'), 'body');
+  const stamp = path.join(dst, '.kevin-surum');
+  const version = `${app.getVersion()}-${fs.statSync(path.join(src, 'project.godot')).mtimeMs}`;
+  if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== version) {
+    fs.rmSync(dst, { recursive: true, force: true });
+    fs.cpSync(src, dst, { recursive: true });
+    fs.writeFileSync(stamp, version);
+  }
+  const godot = path.join(path.dirname(process.execPath), 'godot', `godot${EXE}`);
+  spawn(godot, ['--path', dst], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, KEVIN_ROOT: appDir, KEVIN_ELECTRON: process.execPath },
+  }).unref();
+}
+
+if (LAUNCHER) {
+  try {
+    launchBody();
+  } catch (err) {
+    console.error('[kevin] govde baslatilamadi:', err.message);
+  }
+  setTimeout(() => app.exit(0), 300);
+}
 
 // Ses modeli sabit degil: bin/piper-voices altinda hangi ses kuruluysa o kullanilir.
 // (kurulum scripti tr_TR-dfki-medium indiriyor, elde baska bir ses varsa o calisir)
@@ -141,9 +181,48 @@ function findPiperVoice() {
 const PIPER_VOICE = process.env.KEVIN_VOICE ? findPiperVoice() : null;
 const PIPER_ESPEAK_DATA = path.join(PIPER_DIR, 'espeak-ng-data');
 
-const WHISPER_DIR = path.join(__dirname, 'bin', 'whisper');
-const WHISPER_BIN = path.join(WHISPER_DIR, 'whisper-cli');
-const WHISPER_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small-q5_1.bin');
+// Ekran kartli derleme (scripts/setup-whisper-gpu.sh) varsa ses tanima GPU'da
+// daha dogru turbo modelle; yoksa CPU'da small (turbo CPU'da ~5 kat yavas)
+const WHISPER_GPU_DIR = path.join(__dirname, 'bin', 'whisper-gpu');
+const WHISPER_TURBO = path.join(__dirname, 'bin', 'whisper-models', 'ggml-large-v3-turbo-q5_0.bin');
+const WHISPER_ON_GPU = fs.existsSync(path.join(WHISPER_GPU_DIR, `whisper-cli${EXE}`)) && fs.existsSync(WHISPER_TURBO);
+const WHISPER_DIR = WHISPER_ON_GPU ? WHISPER_GPU_DIR : path.join(__dirname, 'bin', 'whisper');
+const WHISPER_BIN = path.join(WHISPER_DIR, `whisper-cli${EXE}`);
+const WHISPER_MODEL = WHISPER_ON_GPU ? WHISPER_TURBO : path.join(__dirname, 'bin', 'whisper-models', 'ggml-small-q5_1.bin');
+const WHISPER_CPU_DIR = path.join(__dirname, 'bin', 'whisper');
+const WHISPER_CPU_MODEL = path.join(__dirname, 'bin', 'whisper-models', 'ggml-small-q5_1.bin');
+// Ekran karti doluysa (oyun, yerel model) GPU whisper bellek ayiramiyor;
+// o zaman CPU'ya duser ve bir sure GPU'yu denemez
+let whisperGpuSkipUntil = 0;
+
+// Whisper sessizlikte/gurultude egitim verisindeki video sonu yazilarini
+// uyduruyor ("Altyazi M.K.", "Abone olmayi unutmayin"); bunlar konusma degil
+const WHISPER_HALLUCINATIONS = [
+  /^altyaz[ıi](\s+[\p{L}.]+){0,3}[.!]?$/u, /abone ol/u, /izlediğiniz için teşekkür/u, /bir sonraki videoda/u,
+  /^thanks? for watching/u, /^subtitles? (by|from)/u, /^\[?(müzik|music|alkış|applause)\]?\.?$/u,
+  /^[♪♫\s.*-]+$/u,
+];
+
+function cleanTranscript(text) {
+  const t = text.trim();
+  const low = t.toLocaleLowerCase('tr');
+  return WHISPER_HALLUCINATIONS.some((re) => re.test(low)) ? '' : t;
+}
+
+async function runWhisper(wavPath, cfg) {
+  const args = (model) => ['-m', model, '-f', wavPath, '-l', langs.langCode(cfg), '-nt', '-np', '-t', WHISPER_THREADS, '--prompt', whisperPrompt(cfg)];
+  if (WHISPER_ON_GPU && Date.now() >= whisperGpuSkipUntil) {
+    try {
+      const { stdout } = await runCommand(WHISPER_BIN, args(WHISPER_MODEL), { env: { LD_LIBRARY_PATH: WHISPER_DIR } });
+      return cleanTranscript(stdout);
+    } catch (err) {
+      whisperGpuSkipUntil = Date.now() + 2 * 60 * 1000;
+      console.warn('[kevin] GPU ses tanima basarisiz, CPU\'ya geciliyor:', String(err.message).split('\n')[0]);
+    }
+  }
+  const { stdout } = await runCommand(path.join(WHISPER_CPU_DIR, `whisper-cli${EXE}`), args(WHISPER_CPU_MODEL), { env: { LD_LIBRARY_PATH: WHISPER_CPU_DIR } });
+  return cleanTranscript(stdout);
+}
 // Islemci sayisina gore (her acilista): sabit 10 is parcacigi az cekirdekli
 // makinede butun sistemi yavaslatir
 const WHISPER_THREADS = String(Math.max(2, Math.min(10, os.cpus().length - 2)));
@@ -223,8 +302,11 @@ const PROVIDERS = {
     defaultModel: 'qwen/qwen3.8-27b',
   },
   gemini: {
+    // gemini-2.5-flash kaldirildi (404). *-latest takma adlari hep guncel
+    // modele gidiyor; yogunlukta (503) lite'a geciliyor.
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-flash-latest',
+    fallbackModel: 'gemini-flash-lite-latest',
   },
   ollama: {
     baseURL: 'http://127.0.0.1:11434/v1',
@@ -243,7 +325,11 @@ function isLocal(provider) {
 function whisperPrompt(cfg) {
   const name = cfg.name || 'Kevin';
   const nicks = (cfg.nicknames || []).join(', ');
-  const tail = langs.langCode(cfg) === 'tr' ? ` ${name}, bana yardim eder misin?` : '';
+  // Sik gecen komut kelimeleri: ses tanima bunlari dogru yazsin ("yan ekanda",
+  // "Firafoks" gibi yanlislar)
+  const tail = langs.langCode(cfg) === 'tr'
+    ? ` ${name}, bana yardım eder misin? Yan ekranda Firefox'u aç, YouTube'da şarkı başlat, ekranıma bak, bilgisayarda şunu yap.`
+    : '';
   return `${name}${nicks ? `, ${nicks}` : ''}.${tail}`;
 }
 
@@ -339,22 +425,119 @@ const SHORT_TOOL_DESCRIPTIONS = {
   type_text: 'Klavyeden metin yazar.',
 };
 
+const SCREEN_ARG = {
+  type: 'string',
+  description: 'Hangi ekran: ekran adi (sistem mesajindaki), "focused" (odaktaki), "other" (yan/diger ekran), "left", "right", "laptop" ya da "all"',
+};
+
 const LOOK_TOOL = {
   type: 'function',
   function: {
     name: 'look_at_screen',
     description:
       'Ekrana bakar ve ne gordugunu anlatir. Kullanici "ekranima bak", "bu ne", ' +
-      '"ne yaziyor", "sayfada ne var" gibi ekrandaki bir seyi sordugunda kullan.',
+      '"ne yaziyor", "sayfada ne var", "yan ekranda ne var" gibi ekrandaki bir seyi sordugunda kullan.',
     parameters: {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'Ekranda ozellikle neye bakilacagi' },
+        screen: { ...SCREEN_ARG, description: `${SCREEN_ARG.description}. Bos = odaktaki ekran.` },
       },
       required: [],
     },
   },
 };
+
+// Birden fazla ekran: "yan ekrana at", "diger ekranda ac" (livi: "yan ekranda
+// islem yap deyince anlamiyor")
+const MOVE_TO_SCREEN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'move_window_to_screen',
+    description: 'Bir pencereyi baska bir ekrana tasir. "Sunu yan ekrana at", "Firefox\'u diger ekrana gonder" gibi isteklerde kullan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        window: { type: 'string', description: 'Pencere basligindan ya da uygulama adindan bir parca (bos = odaktaki pencere)' },
+        screen: SCREEN_ARG,
+      },
+      required: ['screen'],
+    },
+  },
+};
+
+const FOCUS_SCREEN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'focus_screen',
+    description: 'Bir ekrani odaklar. Yeni acilacak uygulama/site belirli bir ekranda ("yan ekranda YouTube ac") acilsin isteniyorsa ONCE bunu cagir, sonra ac.',
+    parameters: { type: 'object', properties: { screen: SCREEN_ARG }, required: ['screen'] },
+  },
+};
+
+// Ekran duzeni (soldan saga) - modele ve araclara
+async function screenLayout() {
+  if (!hypr.available()) return [];
+  try {
+    const mons = (await hypr.json('monitors')).filter((m) => !m.disabled);
+    const sorted = [...mons].sort((a, b) => a.x - b.x || a.y - b.y);
+    return sorted.map((m, i) => ({
+      name: m.name,
+      side: sorted.length === 1 ? 'tek' : i === 0 ? 'sol' : i === sorted.length - 1 ? 'sag' : 'orta',
+      laptop: /^(eDP|LVDS|DSI)/i.test(m.name),
+      focused: Boolean(m.focused),
+      model: String(m.model || m.description || '').slice(0, 40),
+      workspace: m.activeWorkspace && m.activeWorkspace.id,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function describeLayout(layout) {
+  const parts = layout.map((m) => `${m.name} = ${m.side} ekran, ${m.laptop ? 'laptop ekrani' : `harici monitor (${m.model})`}${m.focused ? ', SU AN ODAKTA (kullanicinin baktigi)' : ''}`);
+  return `Ekranlar (soldan saga): ${parts.join('; ')}. Kullanici "yan ekran", "diger/obur ekran" derse odakta OLMAYAN ekrani, "bu ekran" derse odaktakini kastediyor. `
+    + 'Ekranla ilgili islerde look_at_screen, focus_screen ve move_window_to_screen araclarina ekran adini ver.';
+}
+
+// "other", "sol", "laptop", "eDP-1"... -> ekran; bulunamazsa null (= hepsi)
+function resolveScreen(arg, layout) {
+  const a = String(arg || 'focused').toLocaleLowerCase('tr').trim();
+  if (!layout.length || a === 'all' || a === 'hepsi') return null;
+  const focused = layout.find((m) => m.focused) || layout[0];
+  if (['focused', 'bu', 'this', 'current', 'odaktaki'].includes(a)) return focused;
+  if (['other', 'yan', 'diger', 'diğer', 'obur', 'öbür', 'side'].some((w) => a.includes(w))) {
+    return layout.find((m) => !m.focused) || focused;
+  }
+  if (a.includes('left') || a.includes('sol')) return layout.find((m) => m.side === 'sol') || focused;
+  if (a.includes('right') || a.includes('sag') || a.includes('sağ')) return layout.find((m) => m.side === 'sag') || focused;
+  if (a.includes('laptop') || a.includes('dizustu')) return layout.find((m) => m.laptop) || focused;
+  return layout.find((m) => m.name.toLowerCase() === a) || focused;
+}
+
+async function moveWindowToScreen(windowQuery, screenArg) {
+  const layout = await screenLayout();
+  const target = resolveScreen(screenArg, layout);
+  if (!target) return 'hedef ekran anlasilmadi';
+  const q = String(windowQuery || '').toLocaleLowerCase('tr').trim();
+  let win;
+  if (!q) {
+    win = await hypr.json('activewindow');
+  } else {
+    const clients = await hypr.json('clients');
+    win = clients.find((c) => `${c.title} ${c.class} ${c.initialClass}`.toLocaleLowerCase('tr').includes(q) && c.class !== hypr.WINDOW_CLASS && c.class !== 'Kevin');
+  }
+  if (!win || !win.address) return `pencere bulunamadi: ${windowQuery || '(odaktaki)'}`;
+  const out = await hypr.send(`/dispatch movetoworkspacesilent ${target.workspace},address:${win.address}`);
+  return out === 'ok' ? `"${win.title}" ${target.name} ekranina tasindi` : `tasinamadi: ${out}`;
+}
+
+async function focusScreen(screenArg) {
+  const target = resolveScreen(screenArg, await screenLayout());
+  if (!target) return 'hedef ekran anlasilmadi';
+  const out = await hypr.send(`/dispatch focusmonitor ${target.name}`);
+  return out === 'ok' ? `${target.name} odaklandi; simdi acilan sey orada acilir` : `odaklanamadi: ${out}`;
+}
 
 const VISION_ENDPOINT = 'http://127.0.0.1:11434/v1/chat/completions';
 const VISION_MODEL = process.env.KEVIN_VISION_MODEL || PROVIDERS.ollama.visionModel;
@@ -367,10 +550,12 @@ async function describeImage(imagePath, question) {
   return describeImageBase64(image, question);
 }
 
-async function lookAtScreen(question) {
+async function lookAtScreen(question, screenArg) {
   const shot = path.join(os.tmpdir(), `kevin-vision-${crypto.randomUUID()}.png`);
   try {
-    const captured = await platform.captureScreen(shot, 0.5);
+    // Eskiden butun ekranlar tek kucuk resimde yan yanaydi; artik istenen ekran
+    const target = resolveScreen(screenArg, await screenLayout());
+    const captured = await platform.captureScreen(shot, target ? 0.6 : 0.5, target ? target.name : null);
     if (!captured) return 'ekran goruntusu alinamadi';
 
     const image = fs.readFileSync(shot).toString('base64');
@@ -390,7 +575,7 @@ async function describeImageBase64(image, question) {
 // Bulut saglayicilarin goruntu anlayan modelleri (kullanicinin kendi anahtariyla)
 const CLOUD_VISION = {
   groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-flash-latest',
   nvidia: 'meta/llama-3.2-90b-vision-instruct',
 };
 
@@ -420,22 +605,43 @@ async function visionRequest(baseURL, model, apiKey, prompt, images) {
 }
 
 // Once bu bilgisayardaki goruntu modeli (Ollama), yoksa bulut
+// Ollama modeli varsayilan olarak 5 dk ekran kartinda kaliyor; goruntu isi
+// bitince birakilsin (ses tanima ve oyunlar icin VRAM)
+function unloadOllamaModel(model) {
+  fetch('http://127.0.0.1:11434/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, keep_alive: 0 }),
+  }).catch(() => {});
+}
+
 async function describeImages(images, question) {
   const cfg = loadConfig();
   const prompt = `${question}\n${langs.lang(cfg).prompt} dilinde cevapla, en fazla 4 cumle.`;
   const errors = [];
-  try {
-    return await visionRequest(PROVIDERS.ollama.baseURL, VISION_MODEL, null, prompt, images);
-  } catch (err) {
-    errors.push(`yerel: ${err.message}`);
-  }
+  // Bulut saglayici seciliyse once o: yerel goruntu modeli (qwen2.5vl ~4.5 GB)
+  // ekran kartini doldurup ses tanimayi (whisper GPU) bellek hatasina
+  // dusuruyordu, Kevin kimseyi duymaz oluyordu
   const cloud = CLOUD_VISION[cfg.provider];
-  if (cloud && cfg.apiKey) {
+  const tryCloud = async () => {
+    if (!cloud || !cfg.apiKey) return null;
     try {
       return await visionRequest(PROVIDERS[cfg.provider].baseURL, cloud, cfg.apiKey, prompt, images);
     } catch (err) {
       errors.push(`bulut: ${err.message}`);
+      return null;
     }
+  };
+  if (!isLocal(cfg.provider)) {
+    const seen = await tryCloud();
+    if (seen) return seen;
+  }
+  try {
+    return await visionRequest(PROVIDERS.ollama.baseURL, VISION_MODEL, null, prompt, images);
+  } catch (err) {
+    errors.push(`yerel: ${err.message}`);
+  } finally {
+    unloadOllamaModel(VISION_MODEL);
   }
   return `goruntuye bakilamadi (${errors.join(' | ') || 'goruntu modeli yok'})`;
 }
@@ -919,6 +1125,7 @@ function mcpToolsAsOpenAI(includeScreenControl, cfg) {
       ? [BROWSER_OPEN_TOOL, BROWSER_READ_TOOL, BROWSER_CLICK_TOOL, BROWSER_TYPE_TOOL, BROWSER_LOOK_TOOL]
       : []),
     ...(cfg && cfg.camera ? [CAMERA_TOOL, REMEMBER_FACE_TOOL] : []),
+    ...(hypr.available() ? [MOVE_TO_SCREEN_TOOL, FOCUS_SCREEN_TOOL] : []),
     ...remoteTools,
   ];
 }
@@ -1015,7 +1222,7 @@ ipcMain.handle('get-config', () => loadConfig());
 // Secili dilin kisa cumleleri (uyanma cevaplari, hata mesajlari)
 ipcMain.handle('lang-pack', () => {
   const cfg = loadConfig();
-  langs.voiceFor(cfg, PIPER_VOICES_DIR);
+  langs.voiceFor(cfg, VOICES_USER_DIR, [PIPER_VOICES_DIR]);
   return langs.lang(cfg);
 });
 
@@ -1140,6 +1347,11 @@ const SCREEN_CONTROL_KEYWORDS = [
   'tikla', 'tıkla', 'pencere', 'sekme', 'tusa bas', 'tuşa bas', 'yazi yaz', 'yazı yaz',
   'kaydir', 'kaydır', 'scroll', 'buyut', 'büyüt', 'kucult', 'küçült', 'kapat',
   'one getir', 'öne getir', 'click', 'window', 'type', 'press',
+  // "bilgisayarda sunu yap", "yan ekranda islem yap" (livi: "yapmiyor lavuk")
+  'bilgisayar', 'ekranda', 'ekranımda', 'ekranimda', 'yan ekran', 'diğer ekran', 'diger ekran',
+  'öbür ekran', 'obur ekran', 'sağdaki', 'sagdaki', 'soldaki', 'monitör', 'monitor', 'laptop',
+  'işlem yap', 'islem yap', 'şunu yap', 'sunu yap', 'bunu yap', 'yapar mısın', 'yapar misin',
+  'yapsana', 'taşı', 'tasi', 'yerleştir', 'yerlestir', 'on the other screen',
 ];
 
 // Kisa anahtar kelimeler ("ac", "bul", "oku") sadece kelime basinda: "acaba"
@@ -1206,13 +1418,20 @@ ipcMain.handle('chat', async (_event, history) => {
   // Anahtar kelimeler Turkce; baska dilde araclar hep acik (model kendi secer)
   const otherLang = langs.langCode(cfg) !== 'tr';
   let tools = messageNeedsAgent(lastUserMessage) || followUp || otherLang
-    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage), cfg)
+    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage) || otherLang, cfg)
     : undefined;
+  // Araclar aciksa model ekran duzenini bilsin ("yan ekran" hangisi)
+  if (tools) {
+    const layout = await screenLayout();
+    if (layout.length > 1) messages.splice(1, 0, { role: 'system', content: describeLayout(layout) });
+  }
   // Ilk adimda arac cagirmaya zorla (model metinle "yapiyorum" diye uydurmasin) -
   // en az bir gercek arac cagrisindan sonra 'auto'ya gecilir, yoksa sonsuz zorlanir.
   let hasCalledTool = false;
   let rateRetried = false;
   let emptyRetried = false;
+  let busyRetries = 0;
+  let usedFallback = false;
 
   async function callCompletions(forceNoTools) {
     const activeTools = forceNoTools ? undefined : tools;
@@ -1231,7 +1450,7 @@ ipcMain.handle('chat', async (_event, history) => {
 
       // Saglayici modeli kaldirmis olabilir (Groq llama-3.3-70b'yi kaldirdi ve
       // kayitli model 404 veriyordu). Gecersiz modelde varsayilana dusup devam et.
-      if (response.status === 404 && text.includes('model_not_found') && model !== provider.defaultModel) {
+      if (response.status === 404 && /model_not_found|models\/|is not found|not supported/i.test(text) && model !== provider.defaultModel) {
         console.warn(`[kevin] "${model}" artik yok, varsayilana geciliyor: ${provider.defaultModel}`);
         model = provider.defaultModel;
         saveConfig({ ...loadConfig(), model: '' });
@@ -1250,6 +1469,25 @@ ipcMain.handle('chat', async (_event, history) => {
           await new Promise((r) => setTimeout(r, (wait + 0.4) * 1000));
           return callCompletions(forceNoTools);
         }
+      }
+
+      // Saglayici yogun / gecici hata (Gemini "high demand" 503 veriyordu ve
+      // Kevin her seferinde "bir sorun cikti" diyordu): kisa araliklarla iki
+      // kez daha dene, olmazsa yedek modele gec
+      if ([500, 502, 503, 504].includes(response.status) || (response.status === 429 && rateRetried)) {
+        if (busyRetries < 2) {
+          busyRetries += 1;
+          console.warn(`[kevin] saglayici yogun (${response.status}), tekrar ${busyRetries}`);
+          await new Promise((r) => setTimeout(r, busyRetries * 1200));
+          return callCompletions(forceNoTools);
+        }
+        if (provider.fallbackModel && model !== provider.fallbackModel && !usedFallback) {
+          usedFallback = true;
+          console.warn(`[kevin] "${model}" yogun, bu cevap icin yedek model: ${provider.fallbackModel}`);
+          model = provider.fallbackModel;
+          return callCompletions(forceNoTools);
+        }
+        throw new Error('BUSY');
       }
 
       const err = new Error(`API hatasi (${response.status}): ${text.slice(0, 200)}`);
@@ -1326,7 +1564,11 @@ ipcMain.handle('chat', async (_event, history) => {
           } else if (call.function.name === 'remember_face') {
             resultText = await akil.rememberFace(args.name, cfg.cameraDevice);
           } else if (call.function.name === 'look_at_screen') {
-            resultText = await lookAtScreen(args.question);
+            resultText = await lookAtScreen(args.question, args.screen);
+          } else if (call.function.name === 'move_window_to_screen') {
+            resultText = await moveWindowToScreen(args.window, args.screen);
+          } else if (call.function.name === 'focus_screen') {
+            resultText = await focusScreen(args.screen);
           } else if (call.function.name === 'read_file') {
             resultText = await readFileTool(args.path);
           } else if (call.function.name === 'write_file') {
@@ -1394,16 +1636,7 @@ ipcMain.handle('transcribe', async (_event, arrayBuffer) => {
   try {
     await runCommand('ffmpeg', ['-y', '-i', rawPath, '-ar', '16000', '-ac', '1', wavPath]);
 
-    const cfg = loadConfig();
-    const lang = langs.langCode(cfg);
-
-    const { stdout } = await runCommand(
-      WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS, '--prompt', whisperPrompt(cfg)],
-      { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
-    );
-
-    return stdout.trim();
+    return await runWhisper(wavPath, loadConfig());
   } finally {
     fs.rmSync(rawPath, { force: true });
     fs.rmSync(wavPath, { force: true });
@@ -1416,16 +1649,7 @@ ipcMain.handle('transcribe-wav', async (_event, arrayBuffer) => {
   fs.writeFileSync(wavPath, Buffer.from(arrayBuffer));
 
   try {
-    const cfg = loadConfig();
-    const lang = langs.langCode(cfg);
-
-    const { stdout } = await runCommand(
-      WHISPER_BIN,
-      ['-m', WHISPER_MODEL, '-f', wavPath, '-l', lang, '-nt', '-np', '-t', WHISPER_THREADS, '--prompt', whisperPrompt(cfg)],
-      { env: { LD_LIBRARY_PATH: WHISPER_DIR } },
-    );
-
-    return stdout.trim();
+    return await runWhisper(wavPath, loadConfig());
   } finally {
     fs.rmSync(wavPath, { force: true });
   }
@@ -1442,7 +1666,7 @@ ipcMain.handle('speak', async (_event, text) => {
   const id = crypto.randomUUID();
   const outPath = path.join(os.tmpdir(), `kevin-tts-${id}.wav`);
   const cfg = loadConfig();
-  const voice = PIPER_VOICE || langs.voiceFor(cfg, PIPER_VOICES_DIR);
+  const voice = PIPER_VOICE || langs.voiceFor(cfg, VOICES_USER_DIR, [PIPER_VOICES_DIR]);
   // Dilin sesi henuz inmediyse sessiz (indirme arkada suruyor)
   if (!voice) throw new Error('ses indiriliyor');
   const rate = Math.min(1.6, Math.max(0.6, Number(cfg.speechRate) || 1));
@@ -1489,6 +1713,8 @@ function looksLikeMusic({ player, url, album, title, lengthUs }) {
   return songLength && SONG_TITLE_HINTS.test(title);
 }
 
+const beatTracker = new BeatTracker((r) => bodySend({ type: 'beat', ...r }));
+
 ipcMain.handle('music-status', async () => {
   if (!platform.isLinux) return { playing: false };
 
@@ -1509,6 +1735,11 @@ ipcMain.handle('music-status', async () => {
       if (status !== 'Playing') continue;
       anyPlaying = true;
       if (!music && looksLikeMusic({ player, url, album, title, lengthUs })) music = { player, title };
+    }
+    // Sarki calarken temposunu olc (govde dansi vurusa oturtuyor)
+    if (BRAIN_MODE) {
+      if (music) beatTracker.start();
+      else beatTracker.stop();
     }
     return { playing: Boolean(music), anyPlaying, ...(music || {}) };
   } catch {
@@ -1539,7 +1770,51 @@ ipcMain.handle('media-resume', async () => {
   return list.length > 0;
 });
 
+// Kevin dinlerken/konusurken calan seslerin seviyesi kisilir, sonra geri
+// gelir (livi: "konusurken sarki duruyor"). Kevin'in kendi sesi kisilmaz.
+const DUCK_LEVEL = 0.25;
+let duckedInputs = new Map();
+
+async function sinkInputs() {
+  const { stdout } = await runCommand('pactl', ['-f', 'json', 'list', 'sink-inputs']);
+  return JSON.parse(stdout || '[]');
+}
+
+function isOwnStream(si) {
+  const p = si.properties || {};
+  const ownPids = new Set(app.getAppMetrics().map((m) => String(m.pid)));
+  if (p['application.process.id'] && ownPids.has(String(p['application.process.id']))) return true;
+  const name = `${p['application.name'] || ''} ${p['application.process.binary'] || ''}`.toLowerCase();
+  return name.includes('electron') || name.includes('kevin');
+}
+
+ipcMain.handle('media-duck', async () => {
+  if (!platform.isLinux || duckedInputs.size) return duckedInputs.size > 0;
+  try {
+    for (const si of await sinkInputs()) {
+      if (si.corked || isOwnStream(si)) continue;
+      const values = Object.values(si.volume || {}).map((c) => c.value);
+      if (!values.length) continue;
+      duckedInputs.set(si.index, values);
+      await runCommand('pactl', ['set-sink-input-volume', String(si.index), ...values.map((v) => String(Math.round(v * DUCK_LEVEL)))]).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[kevin] ses kisilamadi:', err.message);
+  }
+  return duckedInputs.size > 0;
+});
+
+ipcMain.handle('media-unduck', async () => {
+  const list = duckedInputs;
+  duckedInputs = new Map();
+  for (const [index, values] of list) {
+    await runCommand('pactl', ['set-sink-input-volume', String(index), ...values.map(String)]).catch(() => {});
+  }
+  return list.size > 0;
+});
+
 app.whenReady().then(async () => {
+  if (LAUNCHER) return;
   protocol.handle('kevin', (request) => {
     const url = new URL(request.url);
     const filePath = path.join(__dirname, url.pathname);
@@ -1579,6 +1854,14 @@ app.whenReady().then(async () => {
         }
       }, 300);
     });
+  }
+});
+
+app.on('will-quit', () => {
+  beatTracker.stop();
+  // Kisik birakilan ses kalmasin
+  for (const [index, values] of duckedInputs) {
+    spawn('pactl', ['set-sink-input-volume', String(index), ...values.map(String)]);
   }
 });
 

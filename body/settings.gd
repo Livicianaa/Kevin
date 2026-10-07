@@ -24,7 +24,7 @@ const BODY_DEFAULTS := {
 const PROVIDERS := {
 	"groq": {"label": "Groq", "note": "provider_groq", "model": "qwen/qwen3.8-27b",
 		"url": "https://api.groq.com/openai/v1", "keys": "https://console.groq.com/keys"},
-	"gemini": {"label": "Gemini", "note": "provider_gemini", "model": "gemini-2.5-flash",
+	"gemini": {"label": "Gemini", "note": "provider_gemini", "model": "gemini-flash-latest",
 		"url": "https://generativelanguage.googleapis.com/v1beta/openai", "keys": "https://aistudio.google.com/apikey"},
 	"nvidia": {"label": "NVIDIA", "note": "provider_nvidia", "model": "meta/llama-3.3-70b-instruct",
 		"url": "https://integrate.api.nvidia.com/v1", "keys": "https://build.nvidia.com/settings/api-keys"},
@@ -33,7 +33,7 @@ const PROVIDERS := {
 }
 
 ## Sohbet modeli olmayanlar (ses, guvenlik, gomme...) listede gorunmesin
-const NON_CHAT_MODELS := ["whisper", "guard", "tts", "orpheus", "embed", "rerank", "reward", "audio", "playai", "distil", "parse", "safety", "allam", "vision", "image", "imagen", "veo", "aqa", "learnlm", "nemoretriever", "clip", "deplot", "kosmos", "paligemma", "neva", "vila", "fuyu", "cosmos", "nv-yolox", "ocdrnet", "bge", "arctic-embed"]
+const NON_CHAT_MODELS := ["whisper", "guard", "tts", "orpheus", "embed", "rerank", "reward", "audio", "playai", "distil", "parse", "safety", "allam", "vision", "image", "imagen", "veo", "aqa", "learnlm", "nemoretriever", "clip", "deplot", "kosmos", "paligemma", "neva", "vila", "fuyu", "cosmos", "nv-yolox", "ocdrnet", "bge", "arctic-embed", "lyria", "-live", "robotics", "computer-use", "transcribe", "customtools", "native-audio"]
 
 
 ## Electron'un userData klasoruyle ayni yer
@@ -79,6 +79,19 @@ static func save_body(data: Dictionary) -> void:
 
 static func load_brain() -> Dictionary:
 	return _read("config.json")
+
+
+## Saglayicinin kendi anahtari. Her saglayicinin anahtari ayri tutuluyor
+## (apiKeys); eskiden tek "apiKey" vardi, Gemini'ye gecip anahtar girilince
+## Groq'unkinin ustune yaziliyordu. Eski tek alan, kayitli saglayicinin
+## anahtari sayilir.
+static func key_for(cfg: Dictionary, provider: String) -> String:
+	var keys = cfg.get("apiKeys", {})
+	if keys is Dictionary and str(keys.get(provider, "")) != "":
+		return str(keys[provider])
+	if str(cfg.get("provider", "")) == provider:
+		return str(cfg.get("apiKey", ""))
+	return ""
 
 
 ## Sadece verilen alanlari degistir; dosyadaki diger alanlar korunur
@@ -133,6 +146,13 @@ static func load_skin(path: String) -> Texture2D:
 
 
 ## Skin'i kullanicinin skin klasorune kopyala, yeni yolu dondur
+## Kullanicinin ekledigi skini sil (yerlesik res:// skinler silinmez)
+static func delete_skin(path: String) -> bool:
+	if path.begins_with("res://") or not path.begins_with(skins_dir()):
+		return false
+	return DirAccess.remove_absolute(path) == OK
+
+
 static func import_skin(source: String) -> String:
 	DirAccess.make_dir_recursive_absolute(skins_dir())
 	var target := skins_dir().path_join(source.get_file())

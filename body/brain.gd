@@ -12,6 +12,7 @@ signal played(name: String)
 signal said(text: String)
 signal heard(text: String)
 signal mood(name: String)
+signal beat(bpm: float, energy: float, age: float)
 
 const PORT := 47630
 ## Once calisan bir beyin var mi diye bu kadar bekle, yoksa baslat
@@ -36,20 +37,33 @@ func _connect() -> void:
 	peer.connect_to_host("127.0.0.1", PORT)
 
 
-func project_root() -> String:
+## Paketlenmis surumde (AppImage / Windows) govde baska bir klasore kopyalaniyor;
+## uygulamanin yeri ve Electron'un yolu ortam degiskeniyle geliyor
+static func project_root() -> String:
+	var env := OS.get_environment("KEVIN_ROOT")
+	if env != "":
+		return env
 	return ProjectSettings.globalize_path("res://").path_join("..").simplify_path()
 
 
 func _spawn() -> void:
 	spawned = true
 	var root := project_root()
-	var electron := root.path_join("node_modules/.bin/electron")
-	if OS.get_name() == "Windows":
-		electron = root.path_join("node_modules/electron/dist/electron.exe")
+	var electron := OS.get_environment("KEVIN_ELECTRON")
+	var args := ["--brain"]
+	if electron == "":
+		electron = root.path_join("node_modules/.bin/electron")
+		if OS.get_name() == "Windows":
+			electron = root.path_join("node_modules/electron/dist/electron.exe")
+		args = [root, "--brain"]
+	elif OS.get_name() == "Linux":
+		# AppImage'da Chromium sandbox'i kurulamiyor (SUID yok, bazi dagitimlar
+		# kullanici ad alanini kisitliyor)
+		args.append("--no-sandbox")
 	if not FileAccess.file_exists(electron):
 		push_warning("[kevin] beyin bulunamadi: %s (npm install gerekli)" % electron)
 		return
-	brain_pid = OS.create_process(electron, [root, "--brain"])
+	brain_pid = OS.create_process(electron, args)
 	print("[kevin] beyin baslatildi (pid %d)" % brain_pid)
 
 
@@ -116,3 +130,5 @@ func _drain() -> void:
 				heard.emit(str(msg.get("text", "")))
 			"mood":
 				mood.emit(str(msg.get("mood", "")))
+			"beat":
+				beat.emit(float(msg.get("bpm", 0.0)), float(msg.get("energy", 0.5)), float(msg.get("age", 0.0)))

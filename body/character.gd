@@ -28,6 +28,7 @@ const PARTS_CLASSIC := {
 var PARTS := PARTS_CLASSIC.duplicate(true)
 
 const Settings := preload("res://settings.gd")
+const Brain := preload("res://brain.gd")
 ## Menuden gelen ayarlar (add_child'dan ONCE atanir)
 var slim := false
 var skin_path := "res://skins/totem.png"
@@ -87,10 +88,24 @@ const EMOTE_POOLS := {
 	"idle": ["lookaround", "Inspect"],
 	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lay_down5"],
 	"fun": ["selfie", "the_dab", "jump"],
-	"dance": ["floss_dance3", "floss", "orange justice", "club_penguin_dance", "penguin"],
+	"dance": [],
 	"social": ["meeting", "hug", "hearthands", "heart", "bow1", "bow2", "F", "make_gestures", "grace", "nervous", "hunchback", "dab", "jumping jacks", "take the l"],
 	"brain": ["think", "nod", "fold_arms", "shake"],
 }
+## Danslar: [dogal vurus uzunlugu (tick), enerji]. Beyin sarkinin temposunu
+## (BPM) ve enerjisini olcup gonderiyor; dans o tempoya gore hizlanip vurusa
+## oturuyor, sakin sarkida sakin, hareketli sarkida hareketli danslar geliyor.
+## kevin_* danslari tools/make_dances.py uretiyor (1 vurus = 10 tick).
+const DANCES := {
+	"kevin_bounce": [10, "calm"], "kevin_sway": [10, "calm"], "kevin_wave_arms": [10, "calm"], "penguin": [20, "calm"],
+	"kevin_robot": [10, "mid"], "kevin_disco": [10, "mid"], "floss_dance3": [10, "mid"], "club_penguin_dance": [12, "mid"],
+	"kevin_clap": [10, "hype"], "kevin_runningman": [10, "hype"], "kevin_headbang": [10, "hype"], "floss": [14, "hype"], "orange justice": [10, "hype"],
+}
+const DANCE_LEVELS := ["calm", "mid", "hype"]
+## Sarki boyunca durmadan dans etmiyor (livi: "surekli dans ediyor"): bir iki
+## dans, sonra mola (bu arada normal gezinir), sonra yine
+const DANCE_SESSION := Vector2(14.0, 26.0)
+const DANCE_REST := Vector2(18.0, 40.0)
 ## Yerde yatma/oturma tam karsidan anlasilmiyordu (ayaklar kameraya dogru),
 ## tam yandan da oyle: bunlar caprazdan (3/4) oynuyor, yuzu ekranin icine
 ## dogru (livi: "biraz capraz durabilirler")
@@ -122,7 +137,16 @@ var emotes := {}
 var emote_pool := {}
 var emote: RefCounted = null
 var emote_t := 0.0
+## Emote zamaninin akis hizi (danslarda sarkinin temposuna gore)
+var emote_speed := 1.0
 var emote_until := 0.0
+## Calan sarki: tempo (0 = bilinmiyor), enerji 0-1, son vurusun zamani (sn)
+var song_bpm := 0.0
+var song_energy := 0.5
+var song_beat_at := 0.0
+## Dans oturumu bitince bu zamana kadar mola (Time.get_ticks_msec / 1000)
+var dance_rest_until := 0.0
+var dance_session_until := 0.0
 var emote_weight := 1.0
 ## Emote boyunca tutulacak yon (NAN = kameraya don). Kenara yaslaninca yana.
 var emote_facing := NAN
@@ -232,7 +256,7 @@ func _ready() -> void:
 func _load_emotes() -> void:
 	var dirs := [
 		ProjectSettings.globalize_path("res://emotes"),
-		ProjectSettings.globalize_path("res://").path_join("../bin/emotes").simplify_path(),
+		Brain.project_root().path_join("bin/emotes"),
 	]
 	if OS.get_environment("KEVIN_EMOTES") != "":
 		dirs.append(OS.get_environment("KEVIN_EMOTES"))
@@ -246,7 +270,7 @@ func _load_emotes() -> void:
 				continue
 			emotes[e.name] = e
 	for name in emotes:
-		emote_pool[name] = "extra"
+		emote_pool[name] = "dance" if DANCES.has(name) else "extra"
 		for pool in EMOTE_POOLS:
 			if name in EMOTE_POOLS[pool]:
 				emote_pool[name] = pool
@@ -295,11 +319,10 @@ func on_brain_state(state: String) -> void:
 		attention_left = 0.0
 	var e: String = BRAIN_STATE_EMOTE.get(state, "")
 	if e == "@dance":
-		if not dance_enabled:
-			return
-		e = _random_emote("dance")
-		if e != "" and play_emote(e):
-			brain_emote = e
+		# Muzik basladi: mola yoksa dansa basla; molada ise normal gezinir,
+		# mola bitince _choose_next dansa doner
+		if dance_enabled and _now() >= dance_rest_until and mode == Mode.ANIMATED:
+			_start_dance_session()
 	elif e != "" and emotes.has(e) and play_emote(e, 999.0):
 		brain_emote = e
 	elif not brain_busy() and anim_state == "idle":
@@ -347,6 +370,10 @@ func play_emote(emote_name: String, seconds := -1.0) -> bool:
 		return false
 	emote = emotes[emote_name]
 	emote_t = 0.0
+	emote_speed = 1.0
+	if DANCES.has(emote_name):
+		emote_speed = _dance_speed(emote_name)
+		emote_t = _beat_phase() * _dance_beat_seconds(emote_name)
 	emote_weight = 1.0
 	emote_facing = NAN
 	var pool: String = emote_pool.get(emote_name, "fun")
@@ -359,6 +386,79 @@ func play_emote(emote_name: String, seconds := -1.0) -> bool:
 		emote_facing = DIAGONAL_YAW * (1.0 if root_x < mid else -1.0)
 	_set_state("emote", 0.0)
 	return true
+
+
+## Dansin bir vurusu, dansin kendi zamaninda (saniye)
+func _dance_beat_seconds(name: String) -> float:
+	return float(DANCES[name][0]) / Emote.TICKS
+
+
+## Tempo bilinmiyorsa dogal hizinda. Biliniyorsa vurus vurusa oturacak hiz;
+## cok hizli/yavas kalirsa yari ya da iki kat tempoya gore (hep 0.7-1.45x).
+func _dance_speed(name: String) -> float:
+	if song_bpm <= 0.0:
+		return 1.0
+	var native_bpm := 60.0 / _dance_beat_seconds(name)
+	var s := song_bpm / native_bpm
+	while s > 1.45:
+		s /= 2.0
+	while s < 0.7:
+		s *= 2.0
+	return s
+
+
+## Son vurustan bu yana gecen, vurus cinsinden (0-1)
+func _beat_phase() -> float:
+	if song_bpm <= 0.0:
+		return 0.0
+	var period := 60.0 / song_bpm
+	var now := Time.get_ticks_msec() / 1000.0
+	return fposmod(now - song_beat_at, period) / period
+
+
+func _now() -> float:
+	return Time.get_ticks_msec() / 1000.0
+
+
+## Sarkinin enerjisine uyan bir dans: cogu zaman ayni seviyeden, bazen bir
+## yanindakinden (hep ayni uc dans donmesin)
+func _pick_dance() -> String:
+	var level := 0 if song_energy < 0.36 else (1 if song_energy < 0.66 else 2)
+	if randf() < 0.3:
+		level = clampi(level + (1 if randf() < 0.5 else -1), 0, 2)
+	var names := []
+	for n in DANCES:
+		if emotes.has(n) and DANCES[n][1] == DANCE_LEVELS[level] and not (emote and emote.name == n):
+			names.append(n)
+	if names.is_empty():
+		return _random_emote("dance")
+	return names.pick_random()
+
+
+## Dans oturumu baslat (muzik caliyorsa ve mola bittiyse)
+func _start_dance_session() -> bool:
+	var e := _pick_dance()
+	if e == "" or not play_emote(e):
+		return false
+	brain_emote = e
+	dance_session_until = _now() + randf_range(DANCE_SESSION.x, DANCE_SESSION.y)
+	return true
+
+
+## Beyinden: tempo/enerji. Dans ediyorsa hizini guncelle ve vurusa hafifce
+## yaklastir (kayma birikmesin)
+func on_beat(bpm: float, energy: float, age: float) -> void:
+	song_bpm = bpm
+	song_energy = clampf(energy, 0.0, 1.0)
+	song_beat_at = _now() - age
+	if emote == null or not DANCES.has(emote.name) or bpm <= 0.0:
+		return
+	emote_speed = _dance_speed(emote.name)
+	var beat := _dance_beat_seconds(emote.name)
+	var cur := fposmod(emote_t, beat) / beat
+	var err := _beat_phase() - cur
+	err -= roundf(err)
+	emote_t += err * beat * 0.5
 
 
 func _random_emote(pool: String) -> String:
@@ -376,7 +476,7 @@ func _random_emote(pool: String) -> String:
 func _load_cem() -> void:
 	var path := OS.get_environment("KEVIN_CEM")
 	if path == "":
-		path = ProjectSettings.globalize_path("res://").path_join("../bin/cem/player.jem").simplify_path()
+		path = Brain.project_root().path_join("bin/cem/player.jem")
 	cem = Cem.load_pack(path)
 	if cem == null:
 		print("[kevin] CEM paketi yok (%s), yerlesik animasyonlar" % path)
@@ -409,10 +509,13 @@ func _build_part(part_name: String) -> void:
 	body.add_child(shape)
 
 	body.add_child(_make_box_mesh(spec.size, spec.uv, 0.0))
-	# Dis katman sadece deride o bolge doluysa: bos katman kutusu hicbir sey
-	# gostermeden kenar cizgisi uretiyordu
-	if _overlay_used(spec.size, spec.overlay):
-		body.add_child(_make_box_mesh(spec.size, spec.overlay, 0.5))
+	# Dis katman (sapka, ceket...) her zaman kurulur ama sadece deride o bolge
+	# doluysa gorunur: bos katman kutusu kenar cizgisi uretiyordu. Onceden hic
+	# kurulmuyordu; menuden sapkali skine gecince sapka gelmiyordu.
+	var outer := _make_box_mesh(spec.size, spec.overlay, 0.5)
+	outer.set_meta("overlay", [spec.size, spec.overlay])
+	outer.visible = _overlay_used(spec.size, spec.overlay)
+	body.add_child(outer)
 
 	add_child(body)
 	bodies[part_name] = body
@@ -444,6 +547,9 @@ func set_skin(path: String) -> void:
 		for child in b.get_children():
 			if child is MeshInstance3D and child.material_override:
 				child.material_override.albedo_texture = skin_texture
+				if child.has_meta("overlay"):
+					var o: Array = child.get_meta("overlay")
+					child.visible = _overlay_used(o[0], o[1])
 
 
 func _overlay_used(px_size: Vector3, uv: Vector2) -> bool:
@@ -674,7 +780,7 @@ func _update_behaviour(delta: float) -> void:
 			if state_timer <= 0.0:
 				_choose_next()
 		"emote":
-			emote_t += delta
+			emote_t += delta * emote_speed
 			if emote == null or emote.finished(emote_t):
 				_end_emote()
 			elif emote.looped and emote_t >= emote_until:
@@ -718,12 +824,15 @@ func _update_behaviour(delta: float) -> void:
 func _end_emote() -> void:
 	emote = null
 	emote_facing = NAN
-	# Muzik devam ediyorsa baska bir dansa gec
+	# Muzik devam ediyorsa: oturum bitmediyse baska bir dansa gec, bittiyse mola
 	if brain_state == "dance" and dance_enabled and mode == Mode.ANIMATED:
-		var next := _random_emote("dance")
-		if next != "" and play_emote(next):
-			brain_emote = next
-			return
+		if _now() < dance_session_until:
+			var next := _pick_dance()
+			if next != "" and play_emote(next):
+				brain_emote = next
+				return
+		else:
+			dance_rest_until = _now() + randf_range(DANCE_REST.x, DANCE_REST.y)
 	_set_state("idle", randf_range(2.0, 5.0))
 
 
@@ -732,6 +841,8 @@ func _end_emote() -> void:
 func _choose_next() -> void:
 	if brain_busy():
 		_set_state("idle", 1.0)
+		return
+	if brain_state == "dance" and dance_enabled and _now() >= dance_rest_until and _start_dance_session():
 		return
 	var roll := randf()
 	var e := emote_factor

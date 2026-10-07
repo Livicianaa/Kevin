@@ -64,6 +64,7 @@ var shot_times := [0.6, 3.0, 6.95, 9.5]
 var shot_index := 0
 var shot_clock := 0.0
 var test_throw := false
+var test_throw_high := false
 
 
 func _ready() -> void:
@@ -90,8 +91,9 @@ func _ready() -> void:
 			test_splash = true
 		elif arg == "--led":
 			test_led = true
-		elif arg == "--throw":
+		elif arg.begins_with("--throw"):
 			test_throw = true
+			test_throw_high = arg == "--throw=high"
 		elif arg == "--offscreen":
 			test_offscreen = true
 		elif arg.begins_with("--anim="):
@@ -116,6 +118,7 @@ func _ready() -> void:
 	get_window().size = WIN_SIZE
 
 	_build_camera()
+	get_viewport().size_changed.connect(_on_viewport_resized)
 	_build_menu_bg()
 	_build_lights()
 	_build_world_edges()
@@ -145,6 +148,7 @@ func _ready() -> void:
 		brain.state_changed.connect(character.on_brain_state)
 		brain.played.connect(character.on_brain_play)
 		brain.mood.connect(character.on_brain_mood)
+		brain.beat.connect(character.on_beat)
 		brain.said.connect(func(t): print("[kevin] diyor: ", t))
 		brain.heard.connect(func(t): print("[kevin] duydu: ", t))
 
@@ -214,6 +218,28 @@ func _check_screens(delta: float) -> void:
 		print("[kevin] ekran duzeni degisti, yeniden kuruluyor")
 		_build_world_edges()
 	screen_signature = sig
+
+
+## Kucuk boyutta yan ekrana firlatilinca ince parcalar ekranlar arasindaki
+## basamagin (alcak ekranin altindaki dolu blok) icine girip takiliyordu:
+## Kevin ekranin altina gomulmus gorunuyordu. Bir parca zeminin belirgin
+## altindaysa butun govde zeminin ustune alinir.
+func _unstick_from_floor() -> void:
+	if holding or not character.is_ragdoll():
+		return
+	var push := 0.0
+	for b in character.bodies.values():
+		var p: Vector3 = (b as Node3D).global_position
+		var scr := _screen_at_x(p.x * PX_PER_UNIT)
+		var floor_y := (desk_rect.end.y - scr.end.y) / PX_PER_UNIT
+		push = maxf(push, floor_y - p.y)
+	if push < 0.2:
+		return
+	for b in character.bodies.values():
+		var rb := b as RigidBody3D
+		rb.global_position += Vector3(0, push + 0.3, 0)
+		rb.linear_velocity = Vector3.ZERO
+		rb.angular_velocity = Vector3.ZERO
 
 
 func _read_screens() -> void:
@@ -485,9 +511,13 @@ func _apply_window() -> void:
 		DisplayServer.window_set_position(Vector2i(9000, 9000))
 	else:
 		DisplayServer.window_set_position(Vector2i(roundi(win_pos.x), roundi(win_pos.y)))
-	# Kamera pencerenin dunyadaki merkezine bakiyor
-	var center := _px_to_world(win_pos + Vector2(WIN_SIZE) / 2.0)
+	# Kamera pencerenin dunyadaki merkezine bakiyor. Istenen degil GERCEK boyut:
+	# menu kapaninca pencere Hyprland'de birkac kare buyuk kaliyor, o arada
+	# WIN_SIZE'a gore cizilince Kevin dev gorunup kayboluyordu.
+	var vp := get_viewport().get_visible_rect().size
+	var center := _px_to_world(win_pos + vp / 2.0)
 	camera.position = Vector3(center.x, center.y, 30)
+	camera.size = vp.y / PX_PER_UNIT
 
 
 func _update_window() -> void:
@@ -723,6 +753,30 @@ func _open_menu() -> void:
 		brain.send({"type": "menu", "open": true})
 
 
+## Buyuyen menu penceresi: gercek boyutuyla Kevin'in etrafinda ortali, kamera
+## o boyuta gore (Kevin ekranda yerinden kipirdamaz)
+func _place_growing_window(vp: Vector2) -> void:
+	var center := Vector2(menu_screen.get_center())
+	var pos := Vector2i((center - vp / 2.0).round())
+	DisplayServer.window_set_position(pos)
+	var mid := _px_to_world(Vector2(pos) + vp / 2.0)
+	camera.position = Vector3(mid.x, mid.y, 30)
+	camera.size = vp.y / PX_PER_UNIT
+
+
+## Pencere boyutu degistigi an, yeni boyutta ilk kare cizilmeden: kamera yeni
+## boyuta kurulmazsa o kare eski kamerayla cizilip Kevin dev gorunuyor, bir
+## sonraki karede kuculuyordu (menu acilirken/kapanirken "glitch")
+func _on_viewport_resized() -> void:
+	if splash_state != SPLASH_NONE or camera == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	if menu_state == MENU_RESIZING:
+		_place_growing_window(vp)
+	elif menu_state == MENU_CLOSED:
+		_apply_window()
+
+
 func _close_menu() -> void:
 	if menu_state == MENU_CLOSED or menu_state == MENU_CLOSING:
 		return
@@ -856,17 +910,18 @@ func _update_menu(delta: float) -> void:
 			character.menu_yaw = 0.0
 			menu_state = MENU_RESIZING
 			get_window().size = menu_screen.size
-			DisplayServer.window_set_position(menu_screen.position)
 			DisplayServer.window_move_to_foreground()
 		return
 	if menu_state == MENU_RESIZING:
-		# Pencere boyutu Hyprland'de gecikmeli degisiyor; ekran boyutuna
-		# ulasmadan kamera/menu kurulursa karakter yanlis boyutta gorunuyordu.
-		# Bu arada kamera 1:1 ve menunun ortasinda: Kevin yerinden kipirdamaz.
-		var mid := _px_to_world(Vector2(menu_screen.get_center()))
-		camera.position = Vector3(mid.x, mid.y, 30)
-		camera.size = vp.y / PX_PER_UNIT
+		# Pencere boyutu Hyprland'de gecikmeli degisiyor. Onceden konum hemen
+		# menunun sol ustune gidiyordu, boyut ise birkac kare kucuk kaliyordu:
+		# kamera menunun ortasina bakarken Kevin pencerenin disinda kalip bir
+		# an kayboluyordu (livi: "buyurken glitch oluyor"). Artik pencere her
+		# karede gercek boyutuyla Kevin'in etrafinda ortalaniyor, kamera da o
+		# boyuta gore: hangi karede olursa olsun Kevin yerinde ve gorunur.
+		_place_growing_window(vp)
 		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
+			DisplayServer.window_set_position(menu_screen.position)
 			menu_state = MENU_OPEN
 			_build_menu_ui(vp)
 		else:
@@ -1084,6 +1139,7 @@ func _process(delta: float) -> void:
 	if onboard_tab != "" and character.mode == 0:
 		_open_menu()
 	_check_screens(delta)
+	_unstick_from_floor()
 	_update_character_screen()
 	if test_emote == "wall_sit" and character.mode == 0 and character.after_walk == "" and character.anim_state != "emote":
 		character._go_wall_sit()
@@ -1156,7 +1212,8 @@ func _run_grab_test(delta: float) -> void:
 		var t := test_time - 0.8
 		if test_throw:
 			# Firlatma: sag ekrana dogru hizla savur, sonra birak
-			holder_target = test_grab_origin + Vector3(t * 16.0, minf(t * 4.0, 3.5), 0)
+			var up := 9.0 if test_throw_high else 3.5
+			holder_target = test_grab_origin + Vector3(t * 16.0, minf(t * up * 1.15, up), 0)
 			if t > 0.9:
 				_release()
 		else:
