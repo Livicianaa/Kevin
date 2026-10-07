@@ -1,5 +1,7 @@
 # Kevin
 
+**Türkçe** · [English](docs/readme/README.en.md) · [Español](docs/readme/README.es.md) · [Français](docs/readme/README.fr.md) · [Deutsch](docs/readme/README.de.md) · [Português](docs/readme/README.pt.md) · [Русский](docs/readme/README.ru.md) · [العربية](docs/readme/README.ar.md) · [हिन्दी](docs/readme/README.hi.md) · [اردو](docs/readme/README.ur.md) · [Bahasa Indonesia](docs/readme/README.id.md)
+
 Masaüstünde yaşayan, konuşan, seni tanıyan ve bilgisayarını kullanabilen yapay zeka arkadaşı.
 Minecraft görünümlü 3B bir karakter: ekranında gezinir, kenara yaslanıp oturur, onu tutup
 fırlatabilirsin. Adını söyleyince döner ve sesli konuşur.
@@ -12,8 +14,11 @@ fırlatabilirsin. Adını söyleyince döner ve sesli konuşur.
 
 | Sistem | Dosya | Nasıl açılır |
 |---|---|---|
+| Windows 10/11 | `Kevin-Kurulum.exe` | Kurulumu çalıştır. Masaüstünde Kevin kısayolu çıkar. |
+| Windows (kurulumsuz) | `Kevin-Windows.zip` | Zip'i bir klasöre çıkar, `Kevin\Kevin.exe`'ye çift tıkla. |
 | Linux | `Kevin-x86_64.AppImage` | Dosyaya sağ tık > Özellikler > "Çalıştırılabilir" işaretle, sonra çift tıkla. Terminalden: `chmod +x Kevin-x86_64.AppImage && ./Kevin-x86_64.AppImage` |
-| Windows 10/11 | `Kevin-Windows.zip` | Zip'i bir klasöre çıkar, `Kevin\Kevin.exe`'ye çift tıkla. "Windows bilgisayarınızı korudu" uyarısı çıkarsa "Ek bilgi" > "Yine de çalıştır". |
+
+Windows "Windows bilgisayarınızı korudu" derse "Ek bilgi" > "Yine de çalıştır".
 
 İlk açılışta Kevin birkaç saniye hazırlanır (açılış ekranı), sonra masaüstüne düşer.
 
