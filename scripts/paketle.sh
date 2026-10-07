@@ -141,7 +141,7 @@ windows() {
   indir "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe"
   python3 -c "from PIL import Image; Image.open('$ROOT/body/ui/kevin-icon.png').convert('RGBA').save('$DIST/windows/kevin.ico', sizes=[(256,256),(64,64),(48,48),(32,32),(16,16)])"
   if command -v wine >/dev/null; then
-    WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=" wine "$DL/rcedit-x64.exe" "$kok/Kevin.exe" \
+    WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=;winemenubuilder.exe=d" wine "$DL/rcedit-x64.exe" "$kok/Kevin.exe" \
       --set-icon "$DIST/windows/kevin.ico" --set-version-string ProductName Kevin \
       --set-version-string FileDescription Kevin --set-version-string CompanyName Liviciana >/dev/null 2>&1 \
       || echo "uyari: ikon basilamadi"
@@ -169,7 +169,7 @@ EOF
 # Programlar listesinden kaldirilir
 kurulum() {
   command -v wine >/dev/null || { echo "uyari: wine yok, Kevin-Kurulum.exe atlandi"; return; }
-  export WINEPREFIX="$DIST/wine-inno" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
+  export WINEPREFIX="$DIST/wine-inno" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=;winemenubuilder.exe=d"
   if [ ! -f "$WINEPREFIX/drive_c/inno/ISCC.exe" ]; then
     indir "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe"
     wineboot -i >/dev/null 2>&1 || true
