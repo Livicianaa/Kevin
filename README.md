@@ -1,60 +1,104 @@
-# Kevin (PC Version)
+# Kevin
 
-Masaustunde yasayan, cagrildiginda konusan AI karakter. Electron tabanli, Windows + Linux hedefli.
-LLM icin kullanici kendi API key'ini girer (NVIDIA NIM / Groq / Gemini) - sunucu maliyeti yok.
+Masaüstünde yaşayan, konuşan, seni tanıyan ve bilgisayarını kullanabilen yapay zeka arkadaşı.
+Minecraft görünümlü 3B bir karakter: ekranında gezinir, kenara yaslanıp oturur, onu tutup
+fırlatabilirsin. Adını söyleyince döner ve sesli konuşur.
 
-## Faz durumu
+<p align="center"><img src="docs/gorseller/menu.png" width="520" alt="Kevin ve menüsü"></p>
 
-- **Faz 0:** Transparan overlay pencere -> kose-ankorlu kucuk pencereye gecildi (Wayland click-through sorunu yuzunden).
-- **Faz 1a:** LLM baglantisi, metin sohbeti. TAMAM.
-- **Faz 1b:** Eller serbest sesli sohbet - VAD ile uyanma kelimesi -> whisper.cpp (STT) -> LLM -> Piper (TTS). TAMAM.
-  Dil secimi UI'i henuz yok (sabit Turkce).
-- **Faz 2:** Agent modu (MCP `computer-use-linux` + kendi araclarimiz) TAMAM. Vision (ekrani gorme) henuz yok.
-- **Karakter animasyonlari:** 3D Minecraft rig'i uzerine durum makinesi. TAMAM - bkz. `docs/CHARACTER-SPEC.md`.
-- **Faz 3:** Arka planda konusma ozetleme / hafiza sistemi. Yapilmadi.
+## İndir
 
-## Calistirma
+[Son sürüm (Releases)](https://github.com/Livicianaa/Kevin/releases/latest) sayfasından:
+
+| Sistem | Dosya | Nasıl açılır |
+|---|---|---|
+| Linux | `Kevin-x86_64.AppImage` | Dosyaya sağ tık > Özellikler > "Çalıştırılabilir" işaretle, sonra çift tıkla. Terminalden: `chmod +x Kevin-x86_64.AppImage && ./Kevin-x86_64.AppImage` |
+| Windows 10/11 | `Kevin-Windows.zip` | Zip'i bir klasöre çıkar, `Kevin\Kevin.exe`'ye çift tıkla. "Windows bilgisayarınızı korudu" uyarısı çıkarsa "Ek bilgi" > "Yine de çalıştır". |
+
+İlk açılışta Kevin birkaç saniye hazırlanır (açılış ekranı), sonra masaüstüne düşer.
+
+## İlk kurulum: yapay zeka anahtarı
+
+Kevin'in konuşabilmesi için bir yapay zeka servisine bağlanması gerekir. Herkes kendi anahtarını
+kullanır; anahtar sadece senin bilgisayarında saklanır.
+
+1. Kevin ilk açılışta ayarlarını kendisi açar (sonra istediğin zaman: karaktere **sağ tık** > **Yapay Zeka**).
+2. Sağlayıcı seç ve **Anahtar al** bağlantısına tıkla. Groq'ta ücretsiz anahtar:
+   [console.groq.com/keys](https://console.groq.com/keys)
+3. Anahtarı yapıştır. Model listesi kendiliğinden gelir; anahtar doğruysa "Bağlandı" yazar.
+4. **Kaydet**.
+
+İnternetsiz kullanmak istersen **Yerel (Ollama)** seç: [Ollama](https://ollama.com/download) kur ve
+bir model indir (`ollama pull qwen3:8b`).
+
+## Neler yapabilirsin
+
+- **"Kevin"** diye seslen (ya da karaktere orta tıkla), sonra konuş: "hava nasıl?", "YouTube'da lo-fi aç",
+  "ekranıma bak, bu ne?"
+- **Kendinden bahset:** "benim adım Ali, kahveyi şekersiz içerim". Hatırlar; yanlış bir şey derse düzelt,
+  öğrenir. Bildiklerini menüde Sohbet sayfasında görür, istediğini sildirirsin.
+- **Kod yazdır:** "zar atan bir Python kodu yaz". Kodu sesli okumaz, kendi penceresinde harf harf yazar.
+- **Kamera** (ayarlardan açılırsa): "bana bak", "bu benim, beni hatırla", "elimdeki ne?"
+- **Müzik:** bir şarkı açınca dans eder (video izlerken etmez). Konuşurken duygusuna göre hareket eder.
+- **Fizik:** tut, sürükle, fırlat; kolundan yavaşça çek, sendeler. Düşünce kendi kalkar.
+- **Menü (sağ tık):** skin ekle (64x64 Minecraft skin, `+`), boyut, dil, davranış ayarları.
+  Esc ile kapanır.
+- **11 dil:** Türkçe, English, Español, Français, Deutsch, Português, Русский, العربية, हिन्दी, اردو,
+  Bahasa Indonesia. Seçilen dilin sesi ilk seferde indirilir (~60 MB).
+
+## Sistem gereksinimleri
+
+- 64 bit Linux ya da Windows 10/11, mikrofon, hoparlör
+- 8 GB RAM önerilir. Kevin her açılışta bilgisayarını ölçer; zayıf makinede daha az hareket eder ve
+  daha düşük kare hızında çalışır.
+- Yapay zeka için internet (ya da yerelde Ollama)
+
+## Bilinen kısıtlar
+
+- **Windows:** müzikte dans, ekranı kontrol etme ve kamera şimdilik sadece Linux'ta çalışıyor.
+  Sohbet, ses, menü, skinler ve fizik Windows'ta da var.
+- **Linux:** en çok Hyprland üzerinde denendi. Başka masaüstlerinde pencere şeffaflığı ve
+  "her zaman üstte" davranışı masaüstüne göre değişebilir.
+- Paketlerde Fresh Animations yok (lisansı yeniden dağıtıma izin vermiyor); Kevin yerleşik
+  animasyonlarla yürür. Kendi Fresh Animations paketin varsa `player.jem` dosyasını uygulamanın
+  `bin/cem/` klasörüne koyabilirsin.
+
+## Ayarlar ve veriler nerede?
+
+| | Linux | Windows |
+|---|---|---|
+| Ayarlar, anahtar, hafıza, sohbet geçmişi, skinler | `~/.config/kevin-pc-version/` | `%APPDATA%\kevin-pc-version\` |
+
+Kevin'i sıfırlamak için bu klasörü silmen yeterli.
+
+## Kaynaktan çalıştırma (geliştirici)
+
+Kevin iki parçadan oluşur: **gövde** (`body/`, Godot 4.7 + Jolt fizik) ve **beyin** (Electron: ses,
+sohbet, araçlar). Gövde beyni kendisi başlatır.
 
 ```bash
 npm install
-npm run build:skin     # renderer/skin-viewer-bundle.js uretir (gitignored)
-npm start
+npm run build:skin           # renderer/skin-viewer-bundle.js
+body/run.sh                  # Godot 4.7.2 gerekir (godot ya da ~/.local/bin/godot)
 ```
 
-Tek bir animasyonu incelemek icin:
+`bin/` klasörü büyük olduğu için git'te yok:
 
-```bash
-npm start -- --anim=dance
-npm start -- --anim=idle:sit
-```
+- `bin/piper/` + `bin/piper-voices/tr_TR-fahrettin-medium/`: [Piper](https://github.com/rhasspy/piper) ses
+- `bin/whisper/` + `bin/whisper-models/ggml-small-q5_1.bin`: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) ses tanıma
+- İsteğe bağlı: `scripts/setup-whisper-gpu.sh` ile ekran kartında ses tanıma (Vulkan)
 
-Animasyon motorunun regresyon testi (tarayici gerektirmez):
+Testler (pencere ekranına düşmez, gizli çalışma alanında açılır): `body/test.sh --menu=karakter --shot=/tmp/x`
 
-```bash
-npm test
-```
+Paket üretme: `scripts/paketle.sh [linux|windows|hepsi]` → `dist/Kevin-x86_64.AppImage`, `dist/Kevin-Windows.zip`
 
-## bin/ klasoru (gitignored)
+## Teşekkürler
 
-Piper (TTS) ve whisper.cpp (STT) binary'leri + model dosyalari `bin/` altinda,
-buyuk olduklari icin git'e girmiyor. Bu repo'yu yeni bir yerde calistirmak icin:
-
-- `bin/piper/` - Piper binary + .so dosyalari + `espeak-ng-data/`
-- `bin/piper-voices/tr_TR-fahrettin-medium/` - Turkce ses modeli (.onnx + .onnx.json)
-- `bin/whisper/` - whisper.cpp'den derlenen `whisper-cli` + `libggml*`/`libwhisper*` .so dosyalari
-- `bin/whisper-models/ggml-small-q5_1.bin` - cok dilli whisper modeli (nicelenmis)
-
-Kaynak: Piper https://github.com/rhasspy/piper , whisper.cpp https://github.com/ggerganov/whisper.cpp
-(derleme: `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`).
-Otomatik kurulum scripti henuz yazilmadi - acik is.
-
-## Bilinen sorunlar
-
-- Linux'ta `chrome-sandbox` setuid olmadigi icin `--no-sandbox` ile calisiyor; dagitimdan once cozulmeli.
-- Olcek faktoru 1 olmayan ekranda (ornegin Hyprland `scale 1.5`) pencere yanlis boyutta ve
-  yanlis konumda aciliyor - Electron'un Wayland konumlandirmasi guvenilir degil.
-- Hyprland'de global `blur` acikken transparan pencereye de bulasiyor; compositor karari, uygulama cozemiyor.
+- Emote'lar: [Emotecraft emotes](https://github.com/KosmX/Emotecraft-emotes) (CC0)
+- Kalkma animasyonu: Quaternius Universal Animation Library 2 (CC0)
+- Ses: Piper (MIT), whisper.cpp (MIT) · Motor: Godot (MIT), Electron (MIT)
+- Yazı tipleri: Anton (OFL), Noto
 
 ---
 
-Created by Liviciana
+Created by Liviciana · Codemisk

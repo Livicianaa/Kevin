@@ -2,6 +2,7 @@
 # Kevin'i baskasina gondermek icin paketler:
 #   dist/Kevin-x86_64.AppImage   (Linux, cift tikla calisir)
 #   dist/Kevin-Windows.zip       (ac, Kevin klasorundeki Kevin.exe)
+#   dist/Kevin-Kurulum.exe       (Windows kurulum programi; wine gerekir)
 #
 # Kullanim: scripts/paketle.sh [linux|windows|hepsi]
 #   KEVIN_PAKET_CEM=1  Fresh Animations (bin/cem/player.jem) da girsin. Varsayilan
@@ -145,7 +146,6 @@ windows() {
       --set-version-string FileDescription Kevin --set-version-string CompanyName Liviciana >/dev/null 2>&1 \
       || echo "uyari: ikon basilamadi"
   fi
-  rm -f "$DIST/windows/kevin.ico"
   cat > "$kok/OKU-BENI.txt" <<'EOF'
 Kevin - masaustunde yasayan yapay zeka arkadasi
 
@@ -161,6 +161,67 @@ EOF
   rm -f "$DIST/Kevin-Windows.zip"
   (cd "$DIST/windows" && zip -qr -9 "$DIST/Kevin-Windows.zip" Kevin)
   echo "hazir: $DIST/Kevin-Windows.zip ($(du -h "$DIST/Kevin-Windows.zip" | cut -f1))"
+  kurulum
+}
+
+# Tek dosyalik Windows kurulumu (Inno Setup, Wine'da): yonetici izni istemez,
+# %LOCALAPPDATA%\Programs\Kevin'e kurar, baslat menusu + masaustu kisayolu,
+# Programlar listesinden kaldirilir
+kurulum() {
+  command -v wine >/dev/null || { echo "uyari: wine yok, Kevin-Kurulum.exe atlandi"; return; }
+  export WINEPREFIX="$DIST/wine-inno" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
+  if [ ! -f "$WINEPREFIX/drive_c/inno/ISCC.exe" ]; then
+    indir "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe"
+    wineboot -i >/dev/null 2>&1 || true
+    wine "$DL/innosetup-7.1.0-x64.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER '/DIR=C:\inno' >/dev/null 2>&1
+  fi
+  sed "s/@SURUM@/$SURUM/" > "$DIST/windows/kevin.iss" <<'ISS'
+[Setup]
+AppId={{8C1F2A6E-4B7D-4E2A-9C1E-6A3F5B2D7E91}
+AppName=Kevin
+AppVersion=@SURUM@
+AppPublisher=Liviciana
+DefaultDirName={localappdata}\Programs\Kevin
+DefaultGroupName=Kevin
+DisableProgramGroupPage=yes
+PrivilegesRequired=lowest
+OutputDir=.
+OutputBaseFilename=Kevin-Kurulum
+SetupIconFile=kevin.ico
+UninstallDisplayIcon={app}\Kevin.exe
+Compression=lzma2/normal
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+WizardStyle=modern
+
+[Languages]
+Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[Files]
+Source: "Kevin\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+
+[Icons]
+Name: "{group}\Kevin"; Filename: "{app}\Kevin.exe"
+Name: "{userdesktop}\Kevin"; Filename: "{app}\Kevin.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\Kevin.exe"; Description: "{cm:LaunchProgram,Kevin}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM godot.exe"; Flags: runhidden; RunOnceId: "KevinGovde"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Kevin.exe"; Flags: runhidden; RunOnceId: "KevinBeyin"
+ISS
+  if (cd "$DIST/windows" && wine "$WINEPREFIX/drive_c/inno/ISCC.exe" /Q kevin.iss) >/dev/null 2>&1; then
+    mv "$DIST/windows/Kevin-Kurulum.exe" "$DIST/Kevin-Kurulum.exe"
+    echo "hazir: $DIST/Kevin-Kurulum.exe ($(du -h "$DIST/Kevin-Kurulum.exe" | cut -f1))"
+  else
+    echo "uyari: Kevin-Kurulum.exe derlenemedi"
+  fi
 }
 
 case "$HEDEF" in
