@@ -6,7 +6,7 @@ extends RefCounted
 ##                gunceller, digerlerine dokunmaz.
 
 const BODY_DEFAULTS := {
-	"skin": "res://skins/totem.png",
+	"skin": "res://skins/liviciana.png",
 	"slim": false,
 	"scale": 1.0,
 	"walk": 1.0,
@@ -70,6 +70,10 @@ static func _write(file_name: String, data: Dictionary) -> void:
 static func load_body() -> Dictionary:
 	var out := BODY_DEFAULTS.duplicate()
 	out.merge(_read("body.json"), true)
+	# Silinmis/kaldirilmis skin (eski yerlesik totem gibi) -> varsayilan
+	var skin := str(out.skin)
+	if not (FileAccess.file_exists(skin) or ResourceLoader.exists(skin) or FileAccess.file_exists(ProjectSettings.globalize_path(skin))):
+		out.skin = BODY_DEFAULTS.skin
 	return out
 
 
@@ -131,7 +135,9 @@ static func load_skin(path: String) -> Texture2D:
 		var t = load(path)
 		if t is Texture2D:
 			return t
-	elif FileAccess.file_exists(path):
+		# Henuz ice aktarilmamis yerlesik skin (editor acilmadan eklenen png)
+		path = ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(path):
 		var img := Image.load_from_file(path)
 		if img and img.get_width() == 64 and img.get_height() >= 32:
 			if img.get_height() == 32:
@@ -142,7 +148,9 @@ static func load_skin(path: String) -> Texture2D:
 				full.blit_rect(img, Rect2i(40, 16, 16, 16), Vector2i(32, 48))
 				img = full
 			return ImageTexture.create_from_image(img)
-	return load(BODY_DEFAULTS.skin)
+	if path != ProjectSettings.globalize_path(BODY_DEFAULTS.skin):
+		return load_skin(BODY_DEFAULTS.skin)
+	return ImageTexture.create_from_image(Image.load_from_file(ProjectSettings.globalize_path(BODY_DEFAULTS.skin)))
 
 
 ## Skin'i kullanicinin skin klasorune kopyala, yeni yolu dondur

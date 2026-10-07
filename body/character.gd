@@ -31,7 +31,7 @@ const Settings := preload("res://settings.gd")
 const Brain := preload("res://brain.gd")
 ## Menuden gelen ayarlar (add_child'dan ONCE atanir)
 var slim := false
-var skin_path := "res://skins/totem.png"
+var skin_path := "res://skins/liviciana.png"
 var walk_factor := 1.0
 var emote_factor := 1.0
 var look_enabled := true

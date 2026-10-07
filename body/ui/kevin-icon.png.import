@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d152u0j0i4eln"
-path="res://.godot/imported/totem.png-72deb4456252a2bffa1ce5256ce5a152.ctex"
+uid="uid://cq8m1lj5d7pnn"
+path="res://.godot/imported/kevin-icon.png-77ef8bbf177ad2600bd228194251329c.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://skins/totem.png"
-dest_files=["res://.godot/imported/totem.png-72deb4456252a2bffa1ce5256ce5a152.ctex"]
+source_file="res://ui/kevin-icon.png"
+dest_files=["res://.godot/imported/kevin-icon.png-77ef8bbf177ad2600bd228194251329c.ctex"]
 
 [params]
 
