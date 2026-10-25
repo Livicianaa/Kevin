@@ -20,10 +20,9 @@ if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null; t
   # koordinatlari 1.5'e bolunuyordu: pencere kuculuyor, Kevin ekranin
   # ortasinda havada duruyordu, fare ile pencere birbirini tutmuyordu.
   # En dusuk olcekli monitorde acilinca koordinatlar tutarli.
-  # Kevin'in kod yazdigi pencere ("Kevin - dosya.py") de yuzer: doseli acilip
-  # Super+surukle ile birakilinca Hyprland 0.56.2 dwindle assert'iyle
-  # cokuyordu (30 Eyl, 2 Eki).
-  KEVIN_MONITOR="$(hyprctl monitors -j | python3 -c 'import json,sys; m=min(json.load(sys.stdin), key=lambda m: m["scale"]); print(m["name"])')"
+  # Esitlikte en soldaki secilir (olcekler 1'e esitlenince laptop secilip 1920 px kaymasin).
+  # Cerceve/yuvarlama kapali: koyu duvar kagidinda Kevin'in etrafinda cizgi parlamasin.
+  KEVIN_MONITOR="$(hyprctl monitors -j | python3 -c 'import json,sys; m=min(json.load(sys.stdin), key=lambda m: (m["scale"], m["x"])); print(m["name"])')"
   cat > "$RULES" <<'EOF'
 windowrule = float 1, match:class ^(Kevin)$
 windowrule = pin 1, match:class ^(Kevin)$
@@ -32,6 +31,9 @@ windowrule = no_shadow 1, match:class ^(Kevin)$
 windowrule = no_anim 1, match:class ^(Kevin)$
 windowrule = no_dim 1, match:class ^(Kevin)$
 windowrule = no_initial_focus 1, match:class ^(Kevin)$
+windowrule = border_size 0, match:class ^(Kevin)$
+windowrule = rounding 0, match:class ^(Kevin)$
+windowrule = decorate 0, match:class ^(Kevin)$
 windowrule = float 1, match:title ^(Kevin - .+)$
 windowrule = center 1, match:title ^(Kevin - .+)$
 EOF

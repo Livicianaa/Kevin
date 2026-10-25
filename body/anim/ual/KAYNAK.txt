@@ -1,0 +1,5 @@
+Quaternius "Universal Animation Library" 1 ve 2 (Standard), CC0 1.0.
+https://quaternius.itch.io/universal-animation-library
+https://quaternius.itch.io/universal-animation-library-2
+Klipler body/tools/sample_clip.gd ile eklem konumlarina ornekledi (30 kare/sn),
+body/tools/make_ual_emotes.py emote'a ceviriyor.

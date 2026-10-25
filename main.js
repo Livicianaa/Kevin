@@ -5,6 +5,44 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+
+// Electron ile Godot her zaman ayni userData klasorunu (kevin-pc-version) kullansin.
+// Windows'ta rcedit ProductName=Kevin bastiginda app.getPath('userData') 'Kevin' oluyordu,
+// bu yuzden Godot'nun yazdigi config.json Electron tarafindan gorulemiyordu.
+const USER_DATA_DIR = path.join(app.getPath('appData'), 'kevin-pc-version');
+app.setPath('userData', USER_DATA_DIR);
+try {
+  fs.mkdirSync(USER_DATA_DIR, { recursive: true });
+} catch {}
+
+// Teshis ve hata takibi icin dosya gunlugu (userData/kevin.log)
+const LOG_PATH = path.join(USER_DATA_DIR, 'kevin.log');
+let logStream = null;
+try {
+  if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 5 * 1024 * 1024) {
+    fs.renameSync(LOG_PATH, `${LOG_PATH}.old`);
+  }
+  logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+} catch {}
+
+function writeLog(level, ...args) {
+  if (!logStream) return;
+  try {
+    const msg = args.map((a) => (typeof a === 'object' ? (a && a.stack ? a.stack : JSON.stringify(a)) : String(a))).join(' ');
+    logStream.write(`[${new Date().toISOString()}] [${level}] ${msg}\n`);
+  } catch {}
+}
+
+const origLog = console.log;
+const origWarn = console.warn;
+const origErr = console.error;
+console.log = (...args) => { origLog(...args); writeLog('INFO', ...args); };
+console.warn = (...args) => { origWarn(...args); writeLog('WARN', ...args); };
+console.error = (...args) => { origErr(...args); writeLog('ERROR', ...args); };
+
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err.stack || err.message));
+process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason));
+
 const hypr = require('./hypr.js');
 const platform = require('./platform.js');
 const browser = require('./browser.js');
@@ -1213,8 +1251,13 @@ function createWindow() {
   }
 
   win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media');
+    callback(permission === 'media' || permission === 'microphone');
   });
+  if (win.webContents.session.setPermissionCheckHandler) {
+    win.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+      return permission === 'media' || permission === 'microphone';
+    });
+  }
 }
 
 ipcMain.handle('get-config', () => loadConfig());

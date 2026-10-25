@@ -86,10 +86,10 @@ const Emote := preload("res://emote.gd")
 ## gelmiyor (livi: "kafasini sokup duruyor, asiri hareketli").
 const EMOTE_POOLS := {
 	"idle": ["lookaround", "Inspect"],
-	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lay_down5"],
-	"fun": ["selfie", "the_dab", "jump"],
+	"rest": ["sit_lean_wall", "cool_sit", "campfire_sit1", "lay_down5", "b2_diz_otur"],
+	"fun": ["selfie", "the_dab", "jump", "u_ofke_r", "u_inis_r"],
 	"dance": [],
-	"social": ["meeting", "hug", "hearthands", "heart", "bow1", "bow2", "F", "make_gestures", "grace", "nervous", "hunchback", "dab", "jumping jacks", "take the l"],
+	"social": ["meeting", "hug", "hearthands", "heart", "bow1", "bow2", "F", "make_gestures", "grace", "nervous", "hunchback", "dab", "jumping jacks", "take the l", "b2_bitap", "b2_kalk"],
 	"brain": ["think", "nod", "fold_arms", "shake"],
 }
 ## Danslar: [dogal vurus uzunlugu (tick), enerji]. Beyin sarkinin temposunu
@@ -109,7 +109,7 @@ const DANCE_REST := Vector2(18.0, 40.0)
 ## Yerde yatma/oturma tam karsidan anlasilmiyordu (ayaklar kameraya dogru),
 ## tam yandan da oyle: bunlar caprazdan (3/4) oynuyor, yuzu ekranin icine
 ## dogru (livi: "biraz capraz durabilirler")
-const DIAGONAL_EMOTES := ["lay_down5", "cool_sit", "campfire_sit1", "sit", "sitting", "bend_sit", "lejat", "meditation_fly", "sit_lean_wall"]
+const DIAGONAL_EMOTES := ["lay_down5", "cool_sit", "campfire_sit1", "sit", "sitting", "bend_sit", "lejat", "meditation_fly", "sit_lean_wall", "b2_diz_otur", "b2_bitap"]
 const DIAGONAL_YAW := 0.8
 ## Dongulu emote'larin suresi (saniye) havuza gore
 const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun": Vector2(3.0, 5.0), "dance": Vector2(10.0, 16.0), "social": Vector2(2.5, 4.0), "brain": Vector2(999.0, 999.0), "extra": Vector2(3.0, 5.0)}
@@ -117,9 +117,9 @@ const LOOP_TIME := {"idle": Vector2(2.5, 4.0), "rest": Vector2(10.0, 22.0), "fun
 ## etiketi koyuyor)
 const MOOD_EMOTES := {
 	"mutlu": ["heart", "hearthands"],
-	"heyecanli": ["jump", "jumping jacks"],
+	"heyecanli": ["jump", "jumping jacks", "b2_kos"],
 	"havali": ["dab", "the_dab", "selfie"],
-	"uzgun": ["F", "hunchback"],
+	"uzgun": ["F", "hunchback", "b2_diz_otur"],
 	"utangac": ["nervous"],
 	"saskin": ["Inspect"],
 	"dusunceli": ["think", "fold_arms"],
@@ -128,6 +128,10 @@ const MOOD_EMOTES := {
 	"kutlama": ["floss_dance3", "orange justice", "club_penguin_dance"],
 	"alay": ["take the l"],
 	"saygi": ["bow2", "grace"],
+	"ofkeli": ["u_ofke_r", "u_ofke_l"],
+	"kizgin": ["u_ofke_r", "u_ofke_l"],
+	"yorgun": ["b2_bitap", "hunchback"],
+	"hizli": ["b2_kos"],
 }
 const EMOTE_FADE := 0.5
 ## Rastgele secimde agirlik (varsayilan 1). lookaround sik geliyordu.
@@ -227,6 +231,32 @@ var led_rise := 0.0
 var menu_yaw := 0.0
 var menu_lift := 0.0
 
+## Belden one egilme (kambur): sadece govde, kafa ve kollar
+var hunch := 0.0
+var hunch_now := 0.0
+## Butun vucut govde merkezi etrafinda one yatar (ucus)
+var body_tilt := 0.0
+## Ayaklar etrafinda yana yatma (kenardan kafa uzatma)
+var body_roll := 0.0
+var air_lift := 0.0
+var face_override := NAN
+var turn_speed := TURN_SPEED
+var look_speed := 6.0
+## Kol -> dunyadaki hedef. Kol hedefe yumusakca uzanir, hedef kalkinca geri iner.
+var reach_goal := {}
+var reach_wiggle := 0.0
+var reach_wiggle_axis := Vector3.UP
+var reach_wiggle_speed := 0.9
+var reach_time := 0.22
+var reach_follow := 12.0
+var reach_w := {"right_arm": 0.0, "left_arm": 0.0}
+var reach_p := {"right_arm": Vector3.ZERO, "left_arm": Vector3.ZERO}
+## Uykulu: kafa one duser (radyan, + asagi)
+var head_droop := 0.0
+var head_droop_now := 0.0
+## "Yok artik" kafa sallama genligi (radyan)
+var head_shake := 0.0
+
 
 func _ready() -> void:
 	if slim:
@@ -302,6 +332,10 @@ func on_brain_state(state: String) -> void:
 	if OS.is_debug_build() and state != brain_state:
 		print("[kevin] beyin: ", state)
 	brain_state = state
+	if state in ["sleep", "night-sleepy"]:
+		head_droop = 0.35
+	else:
+		head_droop = 0.0
 	if hold_pose or (mode != Mode.ANIMATED and mode != Mode.MENU):
 		return
 	# Menude muzik/uyku tepkisi yok (menude dans etmeye basliyordu)
@@ -343,6 +377,11 @@ func on_brain_play(name: String) -> void:
 	# Duygu hareketi az once basladiysa basini sallayip onu bozmasin
 	if Time.get_ticks_msec() - last_mood_ms < 2500 and name.begins_with("nod"):
 		return
+	if name == "nod-no":
+		head_shake = 0.35
+		get_tree().create_timer(1.2).timeout.connect(func(): head_shake = 0.0)
+	elif name == "nod-yes":
+		head_shake = 0.0
 	var e: String = BRAIN_PLAY_EMOTE.get(name, "")
 	_play_over_brain(e)
 
@@ -667,9 +706,10 @@ func _animated_pose(_t: float) -> Dictionary:
 
 ## Kafa: bakinma animasyonu ya da fareye bakis (govdeye gore). x = egim, y = donus
 func _head_angles(t: float) -> Vector2:
+	var shake := sin(anim_t * 11.0) * head_shake
 	if anim_state == "walk":
-		return Vector2.ZERO
-	return Vector2(look_pitch, look_yaw)
+		return Vector2(head_droop_now, shake)
+	return Vector2(look_pitch + head_droop_now, look_yaw + shake)
 
 
 # =====================================================================
@@ -719,7 +759,13 @@ func _cem_step(delta: float) -> void:
 		"is_on_ground": 1.0, "id": 7.0, "health": 20.0, "max_health": 20.0,
 	})
 
-	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y + menu_lift, 0))
+	hunch_now = lerpf(hunch_now, hunch, minf(1.0, delta * 6.0))
+	head_droop_now = lerpf(head_droop_now, head_droop, minf(1.0, delta * 4.0))
+	var root := Transform3D(Basis(Vector3.UP, facing_now), Vector3(root_x, ground_y + menu_lift + air_lift, 0))
+	if absf(body_tilt) > 0.001:
+		root = root * _pivot_rot(Vector3(0, 0.9, 0), Vector3.RIGHT, body_tilt)
+	if absf(body_roll) > 0.001:
+		root = root * _pivot_rot(Vector3.ZERO, Vector3.BACK, body_roll)
 	if mode == Mode.LED:
 		root = root * Transform3D(Basis(Vector3.RIGHT, led_lean), Vector3(0, led_rise, 0))
 	if emote:
@@ -729,13 +775,64 @@ func _cem_step(delta: float) -> void:
 	if cem_blend < 1.0:
 		cem_blend = minf(1.0, cem_blend + delta / CEM_BLEND_TIME)
 	var k := ease(cem_blend, -2.0)
+	var bend := root * _pivot_rot(Vector3(0, 12.0 * PX, 0), Vector3.RIGHT, hunch_now) if absf(hunch_now) > 0.001 else root
 	for part in CEM_PIVOT:
-		var xf := root * _cem_part_transform(part, pose)
+		var xf := (root if part.ends_with("leg") else bend) * _cem_part_transform(part, pose)
 		if k < 1.0 and cem_blend_from.has(part):
 			xf = (cem_blend_from[part] as Transform3D).interpolate_with(xf, k)
 		bodies[part].global_transform = xf
 	if mode == Mode.LED and led_part.ends_with("arm"):
 		_reach_arm(led_part, led_target)
+	else:
+		_reach_step(delta)
+
+
+func _pivot_rot(pivot: Vector3, axis: Vector3, angle: float) -> Transform3D:
+	return Transform3D(Basis.IDENTITY, pivot) * Transform3D(Basis(axis, angle), Vector3.ZERO) * Transform3D(Basis.IDENTITY, -pivot)
+
+
+func _reach_step(delta: float) -> void:
+	for arm in reach_w:
+		var has: bool = reach_goal.has(arm)
+		if has and reach_w[arm] <= 0.0:
+			reach_p[arm] = reach_goal[arm]
+		if has:
+			reach_p[arm] = (reach_p[arm] as Vector3).lerp(reach_goal[arm], minf(1.0, delta * reach_follow))
+		reach_w[arm] = move_toward(reach_w[arm], 1.0 if has else 0.0, delta / reach_time)
+		if reach_w[arm] <= 0.0:
+			continue
+		var target: Vector3 = reach_p[arm]
+		if reach_wiggle > 0.0:
+			target += reach_wiggle_axis * sin(cem_age * reach_wiggle_speed) * reach_wiggle
+		var xf := _reach_xf(arm, target)
+		if xf != Transform3D.IDENTITY:
+			bodies[arm].global_transform = (bodies[arm].global_transform as Transform3D).interpolate_with(xf, ease(reach_w[arm], -2.0))
+
+
+func arm_out(arm: String) -> Vector3:
+	var b := Basis(Vector3.UP, facing_now)
+	return b * (Vector3.LEFT if arm == "right_arm" else Vector3.RIGHT)
+
+
+func forward() -> Vector3:
+	return Basis(Vector3.UP, facing_now) * Vector3.BACK
+
+
+func front_arm() -> String:
+	return "right_arm" if bodies["right_arm"].global_position.z >= bodies["left_arm"].global_position.z else "left_arm"
+
+
+func arm_toward(world_point: Vector3) -> String:
+	var r: Vector3 = bodies["right_arm"].global_position
+	var l: Vector3 = bodies["left_arm"].global_position
+	if absf(r.x - l.x) < 0.12:
+		return front_arm()
+	var right_is_left := r.x < l.x
+	return "right_arm" if (world_point.x < (r.x + l.x) / 2.0) == right_is_left else "left_arm"
+
+
+func hand_point(arm: String) -> Vector3:
+	return bodies[arm].global_transform * Vector3(0, -0.3, 0)
 
 
 ## Emote'un butun vucut hareketi (yatma, egilme, ziplama). Minecraft bunu
@@ -1004,14 +1101,20 @@ func _led_step(delta: float) -> void:
 
 ## Kolu dunyadaki bir noktaya uzat (omuzdan)
 func _reach_arm(arm: String, world_point: Vector3) -> void:
+	var xf := _reach_xf(arm, world_point)
+	if xf != Transform3D.IDENTITY:
+		bodies[arm].global_transform = xf
+
+
+func _reach_xf(arm: String, world_point: Vector3) -> Transform3D:
 	var body_xf: Transform3D = bodies["body"].global_transform
 	var joint: Vector3 = body_xf * ((LIMBS[arm].joint - BODY_REST_PX) * PX)
 	var d := world_point - joint
 	if d.length() < 0.05:
-		return
+		return Transform3D.IDENTITY
 	var basis := Basis(Quaternion(Vector3.DOWN, d.normalized()))
 	var center_from_joint: Vector3 = (PARTS[arm].center - LIMBS[arm].joint) * PX
-	bodies[arm].global_transform = Transform3D(basis, joint + basis * center_from_joint)
+	return Transform3D(basis, joint + basis * center_from_joint)
 
 
 func start_ragdoll() -> void:
@@ -1072,6 +1175,14 @@ func _update_ragdoll(delta: float) -> void:
 	if released_for > 0.1 and bb.y.y > 0.85 and body.linear_velocity.y > -1.0 and body.linear_velocity.length() < 3.0:
 		var feet := minf(_part_bottom("right_leg"), _part_bottom("left_leg"))
 		if feet - ground_y < 0.12:
+			if hard_fall and (emotes.has("u_inis_r") or emotes.has("u_inis_l")):
+				mode = Mode.ANIMATED
+				anim_t = 0.0
+				_set_state("idle", 0.1)
+				var inis := "u_inis_r" if facing >= 0.0 else "u_inis_l"
+				play_emote(inis, 1.2)
+				hard_fall = false
+				return
 			_begin_getup()
 			return
 	var energy := 0.0

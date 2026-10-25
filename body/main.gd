@@ -480,7 +480,7 @@ func _desired_window_pos() -> Vector2:
 
 	# Ayaktayken pencerenin alt kenari ekranin alt kenarinda: ayaklar ekranin
 	# gercek altina basiyor ve pencere karakterden buyuk olmuyor.
-	if character.mode == 0:
+	if character.mode == 0 and character.air_lift <= 0.0:
 		pos.y = screen.end.y - WIN_SIZE.y
 
 	# Karakterin bulundugu ekranin disina tasmasin

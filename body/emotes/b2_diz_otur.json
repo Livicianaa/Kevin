@@ -1,0 +1,145 @@
+{
+ "name": "Dizlerini cekip otur",
+ "author": "Kevin (Liviciana)",
+ "description": "Yere oturur, dizlerini kendine ceker (Bolum 2)",
+ "emote": {
+  "isLoop": "true",
+  "beginTick": 0,
+  "endTick": 40,
+  "stopTick": 41,
+  "returnTick": 10,
+  "degrees": false,
+  "moves": [
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "torso": {
+     "y": -0.62,
+     "pitch": 0.1
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "head": {
+     "pitch": 0.15
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "rightLeg": {
+     "pitch": -2.25,
+     "x": -1.9,
+     "y": 12.0,
+     "z": -0.6,
+     "roll": -0.06
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "leftLeg": {
+     "pitch": -2.25,
+     "x": 1.9,
+     "y": 12.0,
+     "z": -0.6,
+     "roll": 0.06
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "rightArm": {
+     "pitch": -1.35,
+     "yaw": -0.5,
+     "roll": 0.05,
+     "x": -5.0,
+     "y": 2.0
+    }
+   },
+   {
+    "tick": 10,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "leftArm": {
+     "pitch": -1.35,
+     "yaw": 0.5,
+     "roll": -0.05,
+     "x": 5.0,
+     "y": 2.0
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "torso": {
+     "y": -0.62,
+     "pitch": 0.1
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "head": {
+     "pitch": 0.15
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "rightLeg": {
+     "pitch": -2.25,
+     "x": -1.9,
+     "y": 12.0,
+     "z": -0.6,
+     "roll": -0.06
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "leftLeg": {
+     "pitch": -2.25,
+     "x": 1.9,
+     "y": 12.0,
+     "z": -0.6,
+     "roll": 0.06
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "rightArm": {
+     "pitch": -1.35,
+     "yaw": -0.5,
+     "roll": 0.05,
+     "x": -5.0,
+     "y": 2.0
+    }
+   },
+   {
+    "tick": 40,
+    "easing": "EASEINOUTSINE",
+    "turn": 0,
+    "leftArm": {
+     "pitch": -1.35,
+     "yaw": 0.5,
+     "roll": -0.05,
+     "x": 5.0,
+     "y": 2.0
+    }
+   }
+  ]
+ }
+}

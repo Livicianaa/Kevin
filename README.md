@@ -14,8 +14,8 @@ fırlatabilirsin. Adını söyleyince döner ve sesli konuşur.
 
 | Sistem | Dosya | Nasıl açılır |
 |---|---|---|
-| Windows 10/11 | `Kevin-Kurulum.exe` | Kurulumu çalıştır. Masaüstünde Kevin kısayolu çıkar. |
-| Windows (kurulumsuz) | `Kevin-Windows.zip` | Zip'i bir klasöre çıkar, `Kevin\Kevin.exe`'ye çift tıkla. |
+| Windows (kurulumsuz / önerilen) | `Kevin-Windows.zip` | Zip'i bir klasöre çıkar, `Kevin\Kevin.exe`'ye çift tıkla. |
+| Windows 10/11 | `Kevin-Kurulum.exe` | Kurulumu çalıştır. (Windows 11 Smart App Control uyarısı alırsan Zip sürümünü kullanın). |
 | Linux | `Kevin-x86_64.AppImage` | Dosyaya sağ tık > Özellikler > "Çalıştırılabilir" işaretle, sonra çift tıkla. Terminalden: `chmod +x Kevin-x86_64.AppImage && ./Kevin-x86_64.AppImage` |
 
 Windows "Windows bilgisayarınızı korudu" derse "Ek bilgi" > "Yine de çalıştır".
@@ -44,8 +44,8 @@ bir model indir (`ollama pull qwen3:8b`).
   öğrenir. Bildiklerini menüde Sohbet sayfasında görür, istediğini sildirirsin.
 - **Kod yazdır:** "zar atan bir Python kodu yaz". Kodu sesli okumaz, kendi penceresinde harf harf yazar.
 - **Kamera** (ayarlardan açılırsa): "bana bak", "bu benim, beni hatırla", "elimdeki ne?"
-- **Müzik:** bir şarkı açınca dans eder (video izlerken etmez). Konuşurken duygusuna göre hareket eder.
-- **Fizik:** tut, sürükle, fırlat; kolundan yavaşça çek, sendeler. Düşünce kendi kalkar.
+- **Fizik ve animasyonlar:** 66 farklı yerleşik animasyon. Tut, sürükle, fırlat; kolundan yavaşça çek, sendeler. Yüksekten hızla atılınca tek diz süper kahraman inişi yapar (`u_inis`). Düşünce kendi kalkar; çok yorulursa kapaklanıp nefes nefese kalır ve yerden destekle doğrulur.
+- **Duygular ve jestler:** Konuşurken cevabın duygusuna göre hareket eder (öfkelenince gölge boksu, sevinince dans, üzülünce dizlerini kendine çekip oturma). Uyurken kafası öne düşer, reddederken başını sallar. Kolunu ekrandaki hedeflere dinamik olarak uzatabilir.
 - **Menü (sağ tık):** skin ekle (64x64 Minecraft skin, `+`), boyut, dil, davranış ayarları.
   Esc ile kapanır.
 - **11 dil:** Türkçe, English, Español, Français, Deutsch, Português, Русский, العربية, हिन्दी, اردو,
@@ -73,6 +73,7 @@ bir model indir (`ollama pull qwen3:8b`).
 | | Linux | Windows |
 |---|---|---|
 | Ayarlar, anahtar, hafıza, sohbet geçmişi, skinler | `~/.config/kevin-pc-version/` | `%APPDATA%\kevin-pc-version\` |
+| Hata ve durum günlüğü | `~/.config/kevin-pc-version/kevin.log` | `%APPDATA%\kevin-pc-version\kevin.log` |
 
 Kevin'i sıfırlamak için bu klasörü silmen yeterli.
 
@@ -92,6 +93,7 @@ body/run.sh                  # Godot 4.7.2 gerekir (godot ya da ~/.local/bin/god
 - `bin/piper/` + `bin/piper-voices/tr_TR-fahrettin-medium/`: [Piper](https://github.com/rhasspy/piper) ses
 - `bin/whisper/` + `bin/whisper-models/ggml-small-q5_1.bin`: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) ses tanıma
 - İsteğe bağlı: `scripts/setup-whisper-gpu.sh` ile ekran kartında ses tanıma (Vulkan)
+- Mocap dönüştürücü: `body/tools/ual_to_emote.py` ile Quaternius UAL (CC0) klipleri 6 parçalı Minecraft emote'una derlenebilir.
 
 Testler (pencere ekranına düşmez, gizli çalışma alanında açılır): `body/test.sh --menu=karakter --shot=/tmp/x`
 
@@ -100,7 +102,7 @@ Paket üretme: `scripts/paketle.sh [linux|windows|hepsi]` → `dist/Kevin-x86_64
 ## Teşekkürler
 
 - Emote'lar: [Emotecraft emotes](https://github.com/KosmX/Emotecraft-emotes) (CC0)
-- Kalkma animasyonu: Quaternius Universal Animation Library 2 (CC0)
+- Hareket ve iniş animasyonları: [Quaternius Universal Animation Library](https://quaternius.com) (CC0)
 - Ses: Piper (MIT), whisper.cpp (MIT) · Motor: Godot (MIT), Electron (MIT)
 - Yazı tipleri: Anton (OFL), Noto
 
