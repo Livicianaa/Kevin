@@ -53,6 +53,7 @@ const { createAkil } = require('./akil.js');
 const reader = require('./reader.js');
 const { createVoices } = require('./voice.js');
 const { createAgyBrain, agyIntro, extractActions } = require('./agy-brain.js');
+const { createClaudeBrain, createOpenCodeBrain, cliAvailable } = require('./cli-brain.js');
 
 // Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
 // karakterin yuruyus hizi buna kurban gidiyordu.
@@ -81,6 +82,12 @@ const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const agyBrain = createAgyBrain({
   workDir: path.join(app.getPath('userData'), 'agy-ws'),
   log: (msg) => console.error('[agy]', msg),
+});
+const claudeBrain = createClaudeBrain({
+  log: (msg) => console.error('[claude]', msg),
+});
+const opencodeBrain = createOpenCodeBrain({
+  log: (msg) => console.error('[opencode]', msg),
 });
 
 // --brain: pencere gorunmez, sadece beyin (ses, sohbet, araclar). Govde Godot
@@ -425,7 +432,42 @@ const PROVIDERS = {
     agy: true,
     defaultModel: 'gemini-3.8-flash-medium',
   },
+  claude: {
+    local: true,
+    cli: 'claude',
+    defaultModel: 'haiku',
+  },
+  opencode: {
+    local: true,
+    cli: 'opencode',
+    defaultModel: '',
+  },
+  ozel: {
+    custom: true,
+    defaultModel: '',
+  },
 };
+
+const CLAUDE_MODELS = ['haiku', 'sonnet', 'opus'];
+const CLI_PROVIDERS = new Set(['agy', 'claude', 'opencode']);
+
+// Kullanicinin kendi OpenAI uyumlu adresi (LM Studio, OpenAI, OpenRouter...)
+function providerFor(cfg) {
+  if (cfg.provider === 'ozel') {
+    return { baseURL: String(cfg.customBaseURL || '').trim().replace(/\/+$/, ''), defaultModel: '', custom: true };
+  }
+  return PROVIDERS[cfg.provider];
+}
+
+function cliBrainFor(cfg) {
+  if (cfg.provider === 'claude') {
+    return { brain: claudeBrain, model: CLAUDE_MODELS.includes(cfg.model) ? cfg.model : 'haiku' };
+  }
+  if (cfg.provider === 'opencode') {
+    return { brain: opencodeBrain, model: /^[^/\s]+\/\S+$/.test(String(cfg.model || '')) ? cfg.model : '' };
+  }
+  return { brain: agyBrain, model: agyModelFor(cfg) };
+}
 
 function agyModelFor(cfg) {
   const m = String(cfg.model || '');
@@ -1529,10 +1571,22 @@ ipcMain.handle('world-info', async () => {
   }
 });
 
-ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
-  const p = PROVIDERS[provider];
+ipcMain.handle('list-models', async (_event, { provider, apiKey, baseURL }) => {
+  const p = provider === 'ozel' ? providerFor({ provider, customBaseURL: baseURL }) : PROVIDERS[provider];
   if (!p) return { error: 'Sağlayıcı seçilmedi' };
-  if (!apiKey && !p.local) return { error: 'API key gir' };
+  if (provider === 'ozel' && !p.baseURL) return { error: 'API adresi gir' };
+  if (!apiKey && !p.local && !p.custom) return { error: 'API key gir' };
+  if (provider === 'claude') return { models: CLAUDE_MODELS };
+  if (provider === 'opencode') {
+    try {
+      const out = await new Promise((resolve, reject) => {
+        execFile('opencode', ['models'], { timeout: 15000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => (err ? reject(err) : resolve(String(stdout))));
+      });
+      return { models: out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
 
   if (provider === 'agy') {
     try {
@@ -1552,7 +1606,7 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
 
   try {
     const response = await fetch(`${p.baseURL}/models`, {
-      headers: p.local ? {} : { Authorization: `Bearer ${apiKey}` },
+      headers: p.local || !apiKey ? {} : { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {
       const text = await response.text();
@@ -1648,20 +1702,26 @@ ipcMain.handle('chat', async (_event, history) => {
   if (!cfg.provider) {
     throw new Error('NO_KEY');
   }
-  if (!cfg.apiKey && !isLocal(cfg.provider)) {
+  if (cfg.provider === 'ozel' ? !providerFor(cfg).baseURL : !cfg.apiKey && !isLocal(cfg.provider)) {
     // Herkes kendi anahtarini girmeli; renderer bunu kullaniciya soyluyor
     throw new Error('NO_KEY');
   }
 
-  const provider = PROVIDERS[cfg.provider];
+  const provider = providerFor(cfg);
   let model = cfg.model || provider.defaultModel;
   const L = langs.lang(cfg);
 
-  if (cfg.provider === 'agy') {
+  if (CLI_PROVIDERS.has(cfg.provider)) {
     const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+    const cli = cliBrainFor(cfg);
+    if (PROVIDERS[cfg.provider].cli && !cliAvailable(PROVIDERS[cfg.provider].cli)) {
+      const tr = langs.langCode(cfg) === 'tr';
+      const label = cfg.provider === 'claude' ? 'Claude Code' : 'opencode';
+      return tr ? `${label} bu bilgisayarda kurulu değil.` : `${label} is not installed on this computer.`;
+    }
     try {
-      const raw = await agyBrain.ask({
-        model: agyModelFor(cfg),
+      const raw = await cli.brain.ask({
+        model: cli.model,
         dirs: [HOME],
         intro: agyIntro(buildPersona(cfg, AGY_PERSONA), HOME),
         text: lastUserMessage,
@@ -1689,7 +1749,7 @@ ipcMain.handle('chat', async (_event, history) => {
       if (parsed.mood && parsed.mood !== 'notr') bodySend({ type: 'mood', mood: parsed.mood });
       return parsed.text || L.unclear;
     } catch (err) {
-      console.error('[kevin] agy hata:', err);
+      console.error(`[kevin] ${cfg.provider} hata:`, err);
       return L.unclear || 'Kafam biraz karisti, tekrar soyler misin?';
     }
   }
@@ -1741,7 +1801,7 @@ ipcMain.handle('chat', async (_event, history) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(provider.local ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
+        ...(provider.local || !cfg.apiKey ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
       },
       body: JSON.stringify({ model, messages, ...(activeTools ? { tools: activeTools, tool_choice: toolChoice } : {}) }),
     });
@@ -2456,9 +2516,10 @@ app.whenReady().then(async () => {
     startBodyBridge();
     const readyCfg = loadConfig();
     warmVoice();
-    if (readyCfg.provider === 'agy') {
-      agyBrain.warm({
-        model: agyModelFor(readyCfg),
+    if (readyCfg.provider === 'agy' || (readyCfg.provider === 'claude' && cliAvailable('claude'))) {
+      const cli = cliBrainFor(readyCfg);
+      cli.brain.warm({
+        model: cli.model,
         dirs: [HOME],
         intro: agyIntro(buildPersona(readyCfg, AGY_PERSONA), HOME),
       });

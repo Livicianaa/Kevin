@@ -38,7 +38,7 @@ indir() {
 uygulama() {
   local hedef="$1" os="$2"
   mkdir -p "$hedef"
-  cp "$ROOT"/{main,preload,akil,agy-brain,langs,beat,browser,hypr,platform,reader,voice,updater}.js "$ROOT/package.json" "$hedef/"
+  cp "$ROOT"/{main,preload,akil,agy-brain,langs,beat,browser,hypr,platform,reader,voice,updater,cli-brain}.js "$ROOT/package.json" "$hedef/"
   mkdir -p "$hedef/rvc" && cp "$ROOT/rvc/kevin_rvc.py" "$hedef/rvc/"
   rsync -a --exclude skin-viewer-src.js "$ROOT/renderer/" "$hedef/renderer/"
   rsync -a --exclude '.godot/editor' --exclude 'tools' "$ROOT/body/" "$hedef/body/"

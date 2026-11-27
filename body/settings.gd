@@ -28,10 +28,13 @@ const PROVIDERS := {
 		"url": "https://generativelanguage.googleapis.com/v1beta/openai", "keys": "https://aistudio.google.com/apikey"},
 	"nvidia": {"label": "NVIDIA", "note": "provider_nvidia", "model": "meta/llama-3.3-70b-instruct",
 		"url": "https://integrate.api.nvidia.com/v1", "keys": "https://build.nvidia.com/settings/api-keys"},
+	"ozel": {"label": "Ozel", "note": "provider_custom", "model": "", "url": "", "custom": true, "keys": ""},
 	"ollama": {"label": "Ollama (yerel)", "model": "qwen3:8b", "local": true,
 		"url": "http://127.0.0.1:11434/v1", "keys": "https://ollama.com/download"},
 	"agy": {"label": "Antigravity (agy)", "model": "gemini-3.8-flash-medium", "local": true,
 		"url": "", "keys": "https://antigravity.google"},
+	"claude": {"label": "Claude Code", "model": "haiku", "local": true, "url": "", "keys": "https://claude.com/claude-code"},
+	"opencode": {"label": "opencode", "model": "", "local": true, "url": "", "keys": "https://opencode.ai"},
 }
 
 ## Sohbet modeli olmayanlar (ses, guvenlik, gomme...) listede gorunmesin

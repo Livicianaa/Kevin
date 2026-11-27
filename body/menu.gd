@@ -95,6 +95,8 @@ var volume_slider: HSlider
 var live_typing_check: Button
 var key_edit: LineEdit
 var key_row: Control
+var custom_url_edit: LineEdit
+var custom_url_row: Control
 var name_edit: LineEdit
 var nick_edit: LineEdit
 var hands_check: Button
@@ -1152,10 +1154,21 @@ func _page_ai() -> VBoxContainer:
 		# Saglayici degisince anahtar alani o saglayicinin kendi anahtarini gosterir
 		key_edit.text = ""
 		key_edit.placeholder_text = _tx("key_saved") if _has_key() else _tx("key_new")
+		custom_url_row.visible = _current_provider() == "ozel"
 		_update_key_notice()
 		_fetch_models())
 	cloud.add_child(_field(_tx("provider"), provider_opt))
 	provider_row = cloud
+
+	# Kendi yapay zekan: OpenAI uyumlu adres (LM Studio, OpenAI, OpenRouter...)
+	custom_url_edit = LineEdit.new()
+	custom_url_edit.placeholder_text = "https://api.openai.com/v1"
+	custom_url_edit.text = str(brain_cfg.get("customBaseURL", ""))
+	custom_url_edit.text_submitted.connect(func(_t): _fetch_models())
+	custom_url_edit.focus_exited.connect(_fetch_models)
+	custom_url_row = _field(_tx("custom_url"), custom_url_edit, _tx("custom_url_hint"))
+	custom_url_row.visible = str(brain_cfg.get("provider", "")) == "ozel"
+	cloud.add_child(custom_url_row)
 
 	key_edit = LineEdit.new()
 	key_edit.secret = true
@@ -1341,6 +1354,17 @@ func _fetch_models() -> void:
 		key = Settings.key_for(brain_cfg, prov)
 	ollama_link.visible = false
 	models_http.cancel_request()
+	if prov == "ozel":
+		var base := custom_url_edit.text.strip_edges().trim_suffix("/")
+		if base == "":
+			_set_model_status(_tx("custom_url_hint"), C_RED)
+			_fill_models([])
+			return
+		_set_model_status(_tx("st_checking"), C_MUTED)
+		var h := PackedStringArray() if key == "" else PackedStringArray(["Authorization: Bearer " + key])
+		if models_http.request(base + "/models", h) != OK:
+			_set_model_status(_tx("st_net"), C_RED)
+		return
 	if not local and key == "":
 		_set_model_status(_tx("st_nokey"), C_RED)
 		_fill_models([])
@@ -1349,6 +1373,14 @@ func _fetch_models() -> void:
 		if prov == "agy":
 			_set_model_status(str(p.get("label", "Antigravity (agy)")), C_INK)
 			_fill_models(["gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-hydrogen-medium"])
+		elif prov == "claude" or prov == "opencode":
+			var found := _cli_models(prov)
+			if found.is_empty():
+				_set_model_status(_tx("st_cli_missing"), C_RED)
+				_fill_models([str(p.get("model", ""))])
+			else:
+				_set_model_status(str(p.get("label", prov)), C_INK)
+				_fill_models(found)
 		else:
 			_fill_models([str(p.get("model", ""))])
 		return
@@ -1356,6 +1388,26 @@ func _fetch_models() -> void:
 	var headers := PackedStringArray() if local else PackedStringArray(["Authorization: Bearer " + key])
 	if models_http.request(str(p.url) + "/models", headers) != OK:
 		_set_model_status(_tx("st_net"), C_RED)
+
+
+## Claude Code ve opencode: bilgisayarda kurulu programdan model listesi
+func _cli_models(prov: String) -> Array:
+	var win := OS.get_name() == "Windows"
+	var out := []
+	var code := OS.execute("cmd.exe" if win else prov, (["/c", prov, "--version"] if win else ["--version"]), out)
+	if code != 0:
+		return []
+	if prov == "claude":
+		return ["haiku", "sonnet", "opus"]
+	out = []
+	if OS.execute("cmd.exe" if win else "opencode", (["/c", "opencode", "models"] if win else ["models"]), out) != 0 or out.is_empty():
+		return [""]
+	var ids := [""]
+	for line in str(out[0]).split("\n"):
+		var id := line.strip_edges()
+		if id != "" and id.contains("/") and not id.contains(" "):
+			ids.append(id)
+	return ids
 
 
 func _on_models(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -1406,7 +1458,8 @@ func _fill_models(ids: Array) -> void:
 		list.push_front(rec)
 	model_list.clear()
 	for id in list:
-		var i := model_list.add_item("%s  (%s)" % [id, _tx("recommended")] if id == rec else id)
+		var label: String = str(id) if str(id) != "" else _tx("cli_default")
+		var i := model_list.add_item("%s  (%s)" % [label, _tx("recommended")] if id == rec else label)
 		model_list.set_item_metadata(i, id)
 	var pick := list.find(saved) if saved in list else 0
 	if not list.is_empty():
@@ -1455,6 +1508,9 @@ func _update_key_notice() -> void:
 	if no_key_label == null:
 		return
 	var local: bool = mode_btns.size() > 1 and mode_btns[1].button_pressed
+	if not local and _current_provider() == "ozel":
+		no_key_label.visible = custom_url_edit.text.strip_edges() == ""
+		return
 	no_key_label.visible = not local and not _has_key() and key_edit.text.strip_edges() == ""
 
 
@@ -1542,6 +1598,8 @@ func open_instant(id: String) -> void:
 
 static func brain_needs_key(cfg: Dictionary) -> bool:
 	var local: bool = Settings.PROVIDERS.get(str(cfg.get("provider", "")), {}).get("local", false)
+	if str(cfg.get("provider", "")) == "ozel":
+		return str(cfg.get("customBaseURL", "")).strip_edges() == ""
 	return not local and Settings.key_for(cfg, str(cfg.get("provider", ""))) == ""
 
 
@@ -1595,6 +1653,7 @@ func _on_save() -> void:
 		keys[brain.provider] = key_edit.text.strip_edges()
 	brain["apiKeys"] = keys
 	brain["apiKey"] = str(keys.get(brain.provider, ""))
+	brain["customBaseURL"] = custom_url_edit.text.strip_edges().trim_suffix("/") if custom_url_edit else str(brain_cfg.get("customBaseURL", ""))
 	Settings.save_brain(brain)
 
 	var needs_reload: bool = body_cfg.slim != original_body.slim or absf(float(body_cfg.scale) - float(original_body.scale)) > 0.001
@@ -1647,8 +1706,7 @@ func _build_voice_section() -> VBoxContainer:
 	pitch_top.add_child(voice_pitch_auto)
 
 	var test_btn := _link(_tx("voice_test"), 13, C_RED)
-	test_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	test_btn.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	test_btn.size_flags_horizontal = Control.SIZE_EXPAND | Control.SIZE_SHRINK_END
 	test_btn.pressed.connect(func(): action.emit("voice_test", null))
 	pitch_top.add_child(test_btn)
 	voice_pitch_box.add_child(pitch_top)
