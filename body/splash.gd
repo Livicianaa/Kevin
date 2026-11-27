@@ -29,10 +29,19 @@ var pieces := []
 
 ## Metinlerin dili (main ayarlardan atiyor)
 static var lang := "tr"
+## Kullanicinin verdigi isim (ayarlardan); posterdeki dev yazi
+static var title_name := "Kevin"
 
 
 static func tx(key: String) -> String:
 	return I18n.get_text(key, lang)
+
+
+static func big_name() -> String:
+	var n := title_name.strip_edges() if title_name.strip_edges() != "" else "Kevin"
+	if lang == "tr":
+		n = n.replace("i", "İ").replace("ı", "I")
+	return n.to_upper()
 
 
 static func anton() -> Font:
@@ -155,7 +164,7 @@ static func make_back(size: Vector2) -> Control:
 
 	# Dev "KEVIN" (kafanin arkasinda)
 	var title := _piece(root, size, Vector2(w * 0.33, h * 0.25), func(ci: CanvasItem):
-		_big_text(ci, font, "KEVİN" if lang == "tr" else "KEVIN", Vector2(w * 0.05, h * 0.36), int(h * 0.2), C_PLUM, C_CREAM, int(h * 0.009), -0.16, -0.06))
+		_big_text(ci, font, big_name(), Vector2(w * 0.05, h * 0.36), int(h * 0.2), C_PLUM, C_CREAM, int(h * 0.009), -0.16, -0.06))
 	title.set_meta("anim", "slam")
 	title.set_meta("order", 2)
 

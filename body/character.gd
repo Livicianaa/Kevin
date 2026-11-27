@@ -28,7 +28,54 @@ const PARTS_CLASSIC := {
 var PARTS := PARTS_CLASSIC.duplicate(true)
 
 const Settings := preload("res://settings.gd")
+const I18n := preload("res://i18n.gd")
 const Brain := preload("res://brain.gd")
+const Book := preload("res://book.gd")
+
+signal book_cmd_requested(cmd: String)
+
+enum BookPhase {
+	NONE,
+	TAKE_OUT,
+	BRING,
+	OPEN,
+	READ,
+	PAGE_TURN,
+	PAUSE,
+	RESUME,
+	CLOSE_1,
+	CLOSE_2,
+	SHRUG
+}
+
+var book_prop: Node3D = null
+var book_label: Label3D = null
+var book_page := 0
+var book_total := 0
+var book_active := false
+const BOOK_LIFT := 0.23
+const BOOK_TILT := 20.0
+const BOOK_SCALE := 0.7
+const BOOK_ARM_RZ := 0.04
+const BOOK_ARM_RY := 0.0
+const BOOK_ARM_RX := -1.0
+const BOOK_HEAD_RX := 0.22
+const BOOK_FWD := 0.04
+var book_scale_now := 0.0
+var book_phase: BookPhase = BookPhase.NONE
+var book_phase_t := 0.0
+var book_clock := 0.0
+var book_weight := 0.0
+
+var book_r_rx := 0.0
+var book_r_ry := 0.0
+var book_r_rz := 0.0
+var book_l_rx := 0.0
+var book_l_ry := 0.0
+var book_l_rz := 0.0
+var book_h_rx := 0.0
+var book_h_ry := 0.0
+
 ## Menuden gelen ayarlar (add_child'dan ONCE atanir)
 var slim := false
 var skin_path := "res://skins/liviciana.png"
@@ -281,6 +328,20 @@ func _ready() -> void:
 	_load_cem()
 	_load_emotes()
 	_load_getup_clip()
+	book_prop = Book.new()
+	add_child(book_prop)
+	book_prop.visible = false
+	book_label = Label3D.new()
+	book_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	book_label.no_depth_test = true
+	book_label.render_priority = 10
+	book_label.font_size = 30
+	book_label.outline_size = 10
+	book_label.pixel_size = 0.0042
+	book_label.modulate = Color(1, 1, 1)
+	book_label.outline_modulate = Color(0, 0, 0, 0.85)
+	book_label.visible = false
+	add_child(book_label)
 
 
 func _load_emotes() -> void:
@@ -332,6 +393,8 @@ func on_brain_state(state: String) -> void:
 	if OS.is_debug_build() and state != brain_state:
 		print("[kevin] beyin: ", state)
 	brain_state = state
+	if book_active:
+		return
 	if state in ["sleep", "night-sleepy"]:
 		head_droop = 0.35
 	else:
@@ -365,7 +428,7 @@ func on_brain_state(state: String) -> void:
 
 ## Cevabin duygusu: o duyguya uyan kisa bir hareket, sonra konusmaya devam
 func on_brain_mood(mood: String) -> void:
-	if not mood_enabled or not MOOD_EMOTES.has(mood):
+	if book_active or not mood_enabled or not MOOD_EMOTES.has(mood):
 		return
 	var options: Array = MOOD_EMOTES[mood].filter(func(n): return emotes.has(n))
 	if not options.is_empty():
@@ -374,6 +437,13 @@ func on_brain_mood(mood: String) -> void:
 
 
 func on_brain_play(name: String) -> void:
+	if book_active:
+		if name == "nod-no":
+			head_shake = 0.35
+			get_tree().create_timer(1.2).timeout.connect(func(): head_shake = 0.0)
+		elif name == "nod-yes":
+			head_shake = 0.0
+		return
 	# Duygu hareketi az once basladiysa basini sallayip onu bozmasin
 	if Time.get_ticks_msec() - last_mood_ms < 2500 and name.begins_with("nod"):
 		return
@@ -772,6 +842,17 @@ func _cem_step(delta: float) -> void:
 		for k in pose:
 			pose[k] = lerpf(pose[k], vanilla.get(k, 0.0), emote_weight)
 		root = root * _whole_body(emote.apply(pose, emote_t, emote_weight))
+	_step_book(delta)
+	if book_weight > 0.0:
+		var bw := book_weight
+		pose["right_arm_rx"] = lerpf(float(pose.get("right_arm_rx", 0.0)), book_r_rx, bw)
+		pose["right_arm_ry"] = lerpf(float(pose.get("right_arm_ry", 0.0)), book_r_ry, bw)
+		pose["right_arm_rz"] = lerpf(float(pose.get("right_arm_rz", 0.0)), book_r_rz, bw)
+		pose["left_arm_rx"] = lerpf(float(pose.get("left_arm_rx", 0.0)), book_l_rx, bw)
+		pose["left_arm_ry"] = lerpf(float(pose.get("left_arm_ry", 0.0)), book_l_ry, bw)
+		pose["left_arm_rz"] = lerpf(float(pose.get("left_arm_rz", 0.0)), book_l_rz, bw)
+		pose["head_rx"] = lerpf(float(pose.get("head_rx", 0.0)), book_h_rx, bw)
+		pose["head_ry"] = lerpf(float(pose.get("head_ry", 0.0)), book_h_ry, bw)
 	if cem_blend < 1.0:
 		cem_blend = minf(1.0, cem_blend + delta / CEM_BLEND_TIME)
 	var k := ease(cem_blend, -2.0)
@@ -781,6 +862,8 @@ func _cem_step(delta: float) -> void:
 		if k < 1.0 and cem_blend_from.has(part):
 			xf = (cem_blend_from[part] as Transform3D).interpolate_with(xf, k)
 		bodies[part].global_transform = xf
+	if (book_active or book_phase != BookPhase.NONE) and book_prop and book_prop.visible:
+		_update_book_transform()
 	if mode == Mode.LED and led_part.ends_with("arm"):
 		_reach_arm(led_part, led_target)
 	else:
@@ -869,6 +952,11 @@ func _cem_part_transform(part: String, pose: Dictionary) -> Transform3D:
 # =====================================================================
 
 func _update_behaviour(delta: float) -> void:
+	if book_active:
+		limb_speed = move_toward(limb_speed, 0.0, delta * 4.0)
+		state_timer = 999.0
+		_update_look(delta)
+		return
 	anim_t += delta
 	state_timer -= delta
 
@@ -1118,6 +1206,15 @@ func _reach_xf(arm: String, world_point: Vector3) -> Transform3D:
 
 
 func start_ragdoll() -> void:
+	if book_active:
+		book_active = false
+		book_phase = BookPhase.NONE
+		book_weight = 0.0
+		if book_prop:
+			book_prop.visible = false
+		if book_label:
+			book_label.visible = false
+		book_cmd_requested.emit("pause")
 	led_part = ""
 	emote = null
 	emote_facing = NAN
@@ -1779,3 +1876,281 @@ func joint_gaps() -> Dictionary:
 		var pb: Vector3 = p[2].transform * p[3]
 		out[p[4]] = snappedf(pa.distance_to(pb) / PX, 0.01)
 	return out
+
+
+func on_file_dropped() -> void:
+	attention_left = 2.0
+	attention_cooldown = 0.0
+	if mode == Mode.ANIMATED:
+		var tw := create_tween()
+		tw.tween_property(self, "air_lift", 0.18, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(self, "air_lift", 0.0, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+
+func on_book(msg: Dictionary) -> void:
+	var st := str(msg.get("state", ""))
+	match st:
+		"open":
+			book_active = true
+			book_phase = BookPhase.TAKE_OUT
+			book_phase_t = 0.0
+			book_weight = 1.0
+			if book_prop:
+				book_prop.set_title(str(msg.get("title", "")))
+				book_prop.set_open_amount(0.0)
+				book_prop.scale = Vector3.ZERO
+				book_prop.visible = true
+			book_total = int(msg.get("total", 0))
+			book_page = int(msg.get("page", 0))
+			_update_book_label()
+		"page":
+			book_page = int(msg.get("page", book_page))
+			book_total = int(msg.get("total", book_total))
+			_update_book_label()
+			if book_active:
+				book_phase = BookPhase.PAGE_TURN
+				book_phase_t = 0.0
+				if book_prop:
+					book_prop.turn_page(0.35)
+		"pause":
+			if book_active:
+				book_phase = BookPhase.PAUSE
+				book_phase_t = 0.0
+		"resume":
+			if book_active:
+				book_phase = BookPhase.RESUME
+				book_phase_t = 0.0
+		"close":
+			if book_active:
+				book_phase = BookPhase.CLOSE_1
+				book_phase_t = 0.0
+		"error":
+			if book_active:
+				book_phase = BookPhase.SHRUG
+				book_phase_t = 0.0
+
+
+func _update_book_label() -> void:
+	if not book_label:
+		return
+	if book_total <= 0:
+		book_label.text = ""
+		return
+	var lang := I18n.code_of(Settings.load_brain())
+	var cur := clampi(book_page + 1, 1, book_total)
+	book_label.text = "%s %d / %d  %%%d" % [I18n.get_text("book_page", lang), cur, book_total, roundi(100.0 * clampi(book_page, 0, book_total) / book_total)]
+
+
+func is_book_paused() -> bool:
+	return book_active and (book_phase == BookPhase.PAUSE or book_phase == BookPhase.NONE)
+
+
+func _step_book(delta: float) -> void:
+	if not book_active and book_weight <= 0.0:
+		return
+	book_phase_t += delta
+	book_clock += delta
+
+	var target_r_rx := 0.0
+	var target_r_ry := 0.0
+	var target_r_rz := 0.0
+	var target_l_rx := 0.0
+	var target_l_ry := 0.0
+	var target_l_rz := 0.0
+	var target_h_rx := 0.0
+	var target_h_ry := 0.0
+
+	match book_phase:
+		BookPhase.TAKE_OUT:
+			var p := clampf(book_phase_t / 0.45, 0.0, 1.0)
+			var k := ease(p, 2.0)
+			target_r_rx = lerpf(0.0, 1.3, k)
+			target_r_ry = lerpf(0.0, 0.2, k)
+			target_r_rz = lerpf(0.0, 0.15, k)
+			target_l_rx = lerpf(0.0, 0.1, k)
+			target_l_rz = lerpf(0.0, -0.15, k)
+			target_h_rx = 0.05 * k
+			target_h_ry = -0.22 * k
+			if book_prop:
+				book_scale_now = BOOK_SCALE * k
+				book_prop.set_open_amount(0.0)
+			if p >= 1.0:
+				book_phase = BookPhase.BRING
+				book_phase_t = 0.0
+		BookPhase.BRING:
+			var p := clampf(book_phase_t / 0.40, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			var r_rx_os := BOOK_ARM_RX - 0.15 if (p > 0.5 and p < 0.85) else BOOK_ARM_RX
+			target_r_rx = lerpf(1.3, r_rx_os, k)
+			target_r_ry = lerpf(0.2, -BOOK_ARM_RY, k)
+			target_r_rz = lerpf(0.15, -BOOK_ARM_RZ, k)
+			target_l_rx = lerpf(0.1, BOOK_ARM_RX, k)
+			target_l_ry = lerpf(0.0, BOOK_ARM_RY, k)
+			target_l_rz = lerpf(-0.15, BOOK_ARM_RZ, k)
+			target_h_rx = lerpf(0.05, BOOK_HEAD_RX, k)
+			target_h_ry = lerpf(-0.22, 0.0, k)
+			if book_prop:
+				book_scale_now = BOOK_SCALE
+				book_prop.set_open_amount(0.0)
+			if p >= 1.0:
+				book_phase = BookPhase.OPEN
+				book_phase_t = 0.0
+		BookPhase.OPEN:
+			var p := clampf(book_phase_t / 0.30, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			target_r_rx = BOOK_ARM_RX
+			target_r_ry = -BOOK_ARM_RY
+			target_r_rz = -BOOK_ARM_RZ
+			target_l_rx = BOOK_ARM_RX
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ
+			target_h_rx = BOOK_HEAD_RX
+			target_h_ry = 0.0
+			if book_prop:
+				book_prop.set_open_amount(k)
+			if p >= 1.0:
+				book_phase = BookPhase.READ
+				book_phase_t = 0.0
+		BookPhase.READ:
+			var breath := sin(book_clock * 2.0) * 0.015
+			target_r_rx = BOOK_ARM_RX + breath
+			target_r_ry = -BOOK_ARM_RY
+			target_r_rz = -BOOK_ARM_RZ
+			target_l_rx = BOOK_ARM_RX + breath
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ
+			target_h_rx = BOOK_HEAD_RX + sin(book_clock * 1.3) * 0.02
+			target_h_ry = sin(book_clock * 1.8) * 0.08
+			if book_prop:
+				book_prop.set_open_amount(1.0)
+		BookPhase.PAGE_TURN:
+			var p := clampf(book_phase_t / 0.35, 0.0, 1.0)
+			var arc := sin(p * PI)
+			target_r_rx = BOOK_ARM_RX - arc * 0.12
+			target_r_ry = -BOOK_ARM_RY + arc * 0.15
+			target_r_rz = -BOOK_ARM_RZ - arc * 0.18
+			target_l_rx = BOOK_ARM_RX
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ
+			target_h_rx = BOOK_HEAD_RX
+			target_h_ry = (p - 0.5) * -0.10
+			if p >= 1.0:
+				book_phase = BookPhase.READ
+				book_phase_t = 0.0
+		BookPhase.PAUSE:
+			var p := clampf(book_phase_t / 0.30, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			target_r_rx = lerpf(BOOK_ARM_RX, (BOOK_ARM_RX - 0.1), k)
+			target_r_ry = -BOOK_ARM_RY
+			target_r_rz = -BOOK_ARM_RZ * 0.9
+			target_l_rx = lerpf(BOOK_ARM_RX, (BOOK_ARM_RX - 0.1), k)
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ * 0.9
+			target_h_rx = lerpf(BOOK_HEAD_RX, 0.0, k)
+			target_h_ry = 0.0
+			if book_prop:
+				book_prop.set_open_amount(lerpf(1.0, 0.4, k))
+		BookPhase.RESUME:
+			var p := clampf(book_phase_t / 0.30, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			target_r_rx = lerpf((BOOK_ARM_RX - 0.1), BOOK_ARM_RX, k)
+			target_r_ry = -BOOK_ARM_RY
+			target_r_rz = -BOOK_ARM_RZ
+			target_l_rx = lerpf((BOOK_ARM_RX - 0.1), BOOK_ARM_RX, k)
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ
+			target_h_rx = lerpf(0.0, BOOK_HEAD_RX, k)
+			target_h_ry = 0.0
+			if book_prop:
+				book_prop.set_open_amount(lerpf(0.4, 1.0, k))
+			if p >= 1.0:
+				book_phase = BookPhase.READ
+				book_phase_t = 0.0
+		BookPhase.CLOSE_1:
+			var p := clampf(book_phase_t / 0.25, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			target_r_rx = lerpf(BOOK_ARM_RX, (BOOK_ARM_RX - 0.1), k)
+			target_r_ry = -BOOK_ARM_RY
+			target_r_rz = -BOOK_ARM_RZ * 0.8
+			target_l_rx = lerpf(BOOK_ARM_RX, (BOOK_ARM_RX - 0.1), k)
+			target_l_ry = BOOK_ARM_RY
+			target_l_rz = BOOK_ARM_RZ * 0.8
+			target_h_rx = lerpf(BOOK_HEAD_RX, 0.10, k)
+			target_h_ry = 0.0
+			if book_prop:
+				book_prop.set_open_amount(lerpf(1.0, 0.0, k))
+			if p >= 1.0:
+				book_phase = BookPhase.CLOSE_2
+				book_phase_t = 0.0
+		BookPhase.CLOSE_2:
+			var p := clampf(book_phase_t / 0.40, 0.0, 1.0)
+			var k := ease(p, -2.0)
+			target_r_rx = lerpf((BOOK_ARM_RX - 0.1), 1.3, k)
+			target_r_ry = lerpf(-BOOK_ARM_RY, 0.2, k)
+			target_r_rz = lerpf(-BOOK_ARM_RZ * 0.8, 0.15, k)
+			target_l_rx = lerpf((BOOK_ARM_RX - 0.1), 0.0, k)
+			target_l_ry = 0.0
+			target_l_rz = lerpf(BOOK_ARM_RZ * 0.8, 0.0, k)
+			target_h_rx = lerpf(0.10, 0.0, k)
+			target_h_ry = 0.0
+			if book_prop:
+				book_scale_now = BOOK_SCALE * (1.0 - k)
+				book_prop.set_open_amount(0.0)
+			if p >= 1.0:
+				book_active = false
+				book_phase = BookPhase.NONE
+				if book_prop:
+					book_prop.visible = false
+				if book_label:
+					book_label.visible = false
+		BookPhase.SHRUG:
+			var p := clampf(book_phase_t / 0.40, 0.0, 1.0)
+			var k := sin(p * PI)
+			target_r_rx = BOOK_ARM_RX + k * 0.2
+			target_r_rz = -BOOK_ARM_RZ - k * 0.15
+			target_l_rx = BOOK_ARM_RX + k * 0.2
+			target_l_rz = BOOK_ARM_RZ + k * 0.15
+			target_h_rx = 0.15
+			target_h_ry = k * 0.15
+			if p >= 1.0:
+				book_phase = BookPhase.CLOSE_1
+				book_phase_t = 0.0
+
+	var sp := delta * 12.0
+	book_r_rx = lerpf(book_r_rx, target_r_rx, minf(1.0, sp))
+	book_r_ry = lerpf(book_r_ry, target_r_ry, minf(1.0, sp))
+	book_r_rz = lerpf(book_r_rz, target_r_rz, minf(1.0, sp))
+	book_l_rx = lerpf(book_l_rx, target_l_rx, minf(1.0, sp))
+	book_l_ry = lerpf(book_l_ry, target_l_ry, minf(1.0, sp))
+	book_l_rz = lerpf(book_l_rz, target_l_rz, minf(1.0, sp))
+	book_h_rx = lerpf(book_h_rx, target_h_rx, minf(1.0, sp))
+	book_h_ry = lerpf(book_h_ry, target_h_ry, minf(1.0, sp))
+
+	if not book_active:
+		book_weight = move_toward(book_weight, 0.0, delta * 3.0)
+	else:
+		book_weight = move_toward(book_weight, 1.0, delta * 5.0)
+
+
+func _update_book_transform() -> void:
+	if not book_prop:
+		return
+	var r_hand: Vector3 = hand_point("right_arm")
+	var l_hand: Vector3 = hand_point("left_arm")
+	var mid_hands: Vector3 = (r_hand + l_hand) * 0.5 + forward() * BOOK_FWD + Vector3.UP * BOOK_LIFT
+	var target_pos := mid_hands
+	var target_basis := Basis(Vector3.UP, facing_now + PI) * Basis(Vector3.RIGHT, deg_to_rad(BOOK_TILT))
+
+	var behind: Vector3 = r_hand - forward() * 0.12
+	if book_phase == BookPhase.TAKE_OUT or book_phase == BookPhase.CLOSE_2:
+		target_pos = behind
+	elif book_phase == BookPhase.BRING:
+		var p := clampf(book_phase_t / 0.40, 0.0, 1.0)
+		var k := ease(p, -2.0)
+		target_pos = behind.lerp(mid_hands, k) + Vector3.UP * sin(k * PI) * 0.06
+
+	book_prop.global_position = target_pos
+	if book_label:
+		book_label.visible = book_active and book_label.text != ""
+		book_label.global_position = bodies["head"].global_position + Vector3.UP * 0.44
+	book_prop.global_basis = target_basis.orthonormalized().scaled(Vector3.ONE * maxf(book_scale_now, 0.001))

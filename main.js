@@ -1,9 +1,9 @@
-const { app, BrowserWindow, screen, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, protocol, net, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 
 // Electron ile Godot her zaman ayni userData klasorunu (kevin-pc-version) kullansin.
@@ -48,7 +48,11 @@ const platform = require('./platform.js');
 const browser = require('./browser.js');
 const langs = require('./langs.js');
 const { BeatTracker } = require('./beat.js');
+const { createUpdater } = require('./updater');
 const { createAkil } = require('./akil.js');
+const reader = require('./reader.js');
+const { createVoices } = require('./voice.js');
+const { createAgyBrain, agyIntro, extractActions } = require('./agy-brain.js');
 
 // Odakta olmayan pencerede Chromium zamanlayicilari ve rAF'i kisiyor;
 // karakterin yuruyus hizi buna kurban gidiyordu.
@@ -74,6 +78,10 @@ let characterAnchor = null;
 let windowSize = { width: WIN_WIDTH, height: WIN_HEIGHT };
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
+const agyBrain = createAgyBrain({
+  workDir: path.join(app.getPath('userData'), 'agy-ws'),
+  log: (msg) => console.error('[agy]', msg),
+});
 
 // --brain: pencere gorunmez, sadece beyin (ses, sohbet, araclar). Govde Godot
 // (body/), olaylari yerel bir TCP baglantisiyla ona gonderiyoruz.
@@ -81,6 +89,28 @@ const BRAIN_MODE = process.argv.includes('--brain');
 const BODY_PORT = Number(process.env.KEVIN_BODY_PORT || 47630);
 const bodyClients = new Set();
 let lastBodyState = null;
+const updater = createUpdater({ app, log: (...args) => console.log('[updater]', ...args) });
+let lastUpdate = null;
+let updateInstalling = false;
+
+async function handleUpdateInstall() {
+  if (updateInstalling) return;
+  updateInstalling = true;
+  try {
+    bodySend({ type: 'update_progress', p: 0 });
+    const ok = await updater.install((p) => {
+      bodySend({ type: 'update_progress', p });
+    });
+    if (ok) {
+      bodySend({ type: 'quit' });
+      setTimeout(() => app.quit(), 1500);
+    }
+  } catch (err) {
+    updateInstalling = false;
+    console.error('[updater] kurulum hatasi:', err.message);
+    bodySend({ type: 'update_progress', p: -1, error: err.message || String(err) });
+  }
+}
 
 function bodySend(event) {
   if (event.type === 'state') lastBodyState = event;
@@ -98,6 +128,9 @@ function startBodyBridge() {
     bodyClients.add(sock);
     sock.setEncoding('utf8');
     if (lastBodyState) sock.write(JSON.stringify(lastBodyState) + '\n');
+    if (lastUpdate && lastUpdate.available) {
+      sock.write(JSON.stringify({ type: 'update', version: lastUpdate.version }) + '\n');
+    }
     let buffer = '';
     sock.on('data', (chunk) => {
       buffer += chunk;
@@ -108,7 +141,9 @@ function startBodyBridge() {
         if (!line) continue;
         try {
           const msg = JSON.parse(line);
-          if (win) win.webContents.send('body-command', msg);
+          if (msg.type === 'update_install') handleUpdateInstall();
+          else if (VOICE_COMMANDS.has(msg.type)) handleVoiceCommand(msg);
+          else if (win) win.webContents.send('body-command', msg);
         } catch {}
       }
     });
@@ -123,7 +158,18 @@ function startBodyBridge() {
     sock.on('close', drop);
     sock.on('error', drop);
   });
-  server.on('error', (err) => console.error('[kevin] govde koprusu:', err.message));
+  server.on('error', (err) => {
+    console.error('[kevin] govde koprusu:', err.message);
+    // Baska bir beyin zaten calisiyor: ikinci kopya mikrofonu da acmasin
+    if (err.code === 'EADDRINUSE') app.exit(0);
+  });
+  // Govde hic baglanmazsa gorunmez beyin sahipsiz kalmasin
+  setTimeout(() => {
+    if (!everConnected) {
+      console.error('[kevin] govde 90 sn icinde baglanmadi, beyin kapaniyor');
+      app.quit();
+    }
+  }, 90000);
   server.listen(BODY_PORT, '127.0.0.1');
 }
 
@@ -180,11 +226,14 @@ function launchBody() {
     fs.cpSync(src, dst, { recursive: true });
     fs.writeFileSync(stamp, version);
   }
+  // Beyin govdeyle ayni anda baslar: Electron'un soguk acilisi (Defender
+  // taramasi) govdenin beklemesine eklenmesin, acilis cubugu %90'da takilmasin
+  spawn(process.execPath, ['--brain'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   const godot = path.join(path.dirname(process.execPath), 'godot', `godot${EXE}`);
   spawn(godot, ['--path', dst], {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, KEVIN_ROOT: appDir, KEVIN_ELECTRON: process.execPath },
+    env: { ...process.env, KEVIN_ROOT: appDir, KEVIN_ELECTRON: process.execPath, KEVIN_BRAIN_STARTED: '1' },
   }).unref();
 }
 
@@ -317,11 +366,30 @@ const DEFAULT_PERSONA = [
   'cumlelerinden baglami kullan; ayni seyi tekrar sordurtma.',
 ].join(' ');
 
-function buildPersona(cfg) {
+const AGY_PERSONA = [
+  'Sen {isim}sin. Kullanicinin masaustunde yasayan, onunla takilan kankasisin. Asistan, robot ya da yapay zeka gibi davranma.',
+  'SADECE {dil} konus. Turkce karakterleri dogru yaz.',
+  'GERCEK INSAN GIBI KONUS: gunluk konusma dili, agizdan cikan kisaltmalar ("napıyon", "bi", "valla", "he", "yok ya"), yarim cumle serbest.',
+  'Cogu cevap tek kisa cumle, bazen tek kelime ("Yok artık.", "Hmm, olabilir."). En fazla 2 cumle; bilgi isteniyorsa en fazla 3.',
+  'Her cevabi soruyla bitirme. Soruyu sadece gercekten merak edince, ara sira sor.',
+  'Kendi fikrin, zevkin, huyun var: bazen itiraz et, dalga gec, uşen, sasir. Her seye hevesli ve kibar olma.',
+  'Kullanicinin dedigini tekrar etme, ozetleme, ne yapacagini anlatma. Direkt tepki ver.',
+  'YASAK kaliplar: "yardimci olabilirim", "baska bir sey var mi", "tabii ki", "elbette", "harika soru", "anliyorum",',
+  '"bir yapay zeka olarak", "umarim", unlem yagmuru, nasihat, liste sayma.',
+  'Biri dert anlatirsa akil verme, kanka gibi tepki ver ("Ciddi misin ya, ne dedi?").',
+  'Kullanici acikca istemedikce site ya da uygulama acma.',
+  'Yapay zeka misin diye sorulursa kacamak yapma ama robot gibi de anlatma, "He, bilgisayarda yasiyorum iste" kivaminda gec.',
+  'Sesin var, yazi degil SES olarak duyuluyorsun: emoji, sembol, madde isareti, baslik, kod blogu ASLA.',
+  'Dedigi anlamsiz ya da yarim geldiyse uydurma, "Ne dedin, duyamadım" de; ses bazen yanlis duyuluyor.',
+  'Guncel bilgi (hava, haber, fiyat) gerekiyorsa internetten bak ya da bilmedigini soyle, uydurma.',
+  'Bir sey yapmaya basladiysan sonucunu soyle.',
+].join(' ');
+
+function buildPersona(cfg, defaultBase) {
   const isim = cfg.name || 'Kevin';
   const dil = langs.lang(cfg).prompt;
-  const base = (cfg.persona && cfg.persona.trim()) || DEFAULT_PERSONA;
-  const typing = cfg.liveTyping !== false
+  const base = (cfg.persona && cfg.persona.trim()) || defaultBase || DEFAULT_PERSONA;
+  const typing = !defaultBase && cfg.liveTyping !== false
     ? '\nKOD/YAZI: Kullanici kod, betik ya da uzun bir metin yazmani isterse onu SESLI OKUMA. write_file ile '
       + '~/Kevin/ altina uygun uzantili bir dosyaya yaz (ekranda harf harf yazilarak gosterilecek), sonra tek cumleyle ne yazdigini soyle.'
     : '';
@@ -352,7 +420,17 @@ const PROVIDERS = {
     visionModel: 'qwen2.5vl:7b',
     local: true,
   },
+  agy: {
+    local: true,
+    agy: true,
+    defaultModel: 'gemini-3.8-flash-medium',
+  },
 };
+
+function agyModelFor(cfg) {
+  const m = String(cfg.model || '');
+  return /-(low|medium|high|xhigh)$|^claude-|^gpt-oss/.test(m) ? m : PROVIDERS.agy.defaultModel;
+}
 
 function isLocal(provider) {
   return Boolean(PROVIDERS[provider] && PROVIDERS[provider].local);
@@ -653,9 +731,9 @@ function unloadOllamaModel(model) {
   }).catch(() => {});
 }
 
-async function describeImages(images, question) {
+async function describeImages(images, question, maxSentences = 4) {
   const cfg = loadConfig();
-  const prompt = `${question}\n${langs.lang(cfg).prompt} dilinde cevapla, en fazla 4 cumle.`;
+  const prompt = `${question}\n${langs.lang(cfg).prompt} dilinde cevapla, en fazla ${maxSentences} cumle.`;
   const errors = [];
   // Bulut saglayici seciliyse once o: yerel goruntu modeli (qwen2.5vl ~4.5 GB)
   // ekran kartini doldurup ses tanimayi (whisper GPU) bellek hatasina
@@ -859,30 +937,97 @@ const FIND_FILES_TOOL = {
   },
 };
 
+const KNOWN_DIRS = {
+  downloads: ['indirilenler', 'indirilen', 'indirmeler', 'downloads', 'download', 'indir'],
+  desktop: ['masaustu', 'masaüstü', 'desktop'],
+  documents: ['belgeler', 'dokumanlar', 'dökümanlar', 'documents'],
+  pictures: ['resimler', 'pictures', 'fotograflar', 'fotoğraflar'],
+  videos: ['videolar', 'videos'],
+  music: ['muzik', 'müzik', 'music'],
+};
+
+function knownDir(input) {
+  const key = String(input || '').trim().replace(/^~\/?/, '').replace(/\/+$/, '').toLocaleLowerCase('tr');
+  for (const [name, words] of Object.entries(KNOWN_DIRS)) {
+    if (words.includes(key)) {
+      try { return app.getPath(name); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+const FIND_SKIP = new Set(['node_modules', '.git', '.cache', '.local', '.npm', '.cargo', '.rustup', 'AppData', '__pycache__', '.venv', 'venv', 'site-packages']);
+
 async function findFilesTool(args) {
-  const root = args.directory ? resolveUserPath(args.directory) : HOME;
-  const namePart = (args.name || '').trim();
-  const ext = (args.extension || '').trim().replace(/^\./, '');
+  const root = args.directory ? (knownDir(args.directory) || resolveUserPath(args.directory)) : HOME;
+  const namePart = (args.name || '').trim().toLocaleLowerCase('tr');
+  const ext = (args.extension || '').trim().replace(/^\./, '').toLowerCase();
+  const found = [];
+  let scanned = 0;
+  const queue = [[root, 0]];
+  while (queue.length && scanned < 200000) {
+    const [dir, depth] = queue.shift();
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      scanned += 1;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (FIND_SKIP.has(e.name) || e.name.startsWith('.')) continue;
+        if (!ext && namePart && e.name.toLocaleLowerCase('tr').includes(namePart)) found.push({ full, dir: true });
+        if (depth < 6) queue.push([full, depth + 1]);
+      } else if (e.isFile()) {
+        const lower = e.name.toLocaleLowerCase('tr');
+        if (ext && !lower.endsWith('.' + ext)) continue;
+        if (namePart && !lower.includes(namePart)) continue;
+        found.push({ full });
+      }
+    }
+  }
+  const withTime = await Promise.all(found.map(async (f) => {
+    try {
+      const st = await fs.promises.stat(f.full);
+      return { ...f, mtime: st.mtimeMs, size: st.size };
+    } catch {
+      return null;
+    }
+  }));
+  const list = withTime.filter(Boolean).sort((a, b) => b.mtime - a.mtime).slice(0, 25);
+  const what = `${namePart || '*'}${ext ? '.' + ext : ''}`;
+  if (!list.length) return `"${what}" ile eslesen bir sey bulamadim (${root})`;
+  return `${root} altinda ${list.length} sonuc (en yeni once):\n` + list.map((f) =>
+    `${new Date(f.mtime).toISOString().slice(0, 16).replace('T', ' ')} ${f.dir ? '[klasor]' : String(f.size).padStart(10)} ${f.full}`).join('\n');
+}
 
-  const pattern = ext
-    ? `*${namePart ? namePart + '*' : ''}.${ext}`
-    : namePart
-      ? `*${namePart}*`
-      : '*';
+const READ_BOOK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'read_book_aloud',
+    description:
+      'Bir PDF, EPUB, Markdown, TXT, CBZ manga ya da resim dosyasini kitap olarak acip SESLI OKUMAYA baslar ' +
+      '(Kevin arkasindan kitap cikarir). Kullanici "su pdf\'i oku", "kitap oku", "mangayi oku" derse once ' +
+      'find_files ile dosyayi bul (en yeni once siralanir), sonra tam yoluyla bunu cagir. Dosya belirtmeden sadece "oku" ' +
+      'ya da "son indirdigimi oku" derse indirilenler klasorundeki en yeni pdf/epub/md/txt/cbz dosyasini sec, sorma. ' +
+      'Icerigi read_file ile okuyup kendin anlatma.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Dosyanin tam yolu' },
+      },
+      required: ['path'],
+    },
+  },
+};
 
-  const findArgs = [
-    root, '-maxdepth', '6',
-    '-not', '-path', '*/node_modules/*',
-    '-not', '-path', '*/.git/*',
-    '-not', '-path', '*/.cache/*',
-    '-iname', pattern,
-    '-printf', '%TY-%Tm-%Td %10s %p\\n',
-  ];
-
-  const { stdout } = await runCommand('find', findArgs).catch((err) => ({ stdout: '', stderr: err.message }));
-  const lines = stdout.split('\n').filter(Boolean).slice(0, 25);
-  if (!lines.length) return `"${pattern}" ile eslesen bir sey bulamadim (${root})`;
-  return `${root} altinda ${lines.length} sonuc:\n` + lines.join('\n');
+function readBookTool(args) {
+  const target = resolveUserPath(args.path);
+  if (!fs.existsSync(target)) return `dosya yok: ${target}`;
+  if (win) win.webContents.send('body-command', { type: 'drop', files: [target] });
+  return `okuma baslatildi: ${path.basename(target)}. Kullaniciya sadece cok kisa "tamam, okuyorum" gibi bir sey de, icerigi anlatma.`;
 }
 
 // --- Tarayici araclari (Playwright) ---
@@ -1100,8 +1245,60 @@ const LIST_DIR_TOOL = {
   },
 };
 
+const SYSTEM_INFO_TOOL = {
+  type: 'function',
+  function: {
+    name: 'system_info',
+    description:
+      'Bu bilgisayarin donanimini ve durumunu okur: islemci modeli ve cekirdek sayisi, ekran karti, RAM (toplam/bos), ' +
+      'diskler (dolu/bos), isletim sistemi, acik kalma suresi, pil. Kullanici bilgisayarinin ozelliklerini, ' +
+      'islemcisini, ekran kartini, RAM ya da disk durumunu sorunca kullan.',
+    parameters: { type: 'object', properties: {} },
+  },
+};
+
+function quietExec(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { windowsHide: true, timeout: 8000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? '' : String(stdout).trim());
+    });
+  });
+}
+
+async function systemInfoTool() {
+  const gb = (b) => `${(b / 1073741824).toFixed(1)} GB`;
+  const cpus = os.cpus();
+  const lines = [
+    `Isletim sistemi: ${process.platform === 'win32' ? 'Windows' : process.platform} ${os.release()} (${os.arch()})`,
+    `Islemci: ${cpus[0]?.model?.trim() || 'bilinmiyor'}, ${cpus.length} mantiksal cekirdek`,
+    `RAM: toplam ${gb(os.totalmem())}, bos ${gb(os.freemem())}`,
+    `Acik kalma: ${Math.round(os.uptime() / 3600)} saat`,
+  ];
+  if (process.platform === 'win32') {
+    const ps = (q) => quietExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', q]);
+    const [gpu, disks, bat] = await Promise.all([
+      ps('Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + " | " + [math]::Round($_.AdapterRAM/1GB,1) + " GB" }'),
+      ps('Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { $_.DeviceID + " " + [math]::Round($_.Size/1GB) + " GB, bos " + [math]::Round($_.FreeSpace/1GB) + " GB" }'),
+      ps('Get-CimInstance Win32_Battery | ForEach-Object { "%" + $_.EstimatedChargeRemaining }'),
+    ]);
+    if (gpu) lines.push(`Ekran karti: ${gpu.split(/\r?\n/).join('; ')}`);
+    if (disks) lines.push(`Diskler: ${disks.split(/\r?\n/).join('; ')}`);
+    if (bat) lines.push(`Pil: ${bat.split(/\r?\n/)[0]}`);
+  } else if (process.platform === 'linux') {
+    const [gpu, disks, bat] = await Promise.all([
+      quietExec('sh', ['-c', "lspci 2>/dev/null | grep -Ei 'vga|3d|display' | cut -d: -f3-"]),
+      quietExec('df', ['-h', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'efivarfs', '--output=target,size,avail']),
+      quietExec('sh', ['-c', 'cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -1']),
+    ]);
+    if (gpu) lines.push(`Ekran karti: ${gpu.split('\n').map((l) => l.trim()).join('; ')}`);
+    if (disks) lines.push(`Diskler (baglanti, boyut, bos): ${disks.split('\n').slice(1, 8).map((l) => l.trim().replace(/\s+/g, ' ')).join('; ')}`);
+    if (bat) lines.push(`Pil: %${bat}`);
+  }
+  return lines.join('\n');
+}
+
 async function listDirectoryTool(dirPath) {
-  const expanded = dirPath.replace(/^~/, os.homedir());
+  const expanded = knownDir(dirPath) || dirPath.replace(/^~/, os.homedir());
   const entries = fs.readdirSync(expanded, { withFileTypes: true });
   const files = entries
     .filter((e) => e.isFile())
@@ -1157,8 +1354,8 @@ function mcpToolsAsOpenAI(includeScreenControl, cfg) {
     },
   }));
   return [
-    OPEN_URL_TOOL, LIST_DIR_TOOL, LOOK_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL,
-    FIND_FILES_TOOL, WEB_SEARCH_TOOL, FETCH_PAGE_TOOL,
+    OPEN_URL_TOOL, LIST_DIR_TOOL, SYSTEM_INFO_TOOL, LOOK_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL,
+    FIND_FILES_TOOL, READ_BOOK_TOOL, WEB_SEARCH_TOOL, FETCH_PAGE_TOOL,
     ...(browser.available()
       ? [BROWSER_OPEN_TOOL, BROWSER_READ_TOOL, BROWSER_CLICK_TOOL, BROWSER_TYPE_TOOL, BROWSER_LOOK_TOOL]
       : []),
@@ -1262,6 +1459,20 @@ function createWindow() {
 
 ipcMain.handle('get-config', () => loadConfig());
 
+function micAccess() {
+  try {
+    return process.platform === 'linux' ? 'unknown' : systemPreferences.getMediaAccessStatus('microphone');
+  } catch {
+    return 'unknown';
+  }
+}
+
+ipcMain.handle('mic-problem', (_event, name) => {
+  const status = micAccess();
+  console.error('[kevin] mikrofon acilamadi:', name, 'sistem izni:', status);
+  return { status, platform: process.platform };
+});
+
 // Secili dilin kisa cumleleri (uyanma cevaplari, hata mesajlari)
 ipcMain.handle('lang-pack', () => {
   const cfg = loadConfig();
@@ -1323,6 +1534,22 @@ ipcMain.handle('list-models', async (_event, { provider, apiKey }) => {
   if (!p) return { error: 'Sağlayıcı seçilmedi' };
   if (!apiKey && !p.local) return { error: 'API key gir' };
 
+  if (provider === 'agy') {
+    try {
+      const { execFile } = require('node:child_process');
+      const util = require('node:util');
+      const execFileAsync = util.promisify(execFile);
+      const { stdout } = await execFileAsync('agy', ['models'], { timeout: 10000 });
+      const models = stdout
+        .split('\n')
+        .map((l) => l.trim().split(/\s+/)[0])
+        .filter((id) => id && /^[a-zA-Z0-9._-]+$/.test(id));
+      return { models: [...new Set(models)] };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
   try {
     const response = await fetch(`${p.baseURL}/models`, {
       headers: p.local ? {} : { Authorization: `Bearer ${apiKey}` },
@@ -1369,7 +1596,7 @@ function sanitizeToolResult(content) {
 // MCP'nin ekran kontrol araclari (tikla, yaz, pencere yonet) ayri ve dar, cunku
 // semalari buyuk ve Groq'un ucretsiz katmaninda dakikalik token limitini yiyor.
 const BASIC_TOOL_KEYWORDS = [
-  'dosya', 'klasor', 'klasör', 'dizin', 'oku', 'okusana', 'yaz', 'kaydet', 'not al',
+  'dosya', 'klasor', 'klasör', 'dizin', 'oku', 'okusana', 'okur mu', 'pdf', 'kitap', 'manga', 'indirilen', 'yaz', 'kaydet', 'not al',
   'duzenle', 'düzenle', 'olustur', 'oluştur', 'sil', 'listele', 'ac', 'aç', 'baslat', 'başlat',
   'ara', 'arat', 'bul', 'internet', 'site', 'sayfa', 'link', 'adres', 'google',
   'tasarim', 'tasarım', 'ornek', 'örnek', 'resim', 'gorsel', 'görsel', 'pinterest',
@@ -1430,6 +1657,43 @@ ipcMain.handle('chat', async (_event, history) => {
   let model = cfg.model || provider.defaultModel;
   const L = langs.lang(cfg);
 
+  if (cfg.provider === 'agy') {
+    const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+    try {
+      const raw = await agyBrain.ask({
+        model: agyModelFor(cfg),
+        dirs: [HOME],
+        intro: agyIntro(buildPersona(cfg, AGY_PERSONA), HOME),
+        text: lastUserMessage,
+      });
+      const { clean, actions } = extractActions(raw);
+      const dropFiles = [];
+      for (const act of actions) {
+        if (act.kind === 'oku' || act.kind === 'ses') {
+          try {
+            const target = resolveUserPath(act.arg);
+            if (fs.existsSync(target)) dropFiles.push(target);
+          } catch (err) {
+            console.error('[kevin] agy oku:', err.message);
+          }
+        } else if (act.kind === 'ac') {
+          try {
+            await openUrlOrApp(act.arg);
+          } catch (err) {
+            console.error('[kevin] agy ac:', err.message);
+          }
+        }
+      }
+      if (dropFiles.length && win) win.webContents.send('body-command', { type: 'drop', files: dropFiles });
+      const parsed = akil.parseReply(stripEmoji(clean || ''));
+      if (parsed.mood && parsed.mood !== 'notr') bodySend({ type: 'mood', mood: parsed.mood });
+      return parsed.text || L.unclear;
+    } catch (err) {
+      console.error('[kevin] agy hata:', err);
+      return L.unclear || 'Kafam biraz karisti, tekrar soyler misin?';
+    }
+  }
+
   const messages = [
     {
       role: 'system',
@@ -1454,15 +1718,9 @@ ipcMain.handle('chat', async (_event, history) => {
   }
 
   const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-  // Az once arac kullanildiysa devam cumlelerinde de ("daha yumusak olsun",
-  // "digerini ac") araclar acik: anahtar kelime yok diye araçsiz gidip bos
-  // cevap donuyordu.
-  const followUp = Date.now() - lastToolUseAt < FOLLOW_UP_MS;
-  // Anahtar kelimeler Turkce; baska dilde araclar hep acik (model kendi secer)
+  // Araclar her zaman acik, model kendi secer; anahtar kelime sadece ilk adimda arac zorlamak icin
   const otherLang = langs.langCode(cfg) !== 'tr';
-  let tools = messageNeedsAgent(lastUserMessage) || followUp || otherLang
-    ? mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage) || otherLang, cfg)
-    : undefined;
+  let tools = mcpToolsAsOpenAI(messageNeedsScreenControl(lastUserMessage) || otherLang, cfg);
   // Araclar aciksa model ekran duzenini bilsin ("yan ekran" hangisi)
   if (tools) {
     const layout = await screenLayout();
@@ -1602,6 +1860,8 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await openUrlOrApp(args.target);
           } else if (call.function.name === 'list_directory') {
             resultText = await listDirectoryTool(args.path);
+          } else if (call.function.name === 'system_info') {
+            resultText = await systemInfoTool();
           } else if (call.function.name === 'look_at_camera') {
             resultText = await akil.lookAtCamera(args.question, cfg.cameraDevice, describeImages);
           } else if (call.function.name === 'remember_face') {
@@ -1628,6 +1888,8 @@ ipcMain.handle('chat', async (_event, history) => {
             resultText = await browserLook(args.question);
           } else if (call.function.name === 'find_files') {
             resultText = await findFilesTool(args);
+          } else if (call.function.name === 'read_book_aloud') {
+            resultText = readBookTool(args);
           } else if (call.function.name === 'web_search') {
             resultText = await webSearchTool(args.query);
           } else if (call.function.name === 'fetch_page') {
@@ -1709,22 +1971,31 @@ ipcMain.handle('speak', async (_event, text) => {
   const id = crypto.randomUUID();
   const outPath = path.join(os.tmpdir(), `kevin-tts-${id}.wav`);
   const cfg = loadConfig();
-  const voice = PIPER_VOICE || langs.voiceFor(cfg, VOICES_USER_DIR, [PIPER_VOICES_DIR]);
+  const custom = cfg.voiceId ? voices.get(cfg.voiceId) : null;
+  const piperCustom = custom && custom.type === 'piper' && fs.existsSync(custom.model) ? custom : null;
+  const voice = piperCustom ? piperCustom.model : (PIPER_VOICE || langs.voiceFor(cfg, VOICES_USER_DIR, [PIPER_VOICES_DIR]));
   // Dilin sesi henuz inmediyse sessiz (indirme arkada suruyor)
   if (!voice) throw new Error('ses indiriliyor');
   const rate = Math.min(1.6, Math.max(0.6, Number(cfg.speechRate) || 1));
+  const rvcPath = path.join(os.tmpdir(), `kevin-rvc-${id}.wav`);
+  const args = ['-m', voice, '--espeak_data', PIPER_ESPEAK_DATA, '--length_scale', String(1 / rate), '-f', outPath];
+  if (piperCustom && piperCustom.config) args.push('-c', piperCustom.config);
 
   try {
-    await runCommand(
-      PIPER_BIN,
-      ['-m', voice, '--espeak_data', PIPER_ESPEAK_DATA, '--length_scale', String(1 / rate), '-f', outPath],
-      { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: stripEmoji(text) },
-    );
+    await runCommand(PIPER_BIN, args, { env: { LD_LIBRARY_PATH: PIPER_DIR }, input: stripEmoji(text) });
 
-    const audio = fs.readFileSync(outPath);
-    return audio.toString('base64');
+    if (custom && custom.type === 'rvc') {
+      try {
+        await voices.convert(cfg, custom, outPath, rvcPath);
+        return fs.readFileSync(rvcPath).toString('base64');
+      } catch (err) {
+        console.error('[kevin] RVC sesi kullanilamadi, duz ses:', err.message.split('\n')[0]);
+      }
+    }
+    return fs.readFileSync(outPath).toString('base64');
   } finally {
     fs.rmSync(outPath, { force: true });
+    fs.rmSync(rvcPath, { force: true });
   }
 });
 
@@ -1856,15 +2127,356 @@ ipcMain.handle('media-unduck', async () => {
   return list.size > 0;
 });
 
+// --- Kitap okuma ve ses modeli ---
+
+let pageRenderWin = null;
+let pageRenderReady = null;
+
+function getPageRenderWindow() {
+  if (pageRenderWin && !pageRenderWin.isDestroyed()) {
+    return pageRenderReady;
+  }
+  pageRenderWin = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 1280,
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: true,
+      backgroundThrottling: false,
+    },
+  });
+  pageRenderReady = new Promise((resolve) => {
+    pageRenderWin.webContents.once('did-finish-load', () => resolve(pageRenderWin));
+  });
+  pageRenderWin.loadURL('kevin://app/renderer/page-render.html');
+  return pageRenderReady;
+}
+
+async function renderPageForReader(req) {
+  const rw = await getPageRenderWindow();
+  if (req.type === 'image') {
+    let src = '';
+    if (req.buffer) {
+      const mime = req.name && req.name.toLowerCase().endsWith('.webp') ? 'image/webp' : 'image/png';
+      src = `data:${mime};base64,${req.buffer.toString('base64')}`;
+    } else if (req.path) {
+      const b = fs.readFileSync(req.path);
+      const ext = path.extname(req.path).toLowerCase();
+      const mime = ext === '.webp' ? 'image/webp' : ext === '.png' ? 'image/png' : 'image/jpeg';
+      src = `data:${mime};base64,${b.toString('base64')}`;
+    }
+    return rw.webContents.executeJavaScript(`window.renderImage(${JSON.stringify(src)})`);
+  }
+  if (req.type === 'pdf') {
+    const b64 = (req.buffer ? Buffer.from(req.buffer) : fs.readFileSync(req.path)).toString('base64');
+    await rw.webContents.executeJavaScript(`window.loadPdf(${JSON.stringify(req.path)}, ${JSON.stringify(b64)})`);
+    return rw.webContents.executeJavaScript(`window.renderPdfPage(${Number(req.pageNum)})`);
+  }
+  return '';
+}
+
+reader.setPageRenderer(renderPageForReader);
+
+const BOOKS_PATH = path.join(app.getPath('userData'), 'books.json');
+
+function loadBooks() {
+  try {
+    const data = JSON.parse(fs.readFileSync(BOOKS_PATH, 'utf-8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBooks(data) {
+  try {
+    fs.writeFileSync(BOOKS_PATH, JSON.stringify(data, null, 1));
+  } catch (err) {
+    console.error('[kevin] books.json yazilamadi:', err.message);
+  }
+}
+
+let activeBook = null;
+let activeBookState = { page: 0, chunk: 0 };
+let bookLastPos = null;
+let prefetchedPage = { page: -1, promise: null };
+const MANGA_QUESTION = 'Bu bir manga/çizgi roman sayfası. Konuşma balonlarını sırayla oku, sonra bir cümleyle ne olduğunu kendi tarzında yorumla. Sayfa numarası söyleme.';
+
+const voices = createVoices({ userDir: app.getPath('userData'), log: (m) => console.log(m) });
+const VOICE_COMMANDS = new Set(['voices_get', 'voice_set', 'voice_pitch', 'voice_remove', 'rvc_install']);
+let voicesSentAt = 0;
+
+function sendVoices(force = true) {
+  const now = Date.now();
+  if (!force && now - voicesSentAt < 500) return;
+  voicesSentAt = now;
+  const cfg = loadConfig();
+  const list = voices.list();
+  const active = list.some((v) => v.id === cfg.voiceId) ? cfg.voiceId : 'default';
+  bodySend({ type: 'voices', list, active, rvc: voices.rvcStatus(cfg) });
+}
+
+function voiceTest() {
+  if (win) win.webContents.send('body-command', { type: 'voice_test' });
+}
+
+function setActiveVoice(id) {
+  const cfg = loadConfig();
+  cfg.voiceId = id && id !== 'default' ? id : null;
+  saveConfig(cfg);
+  warmVoice();
+}
+
+function warmVoice() {
+  const cfg = loadConfig();
+  const voice = cfg.voiceId ? voices.get(cfg.voiceId) : null;
+  if (!voice || voice.type !== 'rvc' || !voices.rvcRuntime(cfg)) return;
+  const rate = 16000;
+  const n = rate / 2;
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(rate, 24); buf.writeUInt32LE(rate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) buf.writeInt16LE(Math.round(Math.sin(i / 8) * 3000), 44 + i * 2);
+  const inWav = path.join(os.tmpdir(), `kevin-warm-${process.pid}.wav`);
+  const outWav = path.join(os.tmpdir(), `kevin-warm-${process.pid}-out.wav`);
+  try { fs.writeFileSync(inWav, buf); } catch { return; }
+  voices.convert(cfg, voice, inWav, outWav)
+    .catch((err) => console.error('[kevin] ses isitma:', err.message.split('\n')[0]))
+    .finally(() => { fs.rm(inWav, () => {}); fs.rm(outWav, () => {}); });
+}
+
+async function handleVoiceCommand(msg) {
+  try {
+    if (msg.type === 'voice_set') {
+      setActiveVoice(msg.id);
+      voiceTest();
+    } else if (msg.type === 'voice_pitch') {
+      const pitch = msg.pitch === null || msg.pitch === undefined ? null : Math.max(-12, Math.min(12, Math.round(Number(msg.pitch))));
+      voices.setPitch(msg.id, pitch, msg.target_hz);
+    } else if (msg.type === 'voice_remove') {
+      voices.remove(msg.id);
+      if (loadConfig().voiceId === msg.id) setActiveVoice(null);
+    } else if (msg.type === 'rvc_install') {
+      voices.installRvc(() => sendVoices(false))
+        .catch((err) => console.error('[kevin] RVC eklentisi kurulamadi:', err.message))
+        .finally(() => sendVoices());
+    }
+  } catch (err) {
+    console.error('[kevin] ses komutu:', err.message);
+  }
+  sendVoices();
+}
+
+ipcMain.handle('voice-install', async (_event, paths) => {
+  const res = await voices.install(paths);
+  if (res.ok && res.voice) {
+    setActiveVoice(res.voice.id);
+    if (res.voice.type === 'rvc' && !voices.rvcStatus(loadConfig()).ready) {
+      res.needsRvc = true;
+    }
+  }
+  sendVoices();
+  return res;
+});
+
+ipcMain.handle('book-open', async (_event, paths) => {
+  try {
+    activeBook = await reader.openBook(paths);
+    prefetchedPage = { page: -1, promise: null };
+    bookLastPos = null;
+
+    const all = loadBooks();
+    const saved = all[activeBook.id];
+    let resumed = false;
+
+    if (saved && typeof saved.page === 'number' && (saved.page > 0 || (saved.chunk && saved.chunk > 0))) {
+      activeBookState = {
+        page: Math.min(saved.page, Math.max(0, activeBook.pages.length - 1)),
+        chunk: saved.chunk || 0,
+      };
+      resumed = true;
+    } else {
+      activeBookState = { page: 0, chunk: 0 };
+    }
+
+    all[activeBook.id] = { ...activeBookState, title: activeBook.title, at: new Date().toISOString() };
+    saveBooks(all);
+
+    bodySend({
+      type: 'book',
+      state: 'open',
+      kind: activeBook.kind,
+      title: activeBook.title,
+      page: activeBookState.page,
+      total: activeBook.pages.length,
+    });
+
+    return {
+      ok: true,
+      id: activeBook.id,
+      title: activeBook.title,
+      kind: activeBook.kind,
+      resumed,
+      page: activeBookState.page,
+      total: activeBook.pages.length,
+    };
+  } catch (err) {
+    console.error('[kevin] book-open hatasi:', err.message);
+    bodySend({ type: 'book', state: 'error', text: err.message });
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('book-next', async () => {
+  if (!activeBook) return { done: true, text: '', page: 0, total: 0, pageChanged: false };
+
+  const all = loadBooks();
+  const total = activeBook.pages.length;
+
+  if (activeBook.kind === 'text') {
+    const { page, chunk } = activeBookState;
+    if (page >= total) {
+      delete all[activeBook.id];
+      saveBooks(all);
+      activeBook = null;
+      bodySend({ type: 'book', state: 'close' });
+      return { done: true, text: '', page, total, pageChanged: false };
+    }
+
+    const curPage = activeBook.pages[page];
+    const chunkText = (curPage && curPage.chunks && curPage.chunks[chunk]) || '';
+    const pageChanged = chunk === 0;
+
+    let nextChunk = chunk + 1;
+    let nextPage = page;
+    if (!curPage || nextChunk >= curPage.chunks.length) {
+      nextPage = page + 1;
+      nextChunk = 0;
+    }
+
+    const mark = bookLastPos || { page, chunk };
+    bookLastPos = { page, chunk };
+    activeBookState = { page: nextPage, chunk: nextChunk };
+    all[activeBook.id] = { page: mark.page, chunk: mark.chunk, title: activeBook.title, at: new Date().toISOString() };
+    saveBooks(all);
+
+    if (pageChanged) {
+      bodySend({ type: 'book', state: 'page', page, total });
+    }
+
+    return { done: false, text: chunkText, page, total, pageChanged };
+  }
+
+  const { page } = activeBookState;
+  if (page >= total) {
+    delete all[activeBook.id];
+    saveBooks(all);
+    activeBook = null;
+    bodySend({ type: 'book', state: 'close' });
+    return { done: true, text: '', page, total, pageChanged: false };
+  }
+
+  let text = '';
+  try {
+    if (prefetchedPage.page === page && prefetchedPage.promise) {
+      text = await prefetchedPage.promise;
+    } else {
+      const b64 = await activeBook.loadPage(page);
+      text = await describeImages([b64], MANGA_QUESTION, 6);
+    }
+  } catch (err) {
+    console.error('[kevin] manga sayfa okuma hatasi:', err.message);
+    text = 'Sayfa okunamadi.';
+  }
+
+  const nextPage = page + 1;
+  if (nextPage < total) {
+    prefetchedPage = {
+      page: nextPage,
+      promise: (async () => {
+        try {
+          const nextB64 = await activeBook.loadPage(nextPage);
+          return await describeImages([nextB64], MANGA_QUESTION, 6);
+        } catch (err) {
+          console.warn('[kevin] prefetch hatasi:', err.message);
+          return 'Sayfa okunamadi.';
+        }
+      })(),
+    };
+  } else {
+    prefetchedPage = { page: -1, promise: null };
+  }
+
+  const mark = bookLastPos || { page, chunk: 0 };
+  bookLastPos = { page, chunk: 0 };
+  activeBookState = { page: nextPage, chunk: 0 };
+  all[activeBook.id] = { page: mark.page, chunk: 0, title: activeBook.title, at: new Date().toISOString() };
+  saveBooks(all);
+
+  bodySend({ type: 'book', state: 'page', page, total });
+  return { done: false, text, page, total, pageChanged: true };
+});
+
+ipcMain.handle('book-seek', async (_event, delta) => {
+  if (!activeBook) return { ok: false, error: 'Kitap acik degil' };
+  const total = activeBook.pages.length;
+  const newPage = Math.max(0, Math.min(total - 1, activeBookState.page + Number(delta || 0)));
+  activeBookState = { page: newPage, chunk: 0 };
+  bookLastPos = null;
+  prefetchedPage = { page: -1, promise: null };
+
+  const all = loadBooks();
+  all[activeBook.id] = { page: newPage, chunk: 0, title: activeBook.title, at: new Date().toISOString() };
+  saveBooks(all);
+
+  bodySend({ type: 'book', state: 'page', page: newPage, total });
+  return { ok: true, page: newPage, total };
+});
+
+ipcMain.handle('book-close', async () => {
+  prefetchedPage = { page: -1, promise: null };
+  activeBook = null;
+  bodySend({ type: 'book', state: 'close' });
+  return { ok: true };
+});
+
 app.whenReady().then(async () => {
   if (LAUNCHER) return;
+  console.log(`[kevin] surum ${app.getVersion()} ${process.platform} ${os.release()}, ${os.cpus()[0]?.model || '?'}, mikrofon izni: ${micAccess()}`);
   protocol.handle('kevin', (request) => {
     const url = new URL(request.url);
     const filePath = path.join(__dirname, url.pathname);
     return net.fetch(pathToFileURL(filePath).toString());
   });
 
-  if (BRAIN_MODE) startBodyBridge();
+  if (BRAIN_MODE) {
+    startBodyBridge();
+    const readyCfg = loadConfig();
+    warmVoice();
+    if (readyCfg.provider === 'agy') {
+      agyBrain.warm({
+        model: agyModelFor(readyCfg),
+        dirs: [HOME],
+        intro: agyIntro(buildPersona(readyCfg, AGY_PERSONA), HOME),
+      });
+    }
+    const checkUpdates = async () => {
+      try {
+        const res = await updater.check();
+        if (res && res.available) {
+          lastUpdate = res;
+          bodySend({ type: 'update', version: res.version });
+        }
+      } catch (err) {
+        console.error('[updater] kontrol hatasi:', err.message);
+      }
+    };
+    setTimeout(checkUpdates, 30000);
+    setInterval(checkUpdates, 6 * 60 * 60 * 1000);
+  }
   if (process.env.KEVIN_TYPER_SHOT) {
     liveType('/home/kevin/ornek.py', 'import random\n\n# Zar at\ndef zar(kac=2):\n    return [random.randint(1, 6) for _ in range(kac)]\n\nif __name__ == "__main__":\n    print("Zarlar:", zar())\n'.repeat(3));
     return;

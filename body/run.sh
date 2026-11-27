@@ -7,7 +7,38 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Zaten aciksa ikinci bir Kevin (ve ikinci beyin) acma
+FILES=()
+GODOT_ARGS=()
+for a in "$@"; do
+  case "$a" in file://*) a="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1][7:]))' "$a")" ;; esac
+  if [ -e "$a" ]; then FILES+=("$(readlink -f "$a")"); else GODOT_ARGS+=("$a"); fi
+done
+set -- ${GODOT_ARGS[@]+"${GODOT_ARGS[@]}"}
+
+send_files() {
+  python3 - "$@" <<'PY'
+import json, os, socket, sys, time
+deadline = time.time() + float(sys.argv[1])
+msg = (json.dumps({"type": "drop", "files": sys.argv[2:]}) + "\n").encode()
+while time.time() < deadline:
+    try:
+        s = socket.create_connection(("127.0.0.1", 47630), timeout=2)
+        time.sleep(float(os.environ.get("KEVIN_SEND_DELAY", "0.3")))
+        s.sendall(msg)
+        time.sleep(0.3)
+        s.close()
+        sys.exit(0)
+    except OSError:
+        time.sleep(1)
+sys.exit(1)
+PY
+}
+
 if pgrep -f -- "--path $HERE( |$)" >/dev/null 2>&1; then
+  if [ ${#FILES[@]} -gt 0 ]; then
+    send_files 5 "${FILES[@]}"
+    exit $?
+  fi
   echo "Kevin zaten calisiyor."
   exit 0
 fi
@@ -41,4 +72,12 @@ EOF
   hyprctl keyword source "$RULES" >/dev/null
 fi
 
+if [ ${#FILES[@]} -gt 0 ]; then
+  "$GODOT" --path "$HERE" "$@" &
+  GPID=$!
+  sleep 4
+  KEVIN_SEND_DELAY=10 send_files 90 "${FILES[@]}" || true
+  wait "$GPID"
+  exit $?
+fi
 exec "$GODOT" --path "$HERE" "$@"

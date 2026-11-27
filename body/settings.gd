@@ -30,6 +30,8 @@ const PROVIDERS := {
 		"url": "https://integrate.api.nvidia.com/v1", "keys": "https://build.nvidia.com/settings/api-keys"},
 	"ollama": {"label": "Ollama (yerel)", "model": "qwen3:8b", "local": true,
 		"url": "http://127.0.0.1:11434/v1", "keys": "https://ollama.com/download"},
+	"agy": {"label": "Antigravity (agy)", "model": "gemini-3.8-flash-medium", "local": true,
+		"url": "", "keys": "https://antigravity.google"},
 }
 
 ## Sohbet modeli olmayanlar (ses, guvenlik, gomme...) listede gorunmesin

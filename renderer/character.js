@@ -475,6 +475,152 @@ async function voiceReply(text, cfg) {
 // Govdenin menusu acikken duymuyor
 let bodyMenuOpen = false;
 
+// --- Kitap okuma durumu ve dongusu ---
+let bookReading = false;
+let readingSession = 0;
+let bookPaused = false;
+let bookPauseTimer = null;
+let bookResumeResolver = null;
+let readingText = '';
+
+function clearBookPauseTimer() {
+  if (bookPauseTimer) {
+    clearTimeout(bookPauseTimer);
+    bookPauseTimer = null;
+  }
+}
+
+function resetBookPauseTimer() {
+  clearBookPauseTimer();
+  bookPauseTimer = setTimeout(() => {
+    console.log('[kevin] kitap duraklamada 10 dk zaman asimi, kapatiliyor');
+    closeReading();
+  }, 10 * 60 * 1000);
+}
+
+function pauseReading() {
+  if (!bookReading || bookPaused) return;
+  bookPaused = true;
+  stopCurrentAudio();
+  setBusy(null);
+  window.kevinAPI.bodyEvent({ type: 'book', state: 'pause' });
+  resetBookPauseTimer();
+}
+
+function resumeReading() {
+  if (!bookReading || !bookPaused) return;
+  bookPaused = false;
+  clearBookPauseTimer();
+  window.kevinAPI.bodyEvent({ type: 'book', state: 'resume' });
+  if (bookResumeResolver) {
+    const res = bookResumeResolver;
+    bookResumeResolver = null;
+    res();
+  }
+}
+
+function closeReading() {
+  if (!bookReading) return;
+  bookReading = false;
+  bookPaused = false;
+  clearBookPauseTimer();
+  stopCurrentAudio();
+  setBusy(null);
+  if (bookResumeResolver) {
+    const res = bookResumeResolver;
+    bookResumeResolver = null;
+    res();
+  }
+  window.kevinAPI.bodyEvent({ type: 'book', state: 'close' });
+  window.kevinAPI.bookClose();
+}
+
+function waitForResume() {
+  if (!bookPaused) return Promise.resolve();
+  return new Promise((resolve) => {
+    bookResumeResolver = resolve;
+  });
+}
+
+async function startReading(paths) {
+  if (bookReading) closeReading();
+  const session = ++readingSession;
+  const live = () => bookReading && session === readingSession;
+
+  try {
+    const book = await window.kevinAPI.bookOpen(paths);
+    if (!book || !book.ok) {
+      const isTr = ((await window.kevinAPI.getConfig()).lang || 'tr') === 'tr';
+      const line = isTr ? 'Bu dosyayı okuyamadım.' : 'I could not read this file.';
+      showBubble(line);
+      await speak(line);
+      return;
+    }
+
+    bookReading = true;
+    bookPaused = false;
+    clearBookPauseTimer();
+
+    const cfg = await window.kevinAPI.getConfig();
+    const isTr = (cfg.lang || 'tr') === 'tr';
+    const L = await window.kevinAPI.langPack();
+
+    let introText = '';
+    if (book.resumed) {
+      introText = (L && L.bookResume) ? L.bookResume : (isTr ? 'Kaldığımız yerden devam ediyorum.' : 'Continuing from where we left off.');
+    } else {
+      if (L && L.bookStart) {
+        introText = L.bookStart.replace('{title}', book.title);
+      } else {
+        introText = isTr ? `Ooo, ${book.title}. Okuyorum.` : `Ooh, ${book.title}. Let me read.`;
+      }
+    }
+
+    showBubble(introText);
+    await speak(introText);
+    if (!live()) return;
+
+    let currentChunk = await window.kevinAPI.bookNext();
+    if (!live() || !currentChunk || currentChunk.done) {
+      closeReading();
+      return;
+    }
+    let audioPromise = synth(currentChunk.text);
+
+    while (live() && currentChunk && !currentChunk.done) {
+      let nextChunk = null;
+      let nextAudioPromise = null;
+      const nextReady = window.kevinAPI.bookNext().then((n) => {
+        nextChunk = n;
+        if (live() && n && !n.done && n.text) nextAudioPromise = synth(n.text);
+      });
+      const audioBase64 = await audioPromise;
+      while (live()) {
+        if (bookPaused) {
+          await waitForResume();
+          if (!live()) break;
+        }
+        readingText = currentChunk.text;
+        showBubble(currentChunk.text);
+        await playAudio(audioBase64);
+        if (!bookPaused) break;
+      }
+      readingText = '';
+      if (!live()) break;
+      await nextReady;
+      currentChunk = nextChunk;
+      audioPromise = nextAudioPromise || Promise.resolve(null);
+    }
+
+    if (live() && (!currentChunk || currentChunk.done)) {
+      closeReading();
+    }
+  } catch (err) {
+    console.error('[kevin] okuma hatasi:', err);
+    if (session === readingSession) closeReading();
+  }
+}
+
 if (BRAIN) {
   window.kevinAPI.onBodyCommand(async (msg) => {
     if (msg.type === 'lang') {
@@ -484,12 +630,67 @@ if (BRAIN) {
     }
     if (msg.type === 'menu') {
       bodyMenuOpen = Boolean(msg.open);
-      if (!bodyMenuOpen) refreshLiveCfg();
+      if (!bodyMenuOpen) {
+        refreshLiveCfg();
+        initHandsFree();
+      }
       if (bodyMenuOpen && voiceActive() && !voiceBusy) endVoiceSession();
+      return;
+    }
+    if (msg.type === 'drop' && Array.isArray(msg.files) && msg.files.length > 0) {
+      const voiceFiles = [];
+      const bookFiles = [];
+      for (const f of msg.files) {
+        const lower = f.toLowerCase();
+        if (lower.endsWith('.pth') || lower.endsWith('.index') || lower.endsWith('.onnx') || lower.endsWith('.onnx.json')) {
+          voiceFiles.push(f);
+        } else {
+          bookFiles.push(f);
+        }
+      }
+      if (voiceFiles.length > 0) {
+        const res = await window.kevinAPI.voiceInstall(voiceFiles);
+        const isTr = ((await window.kevinAPI.getConfig()).lang || 'tr') === 'tr';
+        let line;
+        if (!res || !res.ok) line = (res && res.error) || (isTr ? 'Bu sesi kuramadım.' : 'I could not install this voice.');
+        else if (res.needsRvc) line = isTr ? 'Sesi kurdum ama RVC eklentisi lazım. Ayarlar, Ses modeli kısmından kurabilirsin.' : 'Voice added, but it needs the RVC add-on. Install it from Settings, Voice model.';
+        else line = isTr ? 'Yeni sesim nasıl?' : 'How do I sound now?';
+        showBubble(line);
+        await speak(line);
+      }
+      if (bookFiles.length > 0) {
+        for (let i = 0; i < 150 && (voiceBusy || voiceState === VOICE_SPEAKING); i++) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        startReading(bookFiles);
+      }
+      return;
+    }
+    if (msg.type === 'drop_failed') {
+      const isTr = ((await window.kevinAPI.getConfig()).lang || 'tr') === 'tr';
+      const line = isTr ? 'Dosyayı göremedim. Sağ tıklayıp Dosya aç kısmından seçebilirsin.' : 'I could not see that file. Right-click me and use Open file.';
+      showBubble(line);
+      await speak(line);
+      return;
+    }
+    if (msg.type === 'voice_test') {
+      const isTr = ((await window.kevinAPI.getConfig()).lang || 'tr') === 'tr';
+      const line = isTr ? 'Merhaba, ben Kevin. Sesim nasıl?' : 'Hi, I am Kevin. How do I sound?';
+      showBubble(line);
+      await speak(line);
+      return;
+    }
+    if (msg.type === 'book_cmd') {
+      if (msg.cmd === 'pause') pauseReading();
+      else if (msg.cmd === 'resume') resumeReading();
+      else if (msg.cmd === 'close') closeReading();
       return;
     }
     if (msg.type === 'wake') {
       // Karaktere tiklandi: adi soylenmis gibi
+      if (bookReading && !bookPaused) {
+        pauseReading();
+      }
       const cfg = await window.kevinAPI.getConfig();
       handleVoice(cfg.name || 'Kevin');
     }
@@ -499,6 +700,41 @@ if (BRAIN) {
 async function handleVoice(text) {
   if (bodyMenuOpen) return;
   if (BRAIN) window.kevinAPI.bodyEvent({ type: 'heard', text });
+
+  // Durakliyken devam veya kapatma komutlarini yakala
+  if (bookReading && bookPaused) {
+    const resumeWords = ['devam', 'okumaya devam', 'continue', 'devam et', 'sürdür', 'surdur'];
+    const closeWords = ['kapat', 'bırak', 'okumayı bırak', 'stop reading', 'kitabı kapat', 'okumayi birak', 'kitabi kapat', 'birak'];
+    const lower = text.trim().toLowerCase();
+    const cfg = await window.kevinAPI.getConfig();
+    const wakeWords = [(cfg.name || 'Kevin').toLowerCase(), ...(cfg.nicknames || [])];
+    const stripped = stripWakeWord(text, wakeWords).trim().toLowerCase();
+    const check = stripped || lower;
+
+    if (resumeWords.some((w) => check === w || check.startsWith(w + ' ') || check.endsWith(' ' + w))) {
+      clearBookPauseTimer();
+      resumeReading();
+      return;
+    }
+    if (closeWords.some((w) => check === w || check.startsWith(w + ' ') || check.endsWith(' ' + w))) {
+      clearBookPauseTimer();
+      closeReading();
+      return;
+    }
+  }
+
+  // Okurken ses gelirse: isim geciyorsa duraklat ve uyan, gecmiyorsa (kendi sesi) yok say
+  if (bookReading && !bookPaused) {
+    const cfg = await window.kevinAPI.getConfig();
+    const wakeWords = [(cfg.name || 'Kevin').toLowerCase(), ...(cfg.nicknames || [])];
+    const ownVoice = wakeWords.some((w) => w && readingText.toLowerCase().includes(w));
+    if (!ownVoice && findWake(text, wakeWords, true) >= 0) {
+      pauseReading();
+    } else {
+      return;
+    }
+  }
+
   // Bir sey takildiysa kilitli kalmayalim: uzun suredir mesgulse sifirla.
   if (voiceBusy && Date.now() - voiceBusySince > VOICE_STUCK_MS) {
     console.warn('[kevin] takilmis gorunuyor, durum sifirlaniyor');
@@ -893,7 +1129,7 @@ settingsBtn.addEventListener('click', async () => {
   configView.classList.remove('hidden');
 });
 
-const LOCAL_PROVIDERS = ['ollama'];
+const LOCAL_PROVIDERS = ['ollama', 'agy'];
 
 function providerNeedsKey() {
   return !LOCAL_PROVIDERS.includes(providerSelect.value);
@@ -962,26 +1198,73 @@ function routeVoice(audio) {
   }
 }
 
-function speak(text) {
-  return new Promise(async (resolve) => {
+let currentPlayingAudio = null;
+let currentPlayingDone = null;
+
+function stopCurrentAudio() {
+  if (currentPlayingAudio) {
     try {
-      const base64 = await window.kevinAPI.speak(text);
+      currentPlayingAudio.pause();
+      currentPlayingAudio.currentTime = 0;
+    } catch {}
+    currentPlayingAudio = null;
+  }
+  if (currentPlayingDone) {
+    const cb = currentPlayingDone;
+    currentPlayingDone = null;
+    cb();
+  }
+}
+
+async function synth(text) {
+  try {
+    return await window.kevinAPI.speak(text);
+  } catch (err) {
+    console.error('TTS sentez hatasi:', err);
+    return null;
+  }
+}
+
+function playAudio(base64) {
+  return new Promise((resolve) => {
+    stopCurrentAudio();
+    if (!base64) {
+      setBusy(null);
+      resolve();
+      return;
+    }
+    try {
       const audio = new Audio(`data:audio/wav;base64,${base64}`);
+      currentPlayingAudio = audio;
       routeVoice(audio);
       const done = () => {
+        if (currentPlayingAudio === audio) {
+          currentPlayingAudio = null;
+          currentPlayingDone = null;
+        }
         setBusy(null);
         resolve();
       };
+      currentPlayingDone = done;
       audio.onended = done;
       audio.onerror = done;
       setBusy('talk');
-      audio.play();
+      audio.play().catch(done);
     } catch (err) {
       setBusy(null);
-      console.error('TTS hatasi:', err);
+      console.error('TTS calma hatasi:', err);
       resolve();
     }
   });
+}
+
+async function speak(text) {
+  const base64 = await synth(text);
+  if (base64) {
+    await playAudio(base64);
+  } else {
+    setBusy(null);
+  }
 }
 
 const MAX_HISTORY_MESSAGES = 16;
@@ -1140,7 +1423,7 @@ async function initHandsFree() {
 
   const cfg = await window.kevinAPI.getConfig();
   if (cfg.handsFree === false) return;
-  if (!cfg.apiKey && cfg.provider !== 'ollama') return;
+  if (!cfg.apiKey && !LOCAL_PROVIDERS.includes(cfg.provider)) return;
 
   try {
     const assetsURL = new URL('vad-assets/', window.location.href).href;
@@ -1178,8 +1461,20 @@ async function initHandsFree() {
       },
     });
     vadInstance.start();
+    console.log('[kevin] mikrofon dinleniyor');
   } catch (err) {
-    console.error('[kevin] VAD baslatilamadi:', err.message);
+    vadInstance = null;
+    console.error('[kevin] VAD baslatilamadi:', err && (err.name || ''), err && err.message);
+    if (err && (err.name === 'NotAllowedError' || err.name === 'NotFoundError' || err.name === 'NotReadableError')) {
+      const info = await window.kevinAPI.micProblem(err.name).catch(() => ({}));
+      const isTr = (cfg.lang || 'tr') === 'tr';
+      let line;
+      if (err.name === 'NotFoundError') line = isTr ? 'Mikrofon bulamadım. Bir mikrofon takılı mı?' : 'I could not find a microphone. Is one plugged in?';
+      else if (info.platform === 'win32') line = isTr ? 'Mikrofona erişemiyorum. Windows Ayarlar, Gizlilik, Mikrofon kısmında masaüstü uygulamalarına izin ver.' : 'I cannot reach the microphone. In Windows Settings, Privacy, Microphone, allow desktop apps.';
+      else line = isTr ? 'Mikrofona erişemiyorum. Başka bir program kullanıyor olabilir.' : 'I cannot reach the microphone. Another app may be using it.';
+      showBubble(line);
+      speak(line);
+    }
   }
 }
 

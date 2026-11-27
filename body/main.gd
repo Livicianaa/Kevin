@@ -65,6 +65,11 @@ var shot_index := 0
 var shot_clock := 0.0
 var test_throw := false
 var test_throw_high := false
+var test_book := false
+var book_test_clock := 0.0
+var book_test_step := 0
+var last_voices := {}
+var update_info := {}
 
 
 func _ready() -> void:
@@ -76,7 +81,7 @@ func _ready() -> void:
 	Engine.max_fps = SysProfile.max_fps(sys_profile)
 	# Zayif makinede kenar yumusatma daha hafif
 	get_viewport().msaa_3d = Viewport.MSAA_2X if sys_profile.tier == SysProfile.TIER_LOW else Viewport.MSAA_4X
-	print("[kevin] sistem: %d cekirdek, %.1f GB, %s, %d ekran %d Hz -> %s, %d fps" % [sys_profile.cores, sys_profile.ram_gb, sys_profile.gpu, sys_profile.screens, sys_profile.refresh, sys_profile.tier, Engine.max_fps])
+	print("[kevin] sistem: %s, %d cekirdek, %.1f GB, %s, %d ekran %d Hz -> %s, %d fps" % [sys_profile.cpu, sys_profile.cores, sys_profile.ram_gb, sys_profile.gpu, sys_profile.screens, sys_profile.refresh, sys_profile.tier, Engine.max_fps])
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--grab="):
@@ -100,6 +105,8 @@ func _ready() -> void:
 			test_anim = arg.substr(7)
 		elif arg.begins_with("--emote="):
 			test_emote = arg.substr(8)
+		elif arg == "--book-test":
+			test_book = true
 		elif arg.begins_with("--shots="):
 			shot_times = []
 			for v in arg.substr(8).split(","):
@@ -115,7 +122,8 @@ func _ready() -> void:
 	if usable_right <= usable_left:
 		usable_left = desk_rect.position.x
 		usable_right = desk_rect.end.x
-	get_window().size = WIN_SIZE
+	_win_size(WIN_SIZE)
+	_calibrate_xwayland(true)
 
 	_build_camera()
 	get_viewport().size_changed.connect(_on_viewport_resized)
@@ -128,6 +136,8 @@ func _ready() -> void:
 	character.skin_path = body_settings.skin
 	_apply_behaviour(body_settings)
 	add_child(character)
+	character.book_cmd_requested.connect(_on_book_cmd_requested)
+	get_window().files_dropped.connect(_on_files_dropped)
 	var margin := 0.6
 	character.bounds = Vector2(_px_to_world_x(desk_rect.position.x) + margin, _px_to_world_x(desk_rect.end.x) - margin)
 	# Baslangicta farenin bulundugu ekranin ortasinda dursun
@@ -149,6 +159,9 @@ func _ready() -> void:
 		brain.played.connect(character.on_brain_play)
 		brain.mood.connect(character.on_brain_mood)
 		brain.beat.connect(character.on_beat)
+		brain.book.connect(_on_brain_book)
+		brain.voices.connect(_on_brain_voices)
+		brain.update.connect(_on_brain_update)
 		brain.said.connect(func(t): print("[kevin] diyor: ", t))
 		brain.heard.connect(func(t): print("[kevin] duydu: ", t))
 
@@ -163,8 +176,45 @@ var sys_profile := {}
 
 
 func testing_flags() -> bool:
-	return test_offscreen or test_grab != "" or test_diag or shot_prefix != "" or test_menu != "" or test_emote != "" or test_anim != ""
+	return test_offscreen or test_grab != "" or test_diag or shot_prefix != "" or test_menu != "" or test_emote != "" or test_anim != "" or test_book
 var brain: Node = null
+
+
+func _on_files_dropped(files: PackedStringArray) -> void:
+	var real: Array = []
+	for f in files:
+		var p := f.strip_edges()
+		if p.begins_with("file://"):
+			p = p.substr(7).uri_decode()
+		if p != "" and (FileAccess.file_exists(p) or DirAccess.dir_exists_absolute(p)):
+			real.append(p)
+	character.on_file_dropped()
+	if brain:
+		if real.is_empty():
+			brain.send({"type": "drop_failed"})
+		else:
+			brain.send({"type": "drop", "files": real})
+
+
+func _on_book_cmd_requested(cmd: String) -> void:
+	if brain:
+		brain.send({"type": "book_cmd", "cmd": cmd})
+
+
+func _on_brain_book(msg: Dictionary) -> void:
+	character.on_book(msg)
+
+
+func _on_brain_voices(msg: Dictionary) -> void:
+	last_voices = msg
+	if menu_ui:
+		menu_ui.set_voices(msg)
+
+
+func _on_brain_update(msg: Dictionary) -> void:
+	update_info = msg
+	if menu_ui:
+		menu_ui.set_update(msg)
 
 
 func _notification(what: int) -> void:
@@ -197,6 +247,90 @@ func _strip_decorations() -> void:
 var edge_nodes: Array[Node] = []
 var screen_check_t := 0.0
 var screen_signature := ""
+var hypr_origin := Vector2i.ZERO
+var xw_scale := 1.0
+var xw_off := Vector2.ZERO
+var xw_calibrated := false
+var hypr_scales: Array[float] = []
+
+
+## XWayland penceresi ilk acildigi monitorun olcegini omur boyu tasiyor
+## (force_zero_scaling). Sadece olcekli ekran varsa (ornek: tek basina 1.5
+## olcekli laptop) X konum ve boyutlari o olcekle bolunuyordu: pencere
+## kuculuyor, Kevin yanlis yerde duruyordu. Donusum dogrusal
+## (mantiksal = xw_off + X / xw_scale); Hyprland'in gordugu konum/boyutla
+## pencerenin X konum/boyutu karsilastirilarak canli olculur.
+func _calibrate_xwayland(wait: bool) -> void:
+	if OS.get_environment("HYPRLAND_INSTANCE_SIGNATURE") == "" or test_offscreen:
+		return
+	# Godot ilk acilista pencerenin gercek yerini bilmiyor: bilinen bir X
+	# noktasina tasiyip Hyprland'in o noktayi nerede gosterdigine bakiyoruz
+	var probe := Vector2i(DisplayServer.window_get_position())
+	if wait:
+		probe = Vector2i(100, 100)
+		DisplayServer.window_set_position(probe)
+	var last := Vector2(-99999, -99999)
+	for i in (30 if wait else 1):
+		if wait:
+			OS.delay_msec(40)
+		var c := _hypr_self()
+		if c.is_empty():
+			continue
+		var hs: Array = c.get("size", [0, 0])
+		var xs := Vector2(DisplayServer.window_get_size())
+		if float(hs[0]) < 20.0 or xs.x < 20.0:
+			continue
+		var sc := xs.x / float(hs[0])
+		var best := -1.0
+		for m_sc in hypr_scales:
+			if absf(m_sc - sc) < 0.04:
+				best = m_sc
+		if best < 0.0:
+			continue
+		var at: Array = c.get("at", [0, 0])
+		var hp := Vector2(float(at[0]), float(at[1])) - Vector2(hypr_origin)
+		if wait and hp != last:
+			last = hp
+			continue
+		var changed := absf(best - xw_scale) > 0.01
+		xw_scale = best
+		xw_off = (hp - Vector2(probe) / best).round()
+		xw_calibrated = true
+		if changed or wait:
+			print("[kevin] XWayland olcegi %.2f, kayma %s" % [xw_scale, str(xw_off)])
+		if changed:
+			_win_size(WIN_SIZE)
+		return
+
+
+func _hypr_self() -> Dictionary:
+	var out := []
+	if OS.execute("hyprctl", ["clients", "-j"], out) != 0 or out.is_empty():
+		return {}
+	var data = JSON.parse_string(out[0])
+	if not (data is Array):
+		return {}
+	var pid := OS.get_process_id()
+	for c in data:
+		if int(c.get("pid", -1)) == pid and c.get("xwayland", false):
+			return c
+	return {}
+
+
+func _vp() -> Vector2:
+	return get_viewport().get_visible_rect().size / xw_scale
+
+
+func _win_size(logical: Vector2i) -> void:
+	get_window().size = Vector2i((Vector2(logical) * xw_scale).round())
+
+
+func _win_pos(logical: Vector2) -> void:
+	DisplayServer.window_set_position(Vector2i(((logical - xw_off) * xw_scale).round()))
+
+
+func _mouse() -> Vector2:
+	return xw_off + Vector2(DisplayServer.mouse_get_position()) / xw_scale
 
 
 ## Ekran takilip cikarilinca, cozunurluk/olcek degisince ya da pencereler
@@ -208,6 +342,8 @@ func _check_screens(delta: float) -> void:
 		return
 	screen_check_t = 0.0
 	_read_screens()
+	if not xw_calibrated and menu_state == MENU_CLOSED and splash_state == SPLASH_NONE:
+		_calibrate_xwayland(false)
 	if usable_right <= usable_left:
 		usable_left = desk_rect.position.x
 		usable_right = desk_rect.end.x
@@ -216,6 +352,7 @@ func _check_screens(delta: float) -> void:
 		return
 	if screen_signature != "":
 		print("[kevin] ekran duzeni degisti, yeniden kuruluyor")
+		xw_calibrated = false
 		_build_world_edges()
 	screen_signature = sig
 
@@ -259,7 +396,10 @@ func _read_screens() -> void:
 		return
 
 	for i in DisplayServer.get_screen_count():
-		var r := Rect2i(DisplayServer.screen_get_position(i), DisplayServer.screen_get_size(i))
+		# Gorev cubugu (Windows) / panel haric alan: ayaklar cubugun arkasinda kalmasin
+		var r := DisplayServer.screen_get_usable_rect(i)
+		if r.size.x <= 0 or r.size.y <= 0:
+			r = Rect2i(DisplayServer.screen_get_position(i), DisplayServer.screen_get_size(i))
 		if r.size.x <= 0 or r.size.y <= 0:
 			continue
 		screens.append(r)
@@ -278,10 +418,18 @@ func _hyprland_screens() -> Array[Rect2i]:
 	if OS.execute("hyprctl", ["monitors", "-j"], out) != 0 or out.is_empty():
 		return result
 	var data = JSON.parse_string(out[0])
-	if not (data is Array):
+	if not (data is Array) or data.is_empty():
 		return result
+	var min_x := 999999
+	var min_y := 999999
+	for m in data:
+		min_x = mini(min_x, int(m.get("x", 0)))
+		min_y = mini(min_y, int(m.get("y", 0)))
+	hypr_origin = Vector2i(min_x, min_y)
+	hypr_scales.clear()
 	for m in data:
 		var scale: float = float(m.get("scale", 1.0))
+		hypr_scales.append(scale)
 		var w := roundi(float(m.width) / scale)
 		var h := roundi(float(m.height) / scale)
 		# 90/270 derece dondurulmus ekranlarda en/boy yer degistiriyor
@@ -289,7 +437,7 @@ func _hyprland_screens() -> Array[Rect2i]:
 			var tmp := w
 			w = h
 			h = tmp
-		result.append(Rect2i(int(m.x), int(m.y), w, h))
+		result.append(Rect2i(int(m.x) - min_x, int(m.y) - min_y, w, h))
 	return result
 
 
@@ -318,15 +466,16 @@ func _read_usable_area() -> void:
 		var size: Array = c.get("size", [0, 0])
 		if float(size[0]) < 200 or float(size[1]) < 200:
 			continue
-		var cx := float(at[0]) + float(size[0]) / 2.0
+		var at_x := float(at[0]) - float(hypr_origin.x)
+		var cx := at_x + float(size[0]) / 2.0
 		for i in screens.size():
 			if cx >= screens[i].position.x and cx < screens[i].end.x:
 				var u: Vector2 = usable[i]
 				# Ilk goruldugunde ekran siniri yerine pencerenin kenari
-				if u.x == screens[i].position.x or float(at[0]) - 10.0 < u.x:
-					u.x = maxf(screens[i].position.x, float(at[0]) - 10.0)
-				if u.y == screens[i].end.x or float(at[0]) + float(size[0]) + 10.0 > u.y:
-					u.y = minf(screens[i].end.x, float(at[0]) + float(size[0]) + 10.0)
+				if u.x == screens[i].position.x or at_x - 10.0 < u.x:
+					u.x = maxf(screens[i].position.x, at_x - 10.0)
+				if u.y == screens[i].end.x or at_x + float(size[0]) + 10.0 > u.y:
+					u.y = minf(screens[i].end.x, at_x + float(size[0]) + 10.0)
 				usable[i] = u
 	usable_left = usable[0].x if not usable.is_empty() else usable_left
 	usable_right = usable[usable.size() - 1].y if not usable.is_empty() else usable_right
@@ -510,11 +659,11 @@ func _apply_window() -> void:
 	if test_offscreen:
 		DisplayServer.window_set_position(Vector2i(9000, 9000))
 	else:
-		DisplayServer.window_set_position(Vector2i(roundi(win_pos.x), roundi(win_pos.y)))
+		_win_pos(win_pos)
 	# Kamera pencerenin dunyadaki merkezine bakiyor. Istenen degil GERCEK boyut:
 	# menu kapaninca pencere Hyprland'de birkac kare buyuk kaliyor, o arada
 	# WIN_SIZE'a gore cizilince Kevin dev gorunup kayboluyordu.
-	var vp := get_viewport().get_visible_rect().size
+	var vp := _vp()
 	var center := _px_to_world(win_pos + vp / 2.0)
 	camera.position = Vector3(center.x, center.y, 30)
 	camera.size = vp.y / PX_PER_UNIT
@@ -538,7 +687,7 @@ func is_holding() -> bool:
 
 ## Fare masaustu koordinatinda: pencere tasinsa da tutma noktasi kaymasin.
 func _mouse_world() -> Vector3:
-	return _px_to_world(Vector2(DisplayServer.mouse_get_position()))
+	return _px_to_world(_mouse())
 
 
 ## Basildigi an tutar. (Tik/surukleme ayrimi icin 6 px esik denendi; karakter
@@ -751,6 +900,7 @@ func _open_menu() -> void:
 	# Menudeyken Kevin duymasin (ayar yaparken konusulanlar ona gitmesin)
 	if brain:
 		brain.send({"type": "menu", "open": true})
+		brain.send({"type": "voices_get"})
 
 
 ## Buyuyen menu penceresi: gercek boyutuyla Kevin'in etrafinda ortali, kamera
@@ -758,7 +908,7 @@ func _open_menu() -> void:
 func _place_growing_window(vp: Vector2) -> void:
 	var center := Vector2(menu_screen.get_center())
 	var pos := Vector2i((center - vp / 2.0).round())
-	DisplayServer.window_set_position(pos)
+	_win_pos(Vector2(pos))
 	var mid := _px_to_world(Vector2(pos) + vp / 2.0)
 	camera.position = Vector3(mid.x, mid.y, 30)
 	camera.size = vp.y / PX_PER_UNIT
@@ -770,7 +920,7 @@ func _place_growing_window(vp: Vector2) -> void:
 func _on_viewport_resized() -> void:
 	if splash_state != SPLASH_NONE or camera == null:
 		return
-	var vp := get_viewport().get_visible_rect().size
+	var vp := _vp()
 	if menu_state == MENU_RESIZING:
 		_place_growing_window(vp)
 	elif menu_state == MENU_CLOSED:
@@ -816,7 +966,7 @@ func _finish_close() -> void:
 	character.menu_yaw = 0.0
 	character.start_ragdoll()
 	character.menu_lift = 0.0
-	get_window().size = WIN_SIZE
+	_win_size(WIN_SIZE)
 	win_pos = _desired_window_pos()
 	_apply_window()
 
@@ -838,10 +988,17 @@ func _build_menu_ui(size_px: Vector2) -> void:
 	menu_bg.visible = true
 
 	menu_layer = CanvasLayer.new()
+	menu_layer.scale = Vector2(xw_scale, xw_scale)
 	add_child(menu_layer)
 	menu_ui = Menu.new()
 	menu_layer.add_child(menu_ui)
+	menu_ui.book_active = character.book_active
+	menu_ui.book_paused = character.is_book_paused()
 	menu_ui.build(size_px)
+	if not last_voices.is_empty():
+		menu_ui.set_voices(last_voices)
+	if not update_info.is_empty():
+		menu_ui.set_update(update_info)
 	menu_ui.close_requested.connect(_close_menu)
 	menu_ui.skin_chosen.connect(func(path):
 		character.set_skin(path)
@@ -855,8 +1012,40 @@ func _build_menu_ui(size_px: Vector2) -> void:
 	menu_ui.action.connect(_menu_action)
 
 
-func _menu_action(name: String) -> void:
+func _menu_action(name: String, arg: Variant = null) -> void:
 	match name:
+		"book_resume":
+			if brain:
+				brain.send({"type": "book_cmd", "cmd": "resume"})
+			character.on_book({"type": "book", "state": "resume"})
+			_close_menu()
+		"book_close":
+			if brain:
+				brain.send({"type": "book_cmd", "cmd": "close"})
+			character.on_book({"type": "book", "state": "close"})
+			_close_menu()
+		"voices_get":
+			if brain:
+				brain.send({"type": "voices_get"})
+		"voice_set":
+			if brain:
+				brain.send({"type": "voice_set", "id": str(arg)})
+		"voice_pitch":
+			if brain and arg is Dictionary:
+				brain.send({"type": "voice_pitch", "id": str(arg.get("id", "")), "pitch": arg.get("pitch")})
+		"voice_test":
+			if brain:
+				brain.send({"type": "voice_test"})
+		"voice_remove":
+			if brain:
+				brain.send({"type": "voice_remove", "id": str(arg)})
+		"rvc_install":
+			if brain:
+				brain.send({"type": "rvc_install"})
+		"drop_files":
+			if brain and arg is Array:
+				brain.send({"type": "drop", "files": arg})
+			_close_menu()
 		"auto_rotate_on":
 			menu_auto_rotate = true
 		"auto_rotate_off":
@@ -868,6 +1057,9 @@ func _menu_action(name: String) -> void:
 			# Menuden "Acilis ekranini oynat": menu kapaninca
 			replay_splash = true
 			_close_menu()
+		"update":
+			if brain:
+				brain.send({"type": "update_install"})
 		"emote":
 			character.play_emote(character._random_emote(["fun", "social", "dance"].pick_random()))
 		"relang":
@@ -877,7 +1069,7 @@ func _menu_action(name: String) -> void:
 				brain.send({"type": "lang"})
 			menu_layer.queue_free()
 			menu_vp.queue_free()
-			_build_menu_ui(get_viewport().get_visible_rect().size)
+			_build_menu_ui(_vp())
 			menu_ui.open_instant("yapay_zeka")
 
 
@@ -895,7 +1087,7 @@ func _menu_input(event: InputEvent) -> void:
 
 
 func _update_menu(delta: float) -> void:
-	var vp := get_viewport().get_visible_rect().size
+	var vp := _vp()
 	if menu_state == MENU_FLYING:
 		# Kucuk pencere Kevin'le birlikte yay cizerek menunun ortasina gider
 		menu_travel_t += delta
@@ -909,7 +1101,7 @@ func _update_menu(delta: float) -> void:
 		if t >= 1.0:
 			character.menu_yaw = 0.0
 			menu_state = MENU_RESIZING
-			get_window().size = menu_screen.size
+			_win_size(menu_screen.size)
 			DisplayServer.window_move_to_foreground()
 		return
 	if menu_state == MENU_RESIZING:
@@ -921,7 +1113,7 @@ func _update_menu(delta: float) -> void:
 		# boyuta gore: hangi karede olursa olsun Kevin yerinde ve gorunur.
 		_place_growing_window(vp)
 		if absf(vp.x - menu_screen.size.x) < 4 and absf(vp.y - menu_screen.size.y) < 4:
-			DisplayServer.window_set_position(menu_screen.position)
+			_win_pos(Vector2(menu_screen.position))
 			menu_state = MENU_OPEN
 			_build_menu_ui(vp)
 		else:
@@ -1001,8 +1193,9 @@ func _start_splash() -> void:
 	character.play_emote("fold_arms", 999.0)
 	character.hold_pose = true
 	DisplayServer.window_set_mouse_passthrough(PackedVector2Array())
-	get_window().size = splash_rect.size
-	DisplayServer.window_set_position(splash_rect.position)
+	_win_size(splash_rect.size)
+	_win_pos(Vector2(splash_rect.position))
+	splash_t = 0.0
 	splash_state = SPLASH_WAIT
 
 
@@ -1013,7 +1206,9 @@ func _build_splash(vp: Vector2) -> void:
 	splash_vp.transparent_bg = true
 	splash_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(splash_vp)
-	Splash.lang = I18n.code_of(Settings.load_brain())
+	var brain_cfg := Settings.load_brain()
+	Splash.lang = I18n.code_of(brain_cfg)
+	Splash.title_name = str(brain_cfg.get("name", "Kevin"))
 	splash_back = Splash.make_back(vp)
 	splash_vp.add_child(splash_back)
 	splash_bg = MeshInstance3D.new()
@@ -1029,6 +1224,7 @@ func _build_splash(vp: Vector2) -> void:
 
 	# On katman
 	splash_layer = CanvasLayer.new()
+	splash_layer.scale = Vector2(xw_scale, xw_scale)
 	add_child(splash_layer)
 	splash_front = Splash.new()
 	splash_layer.add_child(splash_front)
@@ -1053,9 +1249,14 @@ func _splash_camera(vp: Vector2, k: float) -> void:
 
 
 func _update_splash(delta: float) -> void:
-	var vp := get_viewport().get_visible_rect().size
+	var vp := _vp()
 	if splash_state == SPLASH_WAIT:
-		if absf(vp.x - splash_rect.size.x) < 4 and absf(vp.y - splash_rect.size.y) < 4:
+		splash_t += delta
+		# Pencere istenen boyuta gelmezse (Windows olcekleme) sonsuza dek
+		# bekleyip gorunmez kalma: eldeki boyutla basla
+		if (absf(vp.x - splash_rect.size.x) < 4 and absf(vp.y - splash_rect.size.y) < 4) or splash_t > 1.5:
+			if splash_t > 1.5:
+				print("[kevin] acilis penceresi boyutu tutmadi: %s / %s" % [vp, splash_rect.size])
 			_build_splash(vp)
 			splash_state = SPLASH_SHOW
 			splash_t = 0.0
@@ -1068,7 +1269,10 @@ func _update_splash(delta: float) -> void:
 		var k := clampf((splash_t - 0.2) / 1.0, 0.0, 1.0)
 		character.menu_lift = splash_lift + 3.0 * (1.0 - ease(k, 0.35)) - sin(k * PI) * 0.15 * (1.0 if k < 1.0 else 0.0)
 		var ready_brain: bool = brain == null or brain.connected
-		var prog := minf(splash_t / SPLASH_MIN, 0.9 if not ready_brain else 1.0)
+		var prog := minf(splash_t / SPLASH_MIN, 1.0)
+		# Beyin gec acilirsa cubuk durmasin, yavasca ilerlesin (donmus sanilmasin)
+		if not ready_brain and prog > 0.9:
+			prog = 0.9 + 0.08 * (1.0 - exp(-(splash_t - SPLASH_MIN * 0.9) / 2.0))
 		splash_front.set_progress(prog, Splash.tx("splash_ready") if ready_brain and splash_t >= SPLASH_MIN else Splash.tx("splash_loading"))
 		if (ready_brain and splash_t >= SPLASH_MIN) or splash_t >= SPLASH_MAX:
 			_end_splash()
@@ -1107,7 +1311,7 @@ func _finish_splash() -> void:
 	character.hold_pose = false
 	character.start_ragdoll()
 	character.menu_lift = 0.0
-	get_window().size = WIN_SIZE
+	_win_size(WIN_SIZE)
 	camera.size = WIN_SIZE.y / PX_PER_UNIT
 	win_pos = _desired_window_pos()
 	_apply_window()
@@ -1131,7 +1335,7 @@ func _process(delta: float) -> void:
 		if test_menu_clock > 5.0 and test_menu_clock < 5.1:
 			_close_menu()
 		if test_diag and Engine.get_process_frames() % 20 == 0:
-			print("MENU t=%.2f durum=%d k=%.2f vp=%s mod=%d" % [test_menu_clock, menu_state, menu_k, str(get_viewport().get_visible_rect().size), character.mode])
+			print("MENU t=%.2f durum=%d k=%.2f vp=%s mod=%d" % [test_menu_clock, menu_state, menu_k, str(_vp()), character.mode])
 	if menu_state != MENU_CLOSED:
 		_update_menu(delta)
 		_process_shots(delta)
@@ -1148,6 +1352,20 @@ func _process(delta: float) -> void:
 	if test_anim != "" and character.mode == 0 and character.anim_state != test_anim:
 		character.walk_target = character.bounds.y if test_anim == "walk" else character.root_x
 		character._set_state(test_anim, 999.0)
+	if test_book and character.mode == 0:
+		book_test_clock += delta
+		if book_test_step == 0 and book_test_clock >= 0.5:
+			book_test_step = 1
+			character.on_book({"type": "book", "state": "open", "title": "Sefiller", "page": 1, "total": 100})
+		elif book_test_step == 1 and book_test_clock >= 3.0:
+			book_test_step = 2
+			character.on_book({"type": "book", "state": "page", "page": 2, "total": 100})
+		elif book_test_step == 2 and book_test_clock >= 4.5:
+			book_test_step = 3
+			character.on_book({"type": "book", "state": "pause"})
+		elif book_test_step == 3 and book_test_clock >= 6.0:
+			book_test_step = 4
+			character.on_book({"type": "book", "state": "close"})
 	_update_window()
 	_update_mouse_passthrough(delta)
 	_process_shots(delta)

@@ -9,7 +9,7 @@ extends Control
 signal close_requested
 signal saved(needs_reload: bool)
 signal skin_chosen(path: String)
-signal action(name: String)
+signal action(name: String, arg: Variant)
 
 const Settings := preload("res://settings.gd")
 const I18n := preload("res://i18n.gd")
@@ -54,12 +54,32 @@ var current_cat := ""
 var skin_grid: GridContainer
 var skin_cards := {}
 
+var book_active := false
+var book_paused := false
+
+var voice_section_box: VBoxContainer
+var voices_list_box: VBoxContainer
+var voice_pitch_box: VBoxContainer
+var voice_pitch_slider: HSlider
+var voice_pitch_auto: Button
+var voice_pitch_label: Label
+var rvc_status_box: VBoxContainer
+var rvc_label: Label
+var rvc_install_btn: LinkButton
+var rvc_progress: ProgressBar
+var voices_data := {}
+var active_voice_id := "default"
+var update_info := {}
+var update_box: VBoxContainer
+
 var slim_btns := []
 var scale_slider: HSlider
 var scale_label: Label
 var mode_btns := []
 var provider_opt: OptionButton
 var provider_row: Control
+var local_provider_opt: OptionButton
+var local_provider_row: Control
 ## Model listesi menunun icinde, sabit yukseklikte kayan liste. (Acilir
 ## liste ayri bir pencere olarak ekranin altina acilip kesiliyordu.)
 var model_list: ItemList
@@ -165,6 +185,7 @@ func build(size_px: Vector2) -> void:
 	stage_links.position = Vector2(stage_x - sw.x / 2.0, view.y - EDGE - 30 * u - sw.y)
 
 	_animate_in()
+	action.emit("voices_get", null)
 
 
 # =====================================================================
@@ -603,6 +624,18 @@ func _build_main(w: float) -> VBoxContainer:
 	v.add_child(_text(_tx("sub"), 14, C_MUTED, false, 400, 0.6))
 	v.add_child(_rule())
 
+	if book_active:
+		if book_paused:
+			var b_resume := _item("▶", _tx("book_resume"))
+			b_resume.pressed.connect(func(): action.emit("book_resume", null))
+			v.add_child(b_resume)
+		var b_close := _item("×", _tx("book_close"))
+		b_close.pressed.connect(func(): action.emit("book_close", null))
+		v.add_child(b_close)
+	var b_open := _item("+", _tx("open_file"))
+	b_open.pressed.connect(func(): _pick_files(_tx("open_file"), PackedStringArray(["*.pdf, *.md, *.markdown, *.txt, *.epub, *.cbz, *.zip, *.png, *.jpg, *.jpeg, *.webp ; Kitap / Manga", "*.pth, *.index, *.onnx, *.json ; Ses modeli"])))
+	v.add_child(b_open)
+
 	for i in CATS.size():
 		var b := _item("%02d" % (i + 1), _tx("cat_" + CATS[i]))
 		b.pressed.connect(_open_category.bind(CATS[i]))
@@ -716,17 +749,17 @@ func _build_stage_links() -> HBoxContainer:
 	rotate_link.toggled.connect(func(on):
 		rotate_link.add_theme_color_override("font_color", C_INK if on else C_MUTED)
 		rotate_link.add_theme_font_override("font", _font(false, 600 if on else 400))
-		action.emit("auto_rotate_on" if on else "auto_rotate_off"))
+		action.emit("auto_rotate_on" if on else "auto_rotate_off", null))
 	h.add_child(rotate_link)
 	h.add_child(_text("·", 13, C_MUTED))
 	var em := _link(_tx("emote"), 13, C_MUTED, false)
-	em.pressed.connect(func(): action.emit("emote"))
+	em.pressed.connect(func(): action.emit("emote", null))
 	h.add_child(em)
 	h.add_child(_text("·", 13, C_MUTED))
 	var rs := _link(_tx("reset"), 13, C_MUTED, false)
 	rs.pressed.connect(func():
 		rotate_link.button_pressed = false
-		action.emit("reset"))
+		action.emit("reset", null))
 	h.add_child(rs)
 	h.add_child(_text("  —  " + _tx("drag_hint"), 13, C_MUTED, false, 400, 0.6))
 	return h
@@ -918,6 +951,8 @@ func _open_category(id: String) -> void:
 	current_cat = id
 	if id == "sohbet":
 		_fill_chat()
+	elif id == "yapay_zeka":
+		action.emit("voices_get", null)
 	for k in pages:
 		pages[k].visible = k == id
 	var idx := CATS.find(id)
@@ -1095,7 +1130,7 @@ func _page_ai() -> VBoxContainer:
 	lang_opt.item_selected.connect(func(i):
 		# Dil hemen gecer: ayar yazilir, menu yeni dilde yeniden kurulur
 		Settings.save_brain({"language": I18n.CODES[i]})
-		action.emit("relang"))
+		action.emit("relang", null))
 	v.add_child(_field(_tx("language"), lang_opt, _tx("language_hint")))
 
 	mode_btns = _segment([_tx("mode_cloud"), _tx("mode_local")], 1 if local else 0, _on_mode)
@@ -1109,7 +1144,7 @@ func _page_ai() -> VBoxContainer:
 	provider_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	for id in Settings.PROVIDERS:
 		if not Settings.PROVIDERS[id].get("local", false):
-			provider_opt.add_item(_tx(Settings.PROVIDERS[id].note))
+			provider_opt.add_item(_tx(Settings.PROVIDERS[id].get("note", id)))
 			provider_opt.set_item_metadata(provider_opt.item_count - 1, id)
 			if id == str(brain_cfg.get("provider", "")):
 				provider_opt.select(provider_opt.item_count - 1)
@@ -1130,11 +1165,33 @@ func _page_ai() -> VBoxContainer:
 	key_box.add_child(key_edit)
 	var get_key := _link(_tx("get_key"), 14, C_RED)
 	get_key.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	get_key.pressed.connect(func(): OS.shell_open(str(Settings.PROVIDERS[_current_provider()].keys)))
+	get_key.pressed.connect(func():
+		var prov := _current_provider()
+		if Settings.PROVIDERS.has(prov):
+			OS.shell_open(str(Settings.PROVIDERS[prov].get("keys", ""))))
 	key_box.add_child(get_key)
 	key_row = _field(_tx("api_key"), key_box, _tx("key_steps") + " " + _tx("key_hint"))
 	cloud.add_child(key_row)
 	v.add_child(cloud)
+
+	var local_box := VBoxContainer.new()
+	local_box.add_theme_constant_override("separation", px(22))
+	local_provider_opt = OptionButton.new()
+	local_provider_opt.focus_mode = Control.FOCUS_NONE
+	local_provider_opt.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for id in Settings.PROVIDERS:
+		if Settings.PROVIDERS[id].get("local", false):
+			local_provider_opt.add_item(str(Settings.PROVIDERS[id].get("label", id)))
+			local_provider_opt.set_item_metadata(local_provider_opt.item_count - 1, id)
+			if id == str(brain_cfg.get("provider", "")):
+				local_provider_opt.select(local_provider_opt.item_count - 1)
+	if local_provider_opt.selected < 0 and local_provider_opt.item_count > 0:
+		local_provider_opt.select(0)
+	local_provider_opt.item_selected.connect(func(_i):
+		_fetch_models())
+	local_box.add_child(_field(_tx("provider"), local_provider_opt))
+	local_provider_row = local_box
+	v.add_child(local_provider_row)
 
 	# Model: elle yazilmiyor, saglayicidan gelen listeden secilir (anahtar
 	# yapistirilinca liste kendiliginden gelir, anahtar da boylece denenmis olur)
@@ -1235,6 +1292,8 @@ func _page_ai() -> VBoxContainer:
 	session_slider = _slider(5, 60, 1, sess_s)
 	v.add_child(_field(_tx("session"), _slider_row(session_slider, _value_label(session_slider, "%d " + _tx("sec"))), _tx("session_hint")))
 
+	v.add_child(_field(_tx("voice_model"), _build_voice_section()))
+
 	var cam := VBoxContainer.new()
 	cam.add_theme_constant_override("separation", px(14))
 	camera_check = _switch(_tx("camera_on"), brain_cfg.get("camera", false) == true)
@@ -1275,7 +1334,7 @@ func _fetch_models() -> void:
 	if models_http == null:
 		return
 	var prov := _current_provider()
-	var p: Dictionary = Settings.PROVIDERS[prov]
+	var p: Dictionary = Settings.PROVIDERS.get(prov, {})
 	var local: bool = p.get("local", false)
 	var key := key_edit.text.strip_edges()
 	if key == "":
@@ -1286,6 +1345,13 @@ func _fetch_models() -> void:
 		_set_model_status(_tx("st_nokey"), C_RED)
 		_fill_models([])
 		return
+	if str(p.get("url", "")) == "":
+		if prov == "agy":
+			_set_model_status(str(p.get("label", "Antigravity (agy)")), C_INK)
+			_fill_models(["gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-hydrogen-medium"])
+		else:
+			_fill_models([str(p.get("model", ""))])
+		return
 	_set_model_status(_tx("st_checking"), C_MUTED)
 	var headers := PackedStringArray() if local else PackedStringArray(["Authorization: Bearer " + key])
 	if models_http.request(str(p.url) + "/models", headers) != OK:
@@ -1293,10 +1359,10 @@ func _fetch_models() -> void:
 
 
 func _on_models(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	var local: bool = Settings.PROVIDERS[_current_provider()].get("local", false)
+	var local: bool = Settings.PROVIDERS.get(_current_provider(), {}).get("local", false)
 	if result != HTTPRequest.RESULT_SUCCESS:
-		_set_model_status(_tx("st_ollama_none") if local else _tx("st_net"), C_RED)
-		ollama_link.visible = local
+		_set_model_status(_tx("st_ollama_none") if local and _current_provider() == "ollama" else _tx("st_net"), C_RED)
+		ollama_link.visible = local and _current_provider() == "ollama"
 		_fill_models([])
 		return
 	if code == 401 or code == 403 or code == 400:
@@ -1329,7 +1395,7 @@ func _set_model_status(t: String, color: Color) -> void:
 ## Kayitli model listede varsa secili, yoksa onerilen.
 func _fill_models(ids: Array) -> void:
 	var prov := _current_provider()
-	var rec := str(Settings.PROVIDERS[prov].model)
+	var rec := str(Settings.PROVIDERS.get(prov, {}).get("model", ""))
 	var saved := str(brain_cfg.get("model", "")) if prov == str(brain_cfg.get("provider", "")) else ""
 	var list := ids.duplicate()
 	list.sort_custom(func(a, b): return _model_score(a) > _model_score(b))
@@ -1343,8 +1409,9 @@ func _fill_models(ids: Array) -> void:
 		var i := model_list.add_item("%s  (%s)" % [id, _tx("recommended")] if id == rec else id)
 		model_list.set_item_metadata(i, id)
 	var pick := list.find(saved) if saved in list else 0
-	model_list.select(pick)
-	model_list.ensure_current_is_visible()
+	if not list.is_empty():
+		model_list.select(pick)
+		model_list.ensure_current_is_visible()
 	_update_model_btn()
 
 
@@ -1424,11 +1491,15 @@ func _page_about() -> VBoxContainer:
 	v.add_child(_field(_tx("usage"), _text(_tx("usage_text"), 13.5, C_INK, false, 400, 0.0, true)))
 	# Her acilista olculen sistem ve secilen calisma duzeyi
 	var sp := SysProfile.detect()
-	var sys_line := "%d CPU · %s GB RAM · %s · %d %s, %d Hz\n%s · %d fps" % [sp.cores, str(sp.ram_gb), sp.gpu, sp.screens, "ekran" if lang == "tr" else "display", sp.refresh, _tx("perf_" + str(sp.tier)), Engine.max_fps]
+	var sys_line := "%s (%d) · %s GB RAM · %s · %d %s, %d Hz\n%s · %d fps" % [str(sp.get("cpu", "CPU")), sp.cores, str(sp.ram_gb), sp.gpu, sp.screens, "ekran" if lang == "tr" else "display", sp.refresh, _tx("perf_" + str(sp.tier)), Engine.max_fps]
 	v.add_child(_field(_tx("system"), _text(sys_line, 13.5, C_INK, false, 400, 0.0, true), _tx("system_hint")))
+	update_box = VBoxContainer.new()
+	update_box.add_theme_constant_override("separation", 6)
+	v.add_child(update_box)
+	_render_update_row()
 	var replay := _link(_tx("replay_splash") + "  ›", 16, C_RED)
 	replay.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	replay.pressed.connect(func(): action.emit("splash"))
+	replay.pressed.connect(func(): action.emit("splash", null))
 	v.add_child(replay)
 	return v
 
@@ -1437,12 +1508,19 @@ func _on_mode(i: int) -> void:
 	var local := i == 1
 	if provider_row:
 		provider_row.visible = not local
+	if local_provider_row:
+		local_provider_row.visible = local
 	_update_key_notice()
 	_fetch_models()
 
 
 func _current_provider() -> String:
 	if mode_btns.size() > 1 and mode_btns[1].button_pressed:
+		if local_provider_opt and local_provider_opt.selected >= 0:
+			return str(local_provider_opt.get_item_metadata(local_provider_opt.selected))
+		var p := str(brain_cfg.get("provider", ""))
+		if Settings.PROVIDERS.get(p, {}).get("local", false):
+			return p
 		return "ollama"
 	if provider_opt and provider_opt.selected >= 0:
 		return str(provider_opt.get_item_metadata(provider_opt.selected))
@@ -1548,3 +1626,223 @@ func animate_out(_view: Vector2) -> Tween:
 	tw.tween_property(column, "position:x", column.position.x + 24 * u, 0.3).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	tw.tween_property(self, "modulate:a", 0.0, 0.3)
 	return tw
+
+
+func _build_voice_section() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", px(12))
+
+	voices_list_box = VBoxContainer.new()
+	voices_list_box.add_theme_constant_override("separation", px(6))
+	box.add_child(voices_list_box)
+
+	voice_pitch_box = VBoxContainer.new()
+	voice_pitch_box.add_theme_constant_override("separation", px(6))
+
+	var pitch_top := HBoxContainer.new()
+	pitch_top.add_theme_constant_override("separation", px(12))
+	pitch_top.add_child(_text(_tx("voice_pitch"), 12, C_MUTED, false, 500, 1.2))
+
+	voice_pitch_auto = _switch(_tx("voice_pitch_auto"), true)
+	pitch_top.add_child(voice_pitch_auto)
+
+	var test_btn := _link(_tx("voice_test"), 13, C_RED)
+	test_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	test_btn.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	test_btn.pressed.connect(func(): action.emit("voice_test", null))
+	pitch_top.add_child(test_btn)
+	voice_pitch_box.add_child(pitch_top)
+
+	voice_pitch_slider = _slider(-12, 12, 1, 0)
+	voice_pitch_label = _value_label(voice_pitch_slider, "%+d")
+	var slider_row := _slider_row(voice_pitch_slider, voice_pitch_label)
+	voice_pitch_box.add_child(slider_row)
+
+	voice_pitch_auto.toggled.connect(func(on: bool):
+		voice_pitch_slider.editable = not on
+		voice_pitch_label.modulate.a = 0.4 if on else 1.0
+		action.emit("voice_pitch", {"id": active_voice_id, "pitch": null if on else int(voice_pitch_slider.value)}))
+
+	voice_pitch_slider.value_changed.connect(func(v: float):
+		if not voice_pitch_auto.button_pressed:
+			action.emit("voice_pitch", {"id": active_voice_id, "pitch": int(v)}))
+
+	box.add_child(voice_pitch_box)
+
+	var add_row := HBoxContainer.new()
+	add_row.add_theme_constant_override("separation", px(10))
+	var add_btn := _link(_tx("voice_add"), 14, C_RED)
+	add_btn.pressed.connect(_open_voice_file_dialog)
+	add_row.add_child(add_btn)
+	box.add_child(add_row)
+
+	box.add_child(_text(_tx("voice_drop_hint"), 12, C_MUTED, false, 400, 0.0, true))
+
+	rvc_status_box = VBoxContainer.new()
+	rvc_status_box.add_theme_constant_override("separation", px(6))
+	rvc_label = _text("", 12.5, C_MUTED, false, 400, 0.0, true)
+	rvc_status_box.add_child(rvc_label)
+
+	rvc_install_btn = _link(_tx("rvc_install"), 13, C_RED)
+	rvc_install_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	rvc_install_btn.pressed.connect(func(): action.emit("rvc_install", null))
+	rvc_status_box.add_child(rvc_install_btn)
+
+	rvc_progress = ProgressBar.new()
+	rvc_progress.custom_minimum_size.y = 10 * u
+	rvc_progress.show_percentage = false
+	rvc_status_box.add_child(rvc_progress)
+
+	box.add_child(rvc_status_box)
+
+	_fill_voices()
+	return box
+
+
+func _fill_voices() -> void:
+	if voices_list_box == null:
+		return
+	for c in voices_list_box.get_children():
+		c.queue_free()
+
+	active_voice_id = str(voices_data.get("active", "default"))
+	var list: Array = voices_data.get("list", [])
+
+	var def_active := active_voice_id == "default" or active_voice_id == ""
+	voices_list_box.add_child(_voice_row("default", _tx("voice_default"), "piper", def_active))
+
+	for v in list:
+		if not (v is Dictionary):
+			continue
+		var vid := str(v.get("id", ""))
+		var vname := str(v.get("name", vid))
+		var vtype := str(v.get("type", "piper"))
+		var is_act := vid == active_voice_id
+		voices_list_box.add_child(_voice_row(vid, vname, vtype, is_act))
+
+	var active_pitch = null
+	if active_voice_id != "default":
+		for v in list:
+			if v is Dictionary and str(v.get("id", "")) == active_voice_id:
+				active_pitch = v.get("pitch", null)
+				break
+
+	if active_pitch == null:
+		voice_pitch_auto.button_pressed = true
+		voice_pitch_slider.editable = false
+		voice_pitch_slider.value = 0
+		voice_pitch_label.modulate.a = 0.4
+	else:
+		voice_pitch_auto.button_pressed = false
+		voice_pitch_slider.editable = true
+		voice_pitch_slider.value = float(active_pitch)
+		voice_pitch_label.modulate.a = 1.0
+
+	var rvc: Dictionary = voices_data.get("rvc", {})
+	var rvc_ready: bool = rvc.get("ready", false)
+	var rvc_installing: bool = rvc.get("installing", false)
+	var rvc_text: String = str(rvc.get("text", ""))
+	var rvc_prog: float = float(rvc.get("progress", 0.0))
+
+	if rvc_ready:
+		rvc_status_box.visible = false
+	elif rvc_installing:
+		rvc_status_box.visible = true
+		rvc_label.text = rvc_text if rvc_text != "" else _tx("rvc_installing")
+		rvc_label.add_theme_color_override("font_color", C_INK)
+		rvc_install_btn.visible = false
+		rvc_progress.visible = true
+		rvc_progress.value = rvc_prog * 100.0
+	else:
+		rvc_status_box.visible = true
+		rvc_label.text = _tx("rvc_not_installed")
+		rvc_label.add_theme_color_override("font_color", C_MUTED)
+		rvc_install_btn.visible = true
+		rvc_progress.visible = false
+
+
+func _voice_row(vid: String, vname: String, type_tag: String, is_active: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", px(8))
+
+	var sel_btn := Button.new()
+	sel_btn.flat = true
+	sel_btn.focus_mode = Control.FOCUS_NONE
+	sel_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	sel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sel_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	sel_btn.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+	sel_btn.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+	sel_btn.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
+	sel_btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+
+	var h := HBoxContainer.new()
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_theme_constant_override("separation", px(8))
+
+	var mark := _text("●" if is_active else "○", 13, C_RED if is_active else C_MUTED, false, 700)
+	var lbl := _text(vname, 14, C_INK if is_active else C_MUTED, is_active, 500 if is_active else 400)
+	var tag := _text("[%s]" % type_tag.to_upper(), 11, C_MUTED, false, 400)
+	h.add_child(mark)
+	h.add_child(lbl)
+	h.add_child(tag)
+	sel_btn.add_child(h)
+
+	sel_btn.pressed.connect(func():
+		active_voice_id = vid
+		action.emit("voice_set", vid))
+	row.add_child(sel_btn)
+
+	if vid != "default":
+		var del := _link(_tx("voice_delete"), 12, C_MUTED, false)
+		del.pressed.connect(func():
+			action.emit("voice_remove", vid))
+		row.add_child(del)
+
+	return row
+
+
+func _open_voice_file_dialog() -> void:
+	_pick_files(_tx("voice_add"), PackedStringArray(["*.pth, *.index, *.onnx, *.json ; Ses modeli"]))
+
+
+func _pick_files(title: String, filters: PackedStringArray) -> void:
+	_window_lowered(true)
+	DisplayServer.file_dialog_show(title, OS.get_environment("HOME"), "", false,
+		DisplayServer.FILE_DIALOG_MODE_OPEN_FILES, filters,
+		func(ok: bool, paths: PackedStringArray, _f: int):
+			_window_lowered(false)
+			if ok and not paths.is_empty():
+				action.emit("drop_files", Array(paths)))
+
+
+func set_voices(msg: Dictionary) -> void:
+	voices_data = msg
+	_fill_voices()
+
+
+func set_update(msg: Dictionary) -> void:
+	update_info = msg
+	_render_update_row()
+
+
+func _render_update_row() -> void:
+	if update_box == null:
+		return
+	for c in update_box.get_children():
+		c.queue_free()
+	if update_info.is_empty():
+		return
+	var t := str(update_info.get("type", ""))
+	if t == "update":
+		var version := str(update_info.get("version", ""))
+		var link := _link(_tx("update_now") % version + "  ›", 16, C_RED)
+		link.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		link.pressed.connect(func(): action.emit("update", null))
+		update_box.add_child(link)
+	elif t == "update_progress":
+		var p := float(update_info.get("p", 0.0))
+		if p >= 0.0:
+			update_box.add_child(_text(_tx("update_downloading") % int(p * 100), 14, C_INK, false, 400, 0.0, true))
+		else:
+			update_box.add_child(_text(_tx("update_failed"), 14, C_RED, false, 400, 0.0, true))

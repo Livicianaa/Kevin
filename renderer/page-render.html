@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kevin Page Renderer</title>
+</head>
+<body>
+<canvas id="c" style="display:none;"></canvas>
+<script type="module">
+  import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '../node_modules/pdfjs-dist/build/pdf.worker.mjs';
+
+  const MAX_EDGE = 1280;
+  const JPEG_QUALITY = 0.82;
+
+  let cachedPdfKey = null;
+  let cachedPdfDoc = null;
+
+  window.renderImage = function(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (w > MAX_EDGE || h > MAX_EDGE) {
+          if (w >= h) {
+            h = Math.round((h * MAX_EDGE) / w);
+            w = MAX_EDGE;
+          } else {
+            w = Math.round((w * MAX_EDGE) / h);
+            h = MAX_EDGE;
+          }
+        }
+        const canvas = document.getElementById('c');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+        resolve(dataUrl.replace(/^data:image\/jpeg;base64,/, ''));
+      };
+      img.onerror = (err) => reject(new Error('Resim yuklenemedi'));
+      img.src = src;
+    });
+  };
+
+  window.loadPdf = async function(key, base64Data) {
+    if (cachedPdfKey === key && cachedPdfDoc) return true;
+    if (cachedPdfDoc) {
+      try { await cachedPdfDoc.destroy(); } catch {}
+      cachedPdfDoc = null;
+    }
+    const bin = atob(base64Data);
+    const raw = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+    cachedPdfDoc = await pdfjsLib.getDocument({ data: raw }).promise;
+    cachedPdfKey = key;
+    return true;
+  };
+
+  window.renderPdfPage = async function(pageNum) {
+    if (!cachedPdfDoc) throw new Error('PDF acilmadi');
+    const page = await cachedPdfDoc.getPage(pageNum);
+    const viewport0 = page.getViewport({ scale: 1.0 });
+    let w = viewport0.width;
+    let h = viewport0.height;
+    let scale = 1.0;
+    if (w > MAX_EDGE || h > MAX_EDGE) {
+      scale = MAX_EDGE / Math.max(w, h);
+    }
+    const viewport = page.getViewport({ scale });
+    const canvas = document.getElementById('c');
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+    return dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+  };
+</script>
+</body>
+</html>

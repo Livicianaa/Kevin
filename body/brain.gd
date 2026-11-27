@@ -13,6 +13,9 @@ signal said(text: String)
 signal heard(text: String)
 signal mood(name: String)
 signal beat(bpm: float, energy: float, age: float)
+signal book(msg: Dictionary)
+signal voices(msg: Dictionary)
+signal update(msg: Dictionary)
 
 const PORT := 47630
 ## Once calisan bir beyin var mi diye bu kadar bekle, yoksa baslat
@@ -100,7 +103,10 @@ func _process(delta: float) -> void:
 		print("[kevin] beyin baglantisi koptu")
 		state_changed.emit("idle")
 	waited += delta
-	if not spawned and waited >= SPAWN_AFTER:
+	# Windows'ta Kevin.exe beyni govdeyle birlikte baslatiyor; o acilana kadar
+	# ikinci bir kopya baslatma
+	var spawn_after := 15.0 if OS.get_environment("KEVIN_BRAIN_STARTED") == "1" else SPAWN_AFTER
+	if not spawned and waited >= spawn_after:
 		_spawn()
 	if st != StreamPeerTCP.STATUS_CONNECTING:
 		retry -= delta
@@ -132,3 +138,11 @@ func _drain() -> void:
 				mood.emit(str(msg.get("mood", "")))
 			"beat":
 				beat.emit(float(msg.get("bpm", 0.0)), float(msg.get("energy", 0.5)), float(msg.get("age", 0.0)))
+			"book":
+				book.emit(msg)
+			"voices":
+				voices.emit(msg)
+			"update", "update_progress":
+				update.emit(msg)
+			"quit":
+				get_tree().quit()

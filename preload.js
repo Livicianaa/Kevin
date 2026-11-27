@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('kevinAPI', {
   bodyEvent: (event) => ipcRenderer.send('body-event', event),
   historyLoad: () => ipcRenderer.invoke('history-load'),
   historyAdd: (entry) => ipcRenderer.send('history-add', entry),
+  bookOpen: (paths) => ipcRenderer.invoke('book-open', paths),
+  bookNext: () => ipcRenderer.invoke('book-next'),
+  bookSeek: (delta) => ipcRenderer.invoke('book-seek', delta),
+  bookClose: () => ipcRenderer.invoke('book-close'),
+  voiceInstall: (files) => ipcRenderer.invoke('voice-install', files),
+  micProblem: (name) => ipcRenderer.invoke('mic-problem', name),
   onBodyCommand: (callback) => {
     ipcRenderer.on('body-command', (_e, data) => callback(data));
   },
